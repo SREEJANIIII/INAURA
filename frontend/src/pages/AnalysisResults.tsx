@@ -279,13 +279,13 @@ export default function AnalysisResults() {
 
         <section className="results__next">
           <h3>Next: Build Your Personalized Roadmap</h3>
-          <p>Roadmap generation is Phase 4D — coming next. Your analysis is saved and versioned ({analysis.engine_version}).</p>
+          <p>Your analysis is saved and versioned ({analysis.engine_version}). Your roadmap is built from your highest-priority gaps — not a generic template.</p>
           <div style={{ marginTop: 12, display: "flex", gap: 8, justifyContent: "center" }}>
             <Button variant="secondary" size="md" onClick={() => (window.location.href = "/analysis")}>
               Back to Evidence
             </Button>
-            <Button variant="primary" size="md" disabled>
-              Roadmap — Coming Next
+            <Button variant="primary" size="md" onClick={() => (window.location.href = "/roadmap")}>
+              View Personalized Roadmap →
             </Button>
           </div>
         </section>

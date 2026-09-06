@@ -7,6 +7,7 @@ import ProfileSetup from "./pages/ProfileSetup";
 import Dashboard from "./pages/Dashboard";
 import Analysis from "./pages/Analysis";
 import AnalysisResults from "./pages/AnalysisResults";
+import Roadmap from "./pages/Roadmap";
 import { ProtectedRoute, GuestOnly } from "./components/auth/ProtectedRoute";
 
 export default function App() {
@@ -64,6 +65,14 @@ export default function App() {
         element={
           <ProtectedRoute>
             <AnalysisResults />
+          </ProtectedRoute>
+        }
+      />
+      <Route
+        path="/roadmap"
+        element={
+          <ProtectedRoute>
+            <Roadmap />
           </ProtectedRoute>
         }
       />
