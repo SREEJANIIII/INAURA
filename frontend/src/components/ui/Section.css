@@ -1,0 +1,31 @@
+.section {
+  padding: 104px 0;
+  background: var(--bg);
+  border-top: 1px solid transparent;
+}
+
+.section--subtle {
+  background: var(--bg-subtle);
+  border-top-color: var(--line);
+  border-bottom: 1px solid var(--line);
+}
+
+.section--dark {
+  background: var(--ink);
+  color: #e2e8f0;
+}
+
+.section--dark h2,
+.section--dark h3 {
+  color: #fff;
+}
+
+.section--dark p {
+  color: #cbd5e1;
+}
+
+@media (max-width: 768px) {
+  .section {
+    padding: 72px 0;
+  }
+}

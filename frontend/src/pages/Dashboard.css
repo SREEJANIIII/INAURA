@@ -1,0 +1,134 @@
+.dash {
+  min-height: 100vh;
+  background: var(--bg-subtle);
+}
+
+.dash__header {
+  background: #fff;
+  border-bottom: 1px solid var(--line);
+  position: sticky;
+  top: 0;
+  z-index: 10;
+}
+
+.dash__header-inner {
+  height: 64px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+}
+
+.dash__brand {
+  line-height: 0;
+}
+
+.dash__nav {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+}
+
+.dash__link {
+  font-size: 0.9rem;
+  font-weight: 600;
+  color: var(--ink);
+  padding: 6px 10px;
+  border-radius: 9999px;
+  transition: background 0.15s;
+  text-decoration: none;
+  background: transparent;
+  border: 0;
+  cursor: pointer;
+}
+
+.dash__link:hover {
+  background: var(--bg-muted);
+}
+
+.dash__main {
+  padding: 36px 0 48px;
+}
+
+.dash__eyebrow {
+  font-size: 0.74rem;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  font-weight: 700;
+  color: var(--muted-3);
+  margin-bottom: 10px;
+}
+
+.dash__title {
+  font-size: clamp(1.8rem, 4vw, 2.2rem);
+  line-height: 1;
+  letter-spacing: -0.03em;
+}
+
+.dash__subtitle {
+  margin-top: 10px;
+  font-size: 1.02rem;
+  color: var(--muted);
+  max-width: 60ch;
+  line-height: 1.6;
+}
+
+.dash__card {
+  margin-top: 24px;
+  background: #fff;
+  border: 1px solid var(--line);
+  border-radius: 18px;
+  padding: 22px;
+  box-shadow: var(--shadow-sm);
+  max-width: 720px;
+}
+
+.dash__card-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding-bottom: 12px;
+  border-bottom: 1px solid var(--line);
+}
+
+.dash__profile {
+  margin-top: 24px;
+  background: #fff;
+  border: 1px solid var(--line);
+  border-radius: 16px;
+  padding: 18px;
+  max-width: 720px;
+}
+
+.dash__profile-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 14px;
+}
+
+.dash__profile-grid div {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.dash__profile-grid span {
+  font-size: 0.74rem;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  font-weight: 700;
+  color: var(--muted-3);
+}
+
+.dash__profile-grid strong {
+  font-size: 0.92rem;
+  font-weight: 600;
+  color: var(--ink);
+}
+
+@media (max-width: 640px) {
+  .dash__profile-grid {
+    grid-template-columns: 1fr;
+  }
+}
