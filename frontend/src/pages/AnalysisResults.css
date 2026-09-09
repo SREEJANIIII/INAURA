@@ -339,3 +339,275 @@
     grid-template-columns: 1fr;
   }
 }
+
+/* LeetCode Topic Coverage Breakdown */
+.results__leetcode-card {
+  margin-top: 16px;
+  background: #f8fafc;
+  border: 1px solid var(--line);
+  border-radius: 14px;
+  padding: 16px 18px;
+}
+
+.results__leetcode-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 10px;
+}
+
+.results__leetcode-diffs {
+  display: flex;
+  gap: 6px;
+  align-items: center;
+}
+
+.results__badge-diff {
+  font-size: 0.76rem;
+  font-weight: 600;
+  padding: 3px 8px;
+  border-radius: 6px;
+}
+
+.results__badge-diff--easy {
+  background: #ecfdf5;
+  color: #047857;
+  border: 1px solid #a7f3d0;
+}
+
+.results__badge-diff--medium {
+  background: #fffbeb;
+  color: #b45309;
+  border: 1px solid #fde68a;
+}
+
+.results__badge-diff--hard {
+  background: #fef2f2;
+  color: #b91c1c;
+  border: 1px solid #fecaca;
+}
+
+.results__leetcode-meta-row {
+  margin-top: 10px;
+  display: flex;
+  gap: 16px;
+  font-size: 0.84rem;
+  color: var(--muted);
+  flex-wrap: wrap;
+}
+
+.results__leetcode-pillars-grid {
+  margin-top: 14px;
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
+  gap: 10px;
+}
+
+.results__pillar-box {
+  background: #fff;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  padding: 10px 12px;
+}
+
+.results__pillar-top {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  font-size: 0.84rem;
+}
+
+.results__pillar-badge {
+  font-size: 0.72rem;
+  font-weight: 700;
+  padding: 2px 6px;
+  border-radius: 4px;
+  text-transform: capitalize;
+}
+
+.results__pillar-badge--covered {
+  background: #ecfdf5;
+  color: #059669;
+}
+
+.results__pillar-badge--moderate {
+  background: #eff6ff;
+  color: #2563eb;
+}
+
+.results__pillar-badge--weak {
+  background: #fffbeb;
+  color: #d97706;
+}
+
+.results__pillar-badge--missing {
+  background: #f1f5f9;
+  color: #64748b;
+}
+
+.results__pillar-count {
+  margin-top: 4px;
+  font-size: 0.78rem;
+  color: var(--muted-2);
+}
+
+.results__pillar-bar-wrap {
+  margin-top: 6px;
+  height: 4px;
+  background: #e2e8f0;
+  border-radius: 2px;
+  overflow: hidden;
+}
+
+.results__pillar-bar {
+  height: 100%;
+  border-radius: 2px;
+  background: #0ea5e9;
+}
+
+/* Phase 4D: Gap Analysis & Readiness Engine Enhancements */
+.results__disclaimer-box {
+  background: #f0fdfa;
+  border: 1px solid #99f6e4;
+  border-radius: 12px;
+  padding: 14px 18px;
+  display: flex;
+  gap: 12px;
+  align-items: flex-start;
+  font-size: 0.86rem;
+  color: #134e4a;
+  line-height: 1.5;
+}
+
+.results__disclaimer-icon {
+  font-size: 1.2rem;
+  line-height: 1;
+}
+
+.results__gap-tags {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  flex-wrap: wrap;
+  margin-top: 8px;
+}
+
+.gap-type-badge {
+  font-size: 0.70rem;
+  font-weight: 700;
+  padding: 2px 7px;
+  border-radius: 4px;
+  letter-spacing: 0.03em;
+  text-transform: uppercase;
+}
+
+.gap-type--skill {
+  background: #e0f2fe;
+  color: #0369a1;
+  border: 1px solid #bae6fd;
+}
+
+.gap-type--evidence {
+  background: #fef3c7;
+  color: #92400e;
+  border: 1px solid #fde68a;
+}
+
+.gap-type--coverage {
+  background: #f3e8ff;
+  color: #6b21a8;
+  border: 1px solid #e9d5ff;
+}
+
+.results__quadrant-tag {
+  font-size: 0.72rem;
+  font-weight: 600;
+  padding: 2px 8px;
+  border-radius: 6px;
+  background: #f1f5f9;
+  color: #475569;
+  border: 1px solid #e2e8f0;
+}
+
+.results__advice-box {
+  margin-top: 10px;
+  padding: 8px 12px;
+  background: #f8fafc;
+  border-left: 3px solid #0ea5e9;
+  border-radius: 0 6px 6px 0;
+  font-size: 0.82rem;
+  color: #334155;
+}
+
+.results__quadrants-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+  gap: 12px;
+  margin-top: 16px;
+}
+
+.results__quadrant-card {
+  background: #fff;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  padding: 14px;
+}
+
+.results__quadrant-card--strong {
+  border-top: 3px solid #10b981;
+}
+
+.results__quadrant-card--unverified {
+  border-top: 3px solid #f59e0b;
+}
+
+.results__quadrant-card--confirmed {
+  border-top: 3px solid #ef4444;
+}
+
+.results__quadrant-card--exploratory {
+  border-top: 3px solid #64748b;
+}
+
+.results__quadrant-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  font-size: 0.88rem;
+  font-weight: 700;
+}
+
+.results__quadrant-count {
+  font-size: 0.76rem;
+  font-weight: 700;
+  background: #f1f5f9;
+  padding: 2px 8px;
+  border-radius: 999px;
+  color: #475569;
+}
+
+.results__quadrant-desc {
+  font-size: 0.78rem;
+  color: var(--muted);
+  margin-top: 4px;
+}
+
+.results__quadrant-skills {
+  margin-top: 10px;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.results__quadrant-skill-chip {
+  font-size: 0.74rem;
+  font-weight: 600;
+  background: #f8fafc;
+  border: 1px solid #e2e8f0;
+  padding: 2px 7px;
+  border-radius: 4px;
+  color: #334155;
+}
+
+

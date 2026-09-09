@@ -30,3 +30,54 @@ class PrepareAnalysisResponse(BaseModel):
     target_role: str
     message: str
     retrieval: Optional[dict] = None
+
+
+class TopicGapResponse(BaseModel):
+    pillar: str
+    skill: str = "Data Structures & Algorithms"
+    status: str
+    solved: int
+    gap_type: str = "coverage_gap"
+    priority_category: str
+    importance: float
+    explanation: str
+    actionable_advice: str
+
+
+class StrengthResponse(BaseModel):
+    skill: str
+    display_name: str
+    category: str
+    proficiency: float
+    confidence: float
+    required_level: float
+    evidence_count: int
+    explanation: str
+    quadrant: str
+    quadrant_title: str
+
+
+class SkillGapResponse(BaseModel):
+    canonical_name: str
+    skill: str
+    target_role: str
+    required_level: float
+    current_proficiency: float
+    confidence: float
+    gap: float
+    importance: float
+    demand: float
+    interview_relevance: float
+    industry_confidence: float = 0.85
+    priority: float
+    priority_score: float
+    priority_category: str
+    gap_type: str
+    actionable_advice: str
+    evidence_context: Optional[str] = None
+    source: Optional[str] = None
+    quadrant: Optional[str] = None
+    quadrant_title: Optional[str] = None
+    explanation: str
+    skills: Optional[dict] = None
+

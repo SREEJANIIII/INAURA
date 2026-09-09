@@ -1,5 +1,30 @@
 import { apiFetch } from "./api";
 
+export type TopicCoverageGap = {
+  pillar: string;
+  skill: string;
+  status: string;
+  solved: number;
+  gap_type: string;
+  priority_category: string;
+  importance: number;
+  explanation: string;
+  actionable_advice: string;
+};
+
+export type StrengthItem = {
+  skill: string;
+  display_name: string;
+  category: string;
+  proficiency: number;
+  confidence: number;
+  required_level: number;
+  evidence_count: number;
+  explanation: string;
+  quadrant: string;
+  quadrant_title: string;
+};
+
 export type AnalysisResult = {
   id: string;
   user_id: string;
@@ -9,11 +34,17 @@ export type AnalysisResult = {
   industry_component: number;
   evidence_component: number;
   readiness_explanation?: string;
+  disclaimer?: string;
   assessment_count: number;
   gap_count: number;
   engine_version: string;
   created_at: string;
   updated_at: string;
+  metadata?: {
+    strengths_count?: number;
+    priority_breakdown?: Record<string, number>;
+    topic_gaps_count?: number;
+  };
 };
 
 export type SkillAssessment = {
@@ -44,7 +75,16 @@ export type SkillGap = {
   importance: number;
   demand: number;
   interview_relevance: number;
+  industry_confidence?: number;
   priority_score: number;
+  priority?: number;
+  priority_category?: "critical" | "high" | "medium" | "low" | "covered" | string;
+  gap_type?: "skill_gap" | "evidence_gap" | "coverage_gap" | "industry_data_gap" | string;
+  actionable_advice?: string;
+  evidence_context?: string;
+  source?: string;
+  quadrant?: string;
+  quadrant_title?: string;
   explanation: string;
   created_at: string;
   skills?: { canonical_name: string; display_name: string; category: string };

@@ -293,22 +293,42 @@ GENERIC_RESOURCES = [
     {"title": "MDN Web Docs — General", "resource_type": "documentation", "url": "https://developer.mozilla.org/", "provider": "MDN Web Docs", "difficulty": "beginner", "estimated_hours": 3, "is_free": True, "description": "General web and programming docs — curated prototype fallback."},
 ]
 
+def _normalize_key(canonical: str) -> str:
+    if not canonical:
+        return ""
+    try:
+        from .skill_taxonomy import normalize_skill_slug
+        slug = normalize_skill_slug(canonical)
+        if slug:
+            return slug
+    except Exception:
+        pass
+    return canonical.lower().strip().replace(" ", "_").replace(".", "").replace("-", "_")
+
+
 def get_resources_for_skill(canonical: str):
     """Deterministic resource mapping — 1-3 resources per skill."""
-    resources = RESOURCE_CATALOG.get(canonical)
+    key = _normalize_key(canonical)
+    resources = RESOURCE_CATALOG.get(key)
     if resources:
         return resources[:3]
-    # Try lowercase
-    key = canonical.lower()
-    if key in RESOURCE_CATALOG:
-        return RESOURCE_CATALOG[key][:3]
+    # Fallback to general SQL if PostgreSQL requested
+    if key in ("postgresql", "mysql") and "sql" in RESOURCE_CATALOG:
+        return RESOURCE_CATALOG["sql"][:3]
     return GENERIC_RESOURCES[:1]
 
+
 def get_template_for_skill(canonical: str):
-    return SKILL_TEMPLATES.get(canonical, GENERIC_TEMPLATE)
+    key = _normalize_key(canonical)
+    return SKILL_TEMPLATES.get(key, GENERIC_TEMPLATE)
+
 
 def get_base_hours(canonical: str) -> float:
-    return float(SKILL_BASE_HOURS.get(canonical, 8))
+    key = _normalize_key(canonical)
+    return float(SKILL_BASE_HOURS.get(key, 8))
+
 
 def get_item_type(canonical: str) -> str:
-    return SKILL_ITEM_TYPE.get(canonical, "learn")
+    key = _normalize_key(canonical)
+    return SKILL_ITEM_TYPE.get(key, "learn")
+

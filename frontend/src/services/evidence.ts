@@ -11,6 +11,8 @@ export type EvidenceType =
   | "certification_file"
   | "project_doc";
 
+export type VerificationStatus = "unverified" | "verified" | "failed";
+
 export type Evidence = {
   id: string;
   user_id: string;
@@ -19,8 +21,16 @@ export type Evidence = {
   file_path: string | null;
   title: string | null;
   metadata: Record<string, unknown> | null;
+  verification_status?: VerificationStatus;
+  verification_message?: string | null;
+  verified_at?: string | null;
+  provider?: string | null;
   created_at: string;
   updated_at: string;
+};
+
+export type EvidenceVerificationResponse = Evidence & {
+  detected_skills?: string[];
 };
 
 export type Project = {
@@ -90,6 +100,12 @@ export function uploadEvidenceFile(form: FormData) {
   return apiFetch<Evidence>("/evidence/upload", {
     method: "POST",
     body: form,
+  });
+}
+
+export function verifyEvidence(id: string) {
+  return apiFetch<EvidenceVerificationResponse>(`/evidence/${id}/verify`, {
+    method: "POST",
   });
 }
 

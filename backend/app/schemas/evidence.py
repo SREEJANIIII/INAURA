@@ -1,5 +1,5 @@
 from pydantic import BaseModel, Field, field_validator
-from typing import Optional, List, Literal, Any
+from typing import Optional, List, Literal, Any, Dict
 from datetime import datetime
 import re
 
@@ -13,10 +13,16 @@ EvidenceType = Literal[
     "syllabus",
     "certification_file",
     "project_doc",
+    "project",
+    "certification",
+    "manual",
 ]
+
+VerificationStatus = Literal["unverified", "verified", "failed"]
 
 URL_TYPES = {"github", "leetcode", "codeforces", "kaggle", "linkedin"}
 FILE_TYPES = {"resume", "syllabus", "certification_file", "project_doc"}
+
 
 def _is_url_or_username(v: str | None) -> str | None:
     if v is None or v == "":
@@ -29,7 +35,6 @@ def _is_url_or_username(v: str | None) -> str | None:
         raise ValueError("URL/username length must be 2-400")
     # If it looks like URL, basic check
     if v.startswith("http://") or v.startswith("https://"):
-        # very permissive URL check
         if not re.match(r"^https?://[^\s/$.?#].[^\s]*$", v):
             raise ValueError("Invalid URL format")
     else:
@@ -40,7 +45,7 @@ def _is_url_or_username(v: str | None) -> str | None:
 
 
 class EvidenceCreate(BaseModel):
-    evidence_type: EvidenceType
+    evidence_type: str
     source_url: Optional[str] = Field(None, description="URL or username for profile sources")
     file_path: Optional[str] = Field(None, description="Storage path for file evidence (set after upload)")
     title: Optional[str] = Field(None, max_length=200)
@@ -57,6 +62,10 @@ class EvidenceUpdate(BaseModel):
     file_path: Optional[str] = None
     title: Optional[str] = Field(None, max_length=200)
     metadata: Optional[dict] = None
+    verification_status: Optional[VerificationStatus] = None
+    verification_message: Optional[str] = None
+    verified_at: Optional[datetime] = None
+    provider: Optional[str] = None
 
     @field_validator("source_url")
     @classmethod
@@ -67,11 +76,15 @@ class EvidenceUpdate(BaseModel):
 class EvidenceResponse(BaseModel):
     id: str
     user_id: str
-    evidence_type: EvidenceType
-    source_url: Optional[str]
-    file_path: Optional[str]
-    title: Optional[str]
-    metadata: Optional[dict]
+    evidence_type: str
+    source_url: Optional[str] = None
+    file_path: Optional[str] = None
+    title: Optional[str] = None
+    metadata: Optional[dict] = None
+    verification_status: VerificationStatus = "unverified"
+    verification_message: Optional[str] = None
+    verified_at: Optional[datetime] = None
+    provider: Optional[str] = None
     created_at: datetime
     updated_at: datetime
 
@@ -79,11 +92,22 @@ class EvidenceResponse(BaseModel):
         from_attributes = True
 
 
+class EvidenceVerificationResponse(BaseModel):
+    evidence_id: str
+    verification_status: VerificationStatus
+    verification_message: str
+    verified_at: Optional[datetime] = None
+    provider: str
+    detected_skills: List[str] = Field(default_factory=list)
+    metadata: Optional[dict] = None
+
+
 # Projects
 class ProjectCreate(BaseModel):
     name: str = Field(..., min_length=2, max_length=120)
     description: str = Field(..., min_length=10, max_length=800)
     technologies: List[str] = Field(..., min_length=1, max_length=15)
+    student_contribution: Optional[str] = Field(None, max_length=800, description="Specific personal contributions, features built, or modules owned")
     project_url: Optional[str] = Field(None, max_length=400)
     github_url: Optional[str] = Field(None, max_length=400)
 
@@ -104,6 +128,7 @@ class ProjectResponse(BaseModel):
     name: str
     description: str
     technologies: List[str]
+    student_contribution: Optional[str] = None
     project_url: Optional[str]
     github_url: Optional[str]
     created_at: datetime

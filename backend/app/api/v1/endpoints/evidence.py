@@ -48,6 +48,18 @@ async def delete_evidence(
     return None
 
 
+@router.post("/{evidence_id}/verify")
+async def verify_evidence(
+    evidence_id: str, current_user: CurrentUser = Depends(get_current_user)
+):
+    """
+    Independently inspect and verify an evidence item (e.g., GitHub repository).
+    Enforces user isolation and returns verified technical facts and detected skills.
+    """
+    return await evidence_service.verify_evidence_item(current_user.id, evidence_id)
+
+
+
 # File upload -> storage + evidence record
 @router.post("/upload", response_model=EvidenceResponse, status_code=201)
 async def upload_evidence_file(
