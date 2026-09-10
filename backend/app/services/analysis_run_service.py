@@ -10,6 +10,7 @@ from . import profile_service, evidence_service, industry_service, retrieval_ser
 from . import skill_engine as engine
 from .signal_extractor import extract_signals
 from .skill_taxonomy import normalize_skill, normalize_skill_slug, get_all_skills
+from .evidence.base import EVIDENCE_PIPELINE_VERSION
 from .evidence.manager import evidence_manager
 
 TABLE_RESULTS = "analysis_results"
@@ -99,6 +100,24 @@ def load_industry_requirements(target_role: str) -> List[dict]:
         if e.status_code == 503:
             raise HTTPException(status_code=503, detail="Industry knowledge not configured — run 003_industry_knowledge.sql")
         raise
+
+
+def evidence_refresh_state(ev: dict) -> Tuple[bool, bool]:
+    """
+    Decide whether an evidence item must be inspected before the analysis run.
+
+    Returns (is_unverified, is_stale_pipeline):
+      - is_unverified: never inspected, so it carries no signals yet.
+      - is_stale_pipeline: verified by an older evidence pipeline, so its
+        cached signals predate the current extraction logic and must be
+        re-inspected (bypassing the freshness cache) exactly once.
+    """
+    meta = ev.get("metadata") or {}
+    v_status = ev.get("verification_status") or meta.get("verification_status")
+    is_unverified = not v_status or v_status == "unverified"
+    stored_version = meta.get("evidence_pipeline_version")
+    is_stale_pipeline = (not is_unverified) and stored_version != EVIDENCE_PIPELINE_VERSION
+    return is_unverified, is_stale_pipeline
 
 
 def extract_skill_signals(
@@ -813,17 +832,22 @@ async def run_analysis(user_id: str, target_role: str) -> dict:
     except Exception:
         pass
 
-    # Auto-verify unverified evidence items where an inspector is available (e.g. GitHub, LeetCode, Codeforces, Kaggle)
+    # Auto-verify evidence items where an inspector is available (e.g. GitHub,
+    # LeetCode, Codeforces, Kaggle). Items verified by an older evidence
+    # pipeline are re-inspected once so the live run always uses signals from
+    # the current extraction logic (e.g. deep GitHub repository evidence)
+    # instead of previously cached shallow signals.
     for ev in evidence:
-        meta = ev.get("metadata") or {}
-        v_status = ev.get("verification_status") or meta.get("verification_status")
-        if not v_status or v_status == "unverified":
+        is_unverified, is_stale_pipeline = evidence_refresh_state(ev)
+        if is_unverified or is_stale_pipeline:
             ev_id = ev.get("id")
             if ev_id:
                 provider = evidence_manager.get_provider(ev)
                 if provider:
                     try:
-                        verified_item = await evidence_service.verify_evidence_item(user_id, ev_id)
+                        verified_item = await evidence_service.verify_evidence_item(
+                            user_id, ev_id, force_refresh=is_stale_pipeline
+                        )
                         ev.update(verified_item)
                     except Exception:
                         pass

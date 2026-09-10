@@ -12,7 +12,6 @@ import {
   createCert,
   deleteCert,
   verifyEvidence,
-  reparseEvidence,
   type Evidence,
   type Project,
   type Certification,
@@ -233,21 +232,6 @@ export default function Analysis() {
       await loadAll();
     } catch (e) {
       setError(e instanceof Error ? e.message : "Failed to remove");
-    } finally {
-      setSaving(null);
-    }
-  };
-
-  const handleReparseFile = async (type: string) => {
-    const existing = findEvidence(type);
-    if (!existing) return;
-    setSaving(type);
-    setError(null);
-    try {
-      await reparseEvidence(existing.id);
-      await loadAll();
-    } catch (e) {
-      setError(e instanceof Error ? e.message : "Re-parse failed");
     } finally {
       setSaving(null);
     }
@@ -611,15 +595,11 @@ export default function Analysis() {
         {/* File Evidence */}
         <section className="analysis__section">
           <h2 className="analysis__section-title">File Evidence</h2>
-          <p className="analysis__section-desc">Resume and docs are parsed for skills on upload — text-based PDF/DOCX works best.</p>
+          <p className="analysis__section-desc">Validate, preview and store via Supabase Storage (private). We don’t parse yet.</p>
           <div className="analysis__grid">
             {fileSources.map((f) => {
               const existing = findEvidence(f.type);
               const isSaving = saving === f.type;
-              const meta = (existing?.metadata as Record<string, unknown> | null) || null;
-              const parseStatus = (meta?.parse_status as string) || null;
-              const wordCount = (meta?.word_count as number) || 0;
-              const parseWarning = (meta?.parse_warning as string) || null;
               return (
                 <div key={f.type} className="analysis__card">
                   <div className="analysis__card-head">
@@ -630,24 +610,9 @@ export default function Analysis() {
                   {existing ? (
                     <div className="analysis__file-saved">
                       <span>✓ {existing.title || existing.file_path}</span>
-                      {parseStatus === "ok" && wordCount > 0 && (
-                        <p className="analysis__verification-details">Parsed {wordCount} words — skills feed into analysis.</p>
-                      )}
-                      {parseStatus && parseStatus !== "ok" && (
-                        <p className="analysis__verification-details">
-                          ⚠ Could not extract text{parseWarning ? `: ${parseWarning}` : ". Re-upload a text-based PDF/DOCX or retry."}
-                        </p>
-                      )}
-                      <div style={{ display: "flex", gap: "6px" }}>
-                        {parseStatus !== "ok" && (
-                          <Button variant="secondary" size="sm" onClick={() => handleReparseFile(f.type)} disabled={isSaving}>
-                            {isSaving ? "Parsing…" : "Retry parse"}
-                          </Button>
-                        )}
-                        <Button variant="ghost" size="sm" onClick={() => handleRemoveFile(f.type)} disabled={isSaving}>
-                          Remove
-                        </Button>
-                      </div>
+                      <Button variant="secondary" size="sm" onClick={() => handleRemoveFile(f.type)} disabled={isSaving}>
+                        Remove
+                      </Button>
                     </div>
                   ) : (
                     <>
@@ -677,9 +642,6 @@ export default function Analysis() {
               const label = t === "certification_file" ? "Certification file" : "Project documentation";
               const desc = t === "certification_file" ? "Certificate PDF/DOC" : "Project docs or report";
               const isSaving = saving === t;
-              const meta = (existing?.metadata as Record<string, unknown> | null) || null;
-              const parseStatus = (meta?.parse_status as string) || null;
-              const wordCount = (meta?.word_count as number) || 0;
               return (
                 <div key={t} className="analysis__card">
                   <div className="analysis__card-head">
@@ -690,22 +652,9 @@ export default function Analysis() {
                   {existing ? (
                     <div className="analysis__file-saved">
                       <span>✓ {existing.title || existing.file_path}</span>
-                      {parseStatus === "ok" && wordCount > 0 && (
-                        <p className="analysis__verification-details">Parsed {wordCount} words.</p>
-                      )}
-                      {parseStatus && parseStatus !== "ok" && (
-                        <p className="analysis__verification-details">⚠ Could not extract text — retry or re-upload a text-based file.</p>
-                      )}
-                      <div style={{ display: "flex", gap: "6px" }}>
-                        {parseStatus !== "ok" && (
-                          <Button variant="secondary" size="sm" onClick={() => handleReparseFile(t)} disabled={isSaving}>
-                            {isSaving ? "Parsing…" : "Retry parse"}
-                          </Button>
-                        )}
-                        <Button variant="ghost" size="sm" onClick={() => handleRemoveFile(t)} disabled={isSaving}>
-                          Remove
-                        </Button>
-                      </div>
+                      <Button variant="secondary" size="sm" onClick={() => handleRemoveFile(t)} disabled={isSaving}>
+                        Remove
+                      </Button>
                     </div>
                   ) : (
                     <>

@@ -3,6 +3,13 @@ from typing import Any, Dict, List, Optional, Tuple
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 
+# Bumped whenever evidence extraction changes in a way that makes previously
+# stored `verified_signals` stale. The analysis pipeline re-verifies evidence
+# recorded under an older version so live runs never serve outdated signals.
+# 2: deep GitHub repository-content evidence (full pagination + content stage).
+EVIDENCE_PIPELINE_VERSION = 2
+
+
 class VerificationStatus:
     UNVERIFIED = "unverified"
     VERIFIED = "verified"

@@ -9,7 +9,11 @@ import httpx
 
 from .base import EvidenceProvider, VerificationResult, ExtractedSignal, EvidenceDepth, VerificationStatus
 from .url_utils import validate_platform_url, GITHUB_HOSTS
-from ..skill_taxonomy import normalize_skill, normalize_skill_slug
+from ..skill_taxonomy import (
+    normalize_skill,
+    normalize_skill_slug,
+    extract_known_skills_from_text,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -26,6 +30,86 @@ DEFAULT_PROFILE_CONCURRENCY = 4
 
 # Maximum profile pages safety ceiling (50 pages * 100 per page = 5,000 repos)
 MAX_PROFILE_PAGES = 50
+
+# ---------------------------------------------------------------------------
+# Bounded repository *content* inspection limits.
+# Repository discovery (cheap, always runs for every repository) is separate
+# from content inspection (expensive raw file reads). Content reads are capped
+# per repository and, for profile inspections, share a profile-wide budget so
+# analysing every repository of a large profile stays practical.
+# ---------------------------------------------------------------------------
+MAX_README_CHARS = 20000
+MAX_SOURCE_FILES_PER_REPO = 6
+MAX_SOURCE_FILE_BYTES = 200_000       # skip huge/generated source blobs
+MAX_SOURCE_TEXT_CHARS = 40000         # per-file text kept for import scanning
+MAX_CONFIG_FILES_PER_REPO = 3
+MAX_CONFIG_TEXT_CHARS = 12000
+# README + sampled sources + sampled configs per repository
+MAX_CONTENT_FETCHES_PER_REPO = 1 + MAX_SOURCE_FILES_PER_REPO + MAX_CONFIG_FILES_PER_REPO
+# Profile-wide ceiling on content reads (repository discovery is never capped).
+DEFAULT_PROFILE_CONTENT_BUDGET = 600
+
+# Vendored / generated / dependency directories that carry no authorship
+# evidence and must never be downloaded.
+SKIP_PATH_MARKERS = (
+    "node_modules/", "bower_components/", "vendor/", "third_party/", "thirdparty/",
+    "dist/", "build/", "out/", "target/", "obj/", ".next/", ".nuxt/", "coverage/",
+    "__pycache__/", "site-packages/", "venv/", ".venv/", "env/", "migrations/",
+    "generated/", "gen/", ".git/", "docs/_build/", "public/vendor/",
+)
+SKIP_FILE_MARKERS = (".min.js", ".min.css", ".bundle.js", ".lock", ".map", "-lock.json")
+
+# Paths that usually hold the repository's real implementation.
+PRIORITY_PATH_MARKERS = (
+    "src/", "app/", "lib/", "api/", "server/", "backend/", "frontend/", "core/",
+    "services/", "internal/", "pkg/", "cmd/", "main/",
+)
+PRIORITY_FILE_STEMS = (
+    "main", "app", "index", "server", "api", "routes", "models", "views",
+    "handler", "handlers", "service", "services", "settings", "config", "urls",
+)
+
+# Configuration / infrastructure files whose *contents* carry technical evidence.
+CONFIG_CONTENT_BASENAMES = (
+    "docker-compose.yml", "docker-compose.yaml", "compose.yml", "compose.yaml",
+    "dockerfile", "procfile", "nginx.conf", "vercel.json", "netlify.toml",
+    "render.yaml", "railway.json", "serverless.yml", "serverless.yaml",
+    "next.config.js", "next.config.mjs", "next.config.ts", "vite.config.js",
+    "vite.config.ts", "webpack.config.js", "tailwind.config.js", "tailwind.config.ts",
+    "application.properties", "application.yml", "application.yaml",
+    ".env.example", ".env.sample", ".env.template", "makefile",
+)
+CONFIG_CONTENT_SUFFIXES = (".tf", ".tfvars")
+CONFIG_CONTENT_DIR_MARKERS = (
+    ".github/workflows/", "k8s/", "kubernetes/", "helm/", "charts/", "terraform/",
+)
+
+# Source extensions eligible for import/usage scanning (superset of the
+# extension->skill map: these are read for the imports they contain).
+SOURCE_SCAN_EXTENSIONS = (
+    ".py", ".js", ".jsx", ".mjs", ".cjs", ".ts", ".tsx", ".java", ".kt", ".kts",
+    ".go", ".rs", ".cpp", ".cc", ".cxx", ".c", ".h", ".hpp", ".cs", ".swift",
+    ".dart", ".rb", ".php", ".scala", ".m", ".mm",
+)
+
+# Language-agnostic import/usage patterns. Each pattern yields a raw module
+# token which is normalized through the canonical taxonomy — no per-technology
+# special cases live here.
+IMPORT_PATTERNS = (
+    re.compile(r"^\s*(?:from|import)\s+([A-Za-z0-9_.]+)", re.M),          # Python / Java / Kotlin / Swift
+    re.compile(r"""\bfrom\s+['"]([^'"\n]+)['"]""", re.M),                  # ES modules
+    re.compile(r"""\brequire\(\s*['"]([^'"\n]+)['"]\s*\)""", re.M),        # CommonJS
+    re.compile(r"""\bimport\(\s*['"]([^'"\n]+)['"]\s*\)""", re.M),         # dynamic import
+    re.compile(r"^\s*use\s+([A-Za-z0-9_:]+)", re.M),                       # Rust
+    re.compile(r"^\s*using\s+([A-Za-z0-9_.]+)\s*;", re.M),                 # C#
+    re.compile(r"""^\s*#include\s*[<"]([A-Za-z0-9_./]+)[>"]""", re.M),      # C / C++
+    re.compile(r"""^\s*(?:_\s+)?"([A-Za-z0-9_./\-]+)"\s*$""", re.M),        # Go import block entries
+    re.compile(r"""^\s*(?:require|gem)\s+['"]([^'"\n]+)['"]""", re.M),      # Ruby
+)
+
+# Minimum token length considered for canonical mapping. Guards against
+# two-letter taxonomy aliases ('ml', 'np', 'ts', 'js') matching noise.
+MIN_TOKEN_LEN = 3
 
 # Activity thresholds for classification
 REPO_ACTIVE_DAYS = 365 * 2
@@ -256,6 +340,234 @@ def parse_manifest_deps(parser: str, text: str) -> List[str]:
     return out
 
 
+def _flatten_text(text: str) -> str:
+    """Lowercase text with separator punctuation collapsed to single spaces."""
+    return " " + re.sub(r"[\s\.\-_/]+", " ", str(text or "").lower()) + " "
+
+
+def skill_mention_counts(text: str) -> Dict[str, int]:
+    """
+    Count canonical-skill mentions in free text using the shared taxonomy.
+
+    Reuses `extract_known_skills_from_text` for detection (so GitHub never
+    invents a skill identity) and then counts alias occurrences so callers can
+    distinguish a single passing mention from repeated, structural usage.
+    Aliases shorter than MIN_TOKEN_LEN are ignored to avoid noise ('ml', 'np').
+    """
+    if not text or not str(text).strip():
+        return {}
+
+    flat = _flatten_text(text)
+    counts: Dict[str, int] = {}
+    for definition in extract_known_skills_from_text(str(text)):
+        phrases = {definition.display_name, definition.canonical_name, definition.id}
+        phrases.update(definition.aliases)
+        total = 0
+        for phrase in phrases:
+            cleaned = re.sub(r"[\s\.\-_/]+", " ", str(phrase).strip().lower()).strip()
+            if len(cleaned) < MIN_TOKEN_LEN:
+                continue
+            total += len(re.findall(r"(?<![\w+#])" + re.escape(cleaned) + r"(?![\w+#])", flat))
+        if total > 0:
+            counts[definition.display_name] = counts.get(definition.display_name, 0) + total
+    return counts
+
+
+def _import_token_candidates(raw_token: str) -> List[str]:
+    """
+    Expand one raw import/usage token into canonical-lookup candidates.
+    'sklearn.linear_model' -> ['sklearn.linear_model', 'sklearn']
+    '@testing-library/react' -> ['@testing-library/react', 'testing-library', 'react']
+    'org.springframework.boot.SpringApplication' -> [..., 'springframework', 'boot', ...]
+    """
+    token = str(raw_token or "").strip().strip("\"';")
+    if not token:
+        return []
+    token = token.lstrip("./")
+    candidates: List[str] = [token]
+    segments = re.split(r"[./:@\\]+", token)
+    for seg in segments:
+        if seg and seg not in candidates:
+            candidates.append(seg)
+    return [c for c in candidates if len(c) >= MIN_TOKEN_LEN]
+
+
+def extract_import_tokens(text: str) -> Dict[str, int]:
+    """
+    Extract raw import/usage module tokens and their occurrence counts from a
+    source file, using language-agnostic patterns. Mapping tokens to skills is
+    left to the canonical taxonomy so no technology is special-cased here.
+    """
+    tokens: Dict[str, int] = {}
+    if not text:
+        return tokens
+    for pattern in IMPORT_PATTERNS:
+        for match in pattern.findall(text[:MAX_SOURCE_TEXT_CHARS]):
+            raw = match if isinstance(match, str) else (match[0] if match else "")
+            raw = str(raw).strip()
+            if not raw or len(raw) > 200:
+                continue
+            key = raw.lower()
+            tokens[key] = tokens.get(key, 0) + 1
+    return tokens
+
+
+def import_skill_counts(import_tokens: Dict[str, int]) -> Dict[str, int]:
+    """Map raw import tokens to canonical skills with aggregated usage counts."""
+    counts: Dict[str, int] = {}
+    for token, occurrences in (import_tokens or {}).items():
+        for candidate in _import_token_candidates(token):
+            canonical = normalize_skill(candidate)
+            if canonical:
+                counts[canonical] = counts.get(canonical, 0) + int(occurrences or 1)
+                break
+    return counts
+
+
+def dependency_skill_names(deps: Set[str]) -> Dict[str, str]:
+    """
+    Map declared dependency names to canonical skills through the taxonomy.
+    Returns canonical skill -> the dependency token that produced it.
+    """
+    resolved: Dict[str, str] = {}
+    for dep in sorted({str(d or "").strip().lower() for d in (deps or set()) if d}):
+        for candidate in _import_token_candidates(dep):
+            canonical = normalize_skill(candidate)
+            if canonical and canonical not in resolved:
+                resolved[canonical] = dep
+                break
+    return resolved
+
+
+def _is_skippable_path(path_lower: str) -> bool:
+    """True for vendored, generated, or non-authored files."""
+    if any(marker in path_lower for marker in SKIP_PATH_MARKERS):
+        return True
+    if path_lower.startswith(SKIP_PATH_MARKERS):
+        return True
+    return any(marker in path_lower for marker in SKIP_FILE_MARKERS)
+
+
+def _source_priority(path_lower: str, size: int) -> tuple:
+    """
+    Rank a candidate source file: implementation directories and entry-point
+    filenames first, then larger files (more implementation to observe).
+    """
+    base = path_lower.rsplit("/", 1)[-1]
+    stem = base.rsplit(".", 1)[0]
+    in_priority_dir = any(marker in path_lower for marker in PRIORITY_PATH_MARKERS)
+    is_priority_stem = stem in PRIORITY_FILE_STEMS
+    is_test = "test" in path_lower or "spec" in path_lower
+    return (
+        1 if in_priority_dir else 0,
+        1 if is_priority_stem else 0,
+        0 if is_test else 1,
+        min(int(size or 0), MAX_SOURCE_FILE_BYTES),
+    )
+
+
+def select_source_files(candidates: List[Tuple[str, int]], limit: int = MAX_SOURCE_FILES_PER_REPO) -> List[str]:
+    """
+    Choose a bounded, diverse sample of real implementation files.
+    Files are round-robined across extensions so a polyglot repository does not
+    spend its whole budget on a single language.
+    """
+    by_ext: Dict[str, List[Tuple[str, int]]] = {}
+    for path, size in candidates:
+        low = path.lower()
+        dot = low.rfind(".")
+        ext = low[dot:] if dot > 0 else ""
+        by_ext.setdefault(ext, []).append((path, size))
+
+    for ext in by_ext:
+        by_ext[ext].sort(key=lambda item: _source_priority(item[0].lower(), item[1]), reverse=True)
+
+    # Extensions with the strongest single candidate go first.
+    ordered_exts = sorted(
+        by_ext.keys(),
+        key=lambda e: _source_priority(by_ext[e][0][0].lower(), by_ext[e][0][1]),
+        reverse=True,
+    )
+
+    selected: List[str] = []
+    round_index = 0
+    while len(selected) < limit:
+        added = False
+        for ext in ordered_exts:
+            bucket = by_ext[ext]
+            if round_index < len(bucket):
+                selected.append(bucket[round_index][0])
+                added = True
+                if len(selected) >= limit:
+                    break
+        if not added:
+            break
+        round_index += 1
+    return selected
+
+
+def _is_config_content_path(path_lower: str) -> bool:
+    """True for configuration/infrastructure files worth reading in full."""
+    base = path_lower.rsplit("/", 1)[-1]
+    if base in CONFIG_CONTENT_BASENAMES or base.startswith("dockerfile"):
+        return True
+    if base.endswith(CONFIG_CONTENT_SUFFIXES):
+        return True
+    if any(marker in path_lower for marker in CONFIG_CONTENT_DIR_MARKERS) and base.endswith(
+        (".yml", ".yaml", ".tf", ".json")
+    ):
+        return True
+    return False
+
+
+def compact_inspection(inspection: dict, keep_excerpt: bool = True) -> Dict[str, Any]:
+    """
+    Strip bulky raw file text out of an inspection payload before it is
+    persisted with the evidence record. Derived facts (counts, sampled paths,
+    detected dependencies) are kept so provenance survives; the raw README /
+    config bodies and the full file listing are not stored per repository.
+    """
+    if not isinstance(inspection, dict):
+        return {}
+    compact = {k: v for k, v in inspection.items() if k not in
+               ("readme_text", "config_text", "top_files", "import_tokens")}
+    readme_text = str(inspection.get("readme_text") or "")
+    if keep_excerpt and readme_text:
+        compact["readme_excerpt"] = readme_text[:400]
+    compact["readme_present"] = bool(readme_text) or bool(inspection.get("readme_present"))
+    top_files = inspection.get("top_files") or []
+    if top_files:
+        compact["top_files_count"] = len(top_files)
+    import_tokens = inspection.get("import_tokens") or {}
+    if import_tokens:
+        compact["import_token_count"] = len(import_tokens)
+        compact["import_skills"] = sorted(import_skill_counts(
+            {str(k).lower(): int(v or 0) for k, v in import_tokens.items()}
+        ).keys())
+    return compact
+
+
+class ContentBudget:
+    """
+    Shared ceiling on expensive repository *content* reads. Repository
+    discovery and metadata inspection are never limited by this budget.
+    """
+
+    def __init__(self, total: int = DEFAULT_PROFILE_CONTENT_BUDGET):
+        self.total = max(0, int(total))
+        self.used = 0
+
+    @property
+    def remaining(self) -> int:
+        return max(0, self.total - self.used)
+
+    def take(self, count: int = 1) -> bool:
+        if self.remaining < count:
+            return False
+        self.used += count
+        return True
+
+
 def parse_github_url(url_or_handle: str) -> Tuple[Optional[str], Optional[str], bool]:
     """
     Parse a GitHub URL or handle.
@@ -409,11 +721,25 @@ def _classify_repository(repo_data: dict, profile_owner: str, now: datetime) -> 
 class GitHubProvider(EvidenceProvider):
     """
     Evidence Intelligence Provider for GitHub.
-    Independently inspects public repositories for concrete technical evidence:
-    - Languages reported by GitHub
-    - Manifests & Dependencies (package.json, requirements.txt, pyproject.toml, pom.xml)
-    - Infrastructure & CI/CD configs (Dockerfile, docker-compose, .github/workflows)
-    - Distinguishes EvidenceDepth: URL only (0) < Mention (1) < Config/Dep (2) < Implementation (3) < Substantial (4)
+
+    Two distinct stages:
+      1. Repository discovery — every accessible repository of a profile is
+         enumerated through GitHub's pagination (no fixed cap, no
+         'most recently updated only' shortcut).
+      2. Repository content analysis — each non-empty repository is inspected
+         for concrete technical evidence within bounded API/content budgets:
+           - repository metadata, description, topics, language statistics
+           - directory/file structure (recursive tree)
+           - dependency/build manifests across ecosystems
+           - README contents (documentation-level evidence)
+           - a prioritized sample of real implementation files (imports/usages)
+           - configuration/infrastructure files (Docker, CI, k8s, Terraform, env)
+           - test structure and project architecture indicators
+
+    Signals are graded by EvidenceDepth:
+      URL only (0) < documentation mention (1) < config/dependency (2)
+      < implementation (3) < substantial implementation (4)
+    and are always normalized through the canonical skill taxonomy.
     """
 
     @property
@@ -486,6 +812,7 @@ class GitHubProvider(EvidenceProvider):
         verified_at: datetime,
         client: httpx.AsyncClient,
         repo_data: Optional[dict] = None,
+        budget: Optional[ContentBudget] = None,
     ) -> VerificationResult:
         headers = _get_github_headers()
         repo_url = f"https://api.github.com/repos/{owner}/{repo}"
@@ -634,6 +961,11 @@ class GitHubProvider(EvidenceProvider):
             has_k8s_manifests = False
             k8s_manifest_count = 0
             has_ci_config = False
+            source_candidates: List[Tuple[str, int]] = []
+            config_candidates: List[str] = []
+            readme_paths: List[str] = []
+            test_file_count = 0
+            total_tree_files = 0
             try:
                 tree_res = await client.get(
                     f"{repo_url}/git/trees/{default_branch}?recursive=1", headers=headers
@@ -666,12 +998,28 @@ class GitHubProvider(EvidenceProvider):
                         if base in K8S_MARKERS or low.startswith(K8S_DIR_MARKERS):
                             has_k8s_manifests = True
                             k8s_manifest_count += 1
-                        if base in CI_CONFIG_MARKERS:
+                        if base in CI_CONFIG_MARKERS or low in CI_CONFIG_MARKERS:
                             has_ci_config = True
                         if len(tree_top_files) < 800:
                             tree_top_files.append(low)
                             if base != low:
                                 tree_top_files.append(base)
+
+                        # --- content-inspection candidate selection ---
+                        if str(entry.get("type") or "blob") != "blob":
+                            continue
+                        total_tree_files += 1
+                        entry_size = int(entry.get("size") or 0)
+                        if base.startswith("readme"):
+                            readme_paths.append(path)
+                        if _is_skippable_path(low):
+                            continue
+                        if "test" in low or "spec" in low:
+                            test_file_count += 1
+                        if _is_config_content_path(low):
+                            config_candidates.append(path)
+                        elif low.endswith(SOURCE_SCAN_EXTENSIONS) and 0 < entry_size <= MAX_SOURCE_FILE_BYTES:
+                            source_candidates.append((path, entry_size))
             except Exception:
                 pass
 
@@ -770,6 +1118,69 @@ class GitHubProvider(EvidenceProvider):
                         if name:
                             eco_manifest_deps.append(name)
 
+            # 9. STAGE: repository *content* inspection.
+            # Discovery/metadata above is cheap and always runs. Below we read a
+            # bounded, prioritized sample of real project artifacts: the README
+            # (documentation-level evidence), implementation source files
+            # (imports/usages), and configuration/infrastructure files.
+            budget = budget if budget is not None else ContentBudget(MAX_CONTENT_FETCHES_PER_REPO)
+            content_fetches = 0
+
+            async def _fetch_content(path: str, cap: int) -> str:
+                nonlocal content_fetches
+                if content_fetches >= MAX_CONTENT_FETCHES_PER_REPO:
+                    return ""
+                if not budget.take(1):
+                    return ""
+                content_fetches += 1
+                text = await _fetch_raw(path)
+                return text[:cap] if text else ""
+
+            # 9a. README — documentation-level evidence only.
+            readme_text = ""
+            readme_path = ""
+            readme_candidates = [f for f in root_files if str(f).lower().startswith("readme")]
+            readme_candidates.extend([p for p in readme_paths if p not in readme_candidates])
+            if readme_candidates:
+                readme_path = str(readme_candidates[0])
+                readme_text = await _fetch_content(readme_path, MAX_README_CHARS)
+
+            # 9b. Implementation source files — imports/usages evidence.
+            if not source_candidates and root_files:
+                # Tree unavailable (large repo / API failure): fall back to root sources.
+                source_candidates = [
+                    (str(f), 1)
+                    for f in root_files
+                    if str(f).lower().endswith(SOURCE_SCAN_EXTENSIONS)
+                    and not _is_skippable_path(str(f).lower())
+                ]
+            sampled_source_files: List[str] = []
+            import_tokens: Dict[str, int] = {}
+            for path in select_source_files(source_candidates, MAX_SOURCE_FILES_PER_REPO):
+                text = await _fetch_content(path, MAX_SOURCE_TEXT_CHARS)
+                if not text:
+                    continue
+                sampled_source_files.append(path)
+                for token, count in extract_import_tokens(text).items():
+                    import_tokens[token] = import_tokens.get(token, 0) + count
+
+            # 9c. Configuration / infrastructure files.
+            sampled_config_files: List[str] = []
+            config_text_parts: List[str] = []
+            root_config_candidates = [
+                str(f) for f in root_files if _is_config_content_path(str(f).lower())
+            ]
+            ordered_configs = root_config_candidates + [
+                p for p in config_candidates if p not in root_config_candidates
+            ]
+            for path in ordered_configs[:MAX_CONFIG_FILES_PER_REPO]:
+                text = await _fetch_content(path, MAX_CONFIG_TEXT_CHARS)
+                if not text:
+                    continue
+                sampled_config_files.append(path)
+                config_text_parts.append(text)
+            config_text = "\n".join(config_text_parts)[: MAX_CONFIG_TEXT_CHARS * MAX_CONFIG_FILES_PER_REPO]
+
             inspection = {
                 "name": repo_data.get("name") or repo,
                 "full_name": repo_data.get("full_name") or f"{owner}/{repo}",
@@ -800,9 +1211,25 @@ class GitHubProvider(EvidenceProvider):
                 "build_system": build_system,
                 "java_frameworks": java_frameworks,
                 "java_build_deps": java_build_deps,
+                # Repository content inspection (stage 2)
+                "readme_path": readme_path,
+                "readme_text": readme_text,
+                "readme_present": bool(readme_text),
+                "source_files_sampled": sampled_source_files,
+                "import_tokens": import_tokens,
+                "config_files_sampled": sampled_config_files,
+                "config_text": config_text,
+                "test_file_count": test_file_count,
+                "tree_file_count": total_tree_files,
+                "content_fetches": content_fetches,
+                "content_budget_exhausted": budget.remaining <= 0,
             }
 
-            return self._build_result_from_inspection(owner, repo, inspection, verified_at)
+            result = self._build_result_from_inspection(owner, repo, inspection, verified_at)
+            # Signals are built from the full text; only compact facts are
+            # persisted with the evidence record.
+            result.raw_metadata = compact_inspection(inspection)
+            return result
 
         except httpx.RequestError as e:
             return VerificationResult(
@@ -828,14 +1255,19 @@ class GitHubProvider(EvidenceProvider):
         verified_at: datetime,
         client: Optional[httpx.AsyncClient] = None,
         repo_data: Optional[dict] = None,
+        budget: Optional[ContentBudget] = None,
     ) -> VerificationResult:
         """Inspect a single repository reusing an existing client or creating a bounded one."""
         if client is not None:
-            return await self._inspect_repository_core(owner, repo, verified_at, client, repo_data=repo_data)
+            return await self._inspect_repository_core(
+                owner, repo, verified_at, client, repo_data=repo_data, budget=budget
+            )
 
         try:
             async with httpx.AsyncClient(timeout=6.0) as new_client:
-                return await self._inspect_repository_core(owner, repo, verified_at, new_client, repo_data=repo_data)
+                return await self._inspect_repository_core(
+                    owner, repo, verified_at, new_client, repo_data=repo_data, budget=budget
+                )
         except httpx.RequestError as e:
             return VerificationResult(
                 status="failed",
@@ -891,12 +1323,14 @@ class GitHubProvider(EvidenceProvider):
         Handles rate limits, empty portfolios, single-page, and multi-page portfolios.
         """
         all_repos: List[dict] = []
+        seen_repo_keys: Set[str] = set()
         page = 1
         per_page = 100
         warnings: List[str] = []
         meta = {
             "pages_fetched": 0,
             "rate_limited": False,
+            "duplicates_skipped": 0,
             "warnings": warnings,
         }
 
@@ -927,7 +1361,23 @@ class GitHubProvider(EvidenceProvider):
             if not repos:
                 break
 
-            all_repos.extend(repos)
+            # Pagination with sort=updated can repeat a repository if the
+            # profile changes mid-walk: de-duplicate by id/full name.
+            for repo_item in repos:
+                if not isinstance(repo_item, dict):
+                    continue
+                key = str(
+                    repo_item.get("id")
+                    or repo_item.get("full_name")
+                    or repo_item.get("name")
+                    or ""
+                ).lower()
+                if key and key in seen_repo_keys:
+                    meta["duplicates_skipped"] += 1
+                    continue
+                if key:
+                    seen_repo_keys.add(key)
+                all_repos.append(repo_item)
             logger.debug(f"GitHub profile @{owner}: fetched {len(repos)} repositories")
 
             # Check if this was the last page
@@ -950,12 +1400,14 @@ class GitHubProvider(EvidenceProvider):
         repos_data: List[dict],
         verified_at: datetime,
         concurrency: int = DEFAULT_PROFILE_CONCURRENCY,
+        budget: Optional[ContentBudget] = None,
     ) -> Tuple[List[Dict[str, Any]], List[Tuple[ExtractedSignal, Dict[str, Any]]], List[str]]:
         """
         Concurrently inspect a portfolio of repositories under controlled concurrency.
         Safeguards against runaway rate limits and isolates individual repository failures.
         """
         sem = asyncio.Semaphore(concurrency)
+        budget = budget if budget is not None else ContentBudget(DEFAULT_PROFILE_CONTENT_BUDGET)
         inspected_repos: List[Dict[str, Any]] = []
         raw_signals: List[Tuple[ExtractedSignal, Dict[str, Any]]] = []
         warnings: List[str] = []
@@ -1001,7 +1453,7 @@ class GitHubProvider(EvidenceProvider):
                     "classification": classification_info["classification"],
                     "classification_details": classification_info,
                     "status": "inspected",
-                    "inspection": res.raw_metadata,
+                    "inspection": compact_inspection(res.raw_metadata),
                 }
                 return summary, res.signals, None
 
@@ -1061,6 +1513,7 @@ class GitHubProvider(EvidenceProvider):
                         verified_at=verified_at,
                         client=client,
                         repo_data=repo_meta,
+                        budget=budget,
                     )
                     if result.status == "verified":
                         summary = {
@@ -1085,7 +1538,7 @@ class GitHubProvider(EvidenceProvider):
                             "classification": classification_info["classification"],
                             "classification_details": classification_info,
                             "status": "inspected",
-                            "inspection": result.raw_metadata,
+                            "inspection": compact_inspection(result.raw_metadata),
                         }
                         return summary, result.signals, None
                     else:
@@ -1263,6 +1716,15 @@ class GitHubProvider(EvidenceProvider):
                     f"{total_repos} forked repositories (e.g., {sample_names})."
                 )
 
+            # Preserve which kinds of repository evidence backed this skill
+            # (documentation / configuration / dependency / source usage).
+            evidence_kinds = sorted(
+                {
+                    str(s.metadata.get("evidence_kind"))
+                    for s, _ in unique_items
+                    if s.metadata.get("evidence_kind")
+                }
+            )
             metadata: Dict[str, Any] = {
                 "owner": owner,
                 "repo_count": total_repos,
@@ -1270,6 +1732,8 @@ class GitHubProvider(EvidenceProvider):
                 "fork_count": len(fork_items),
                 "archived_count": len(archived_items),
                 "evidence_depth": final_depth,
+                "evidence_kinds": evidence_kinds,
+                "documentation_only": bool(evidence_kinds) and evidence_kinds == ["documentation"],
                 "repositories": provenance_repos,
             }
             if not owned_items:
@@ -1392,14 +1856,23 @@ class GitHubProvider(EvidenceProvider):
                         warnings=all_warnings,
                     )
 
-                # Inspect repositories concurrently using shared HTTP client
+                # Inspect repositories concurrently using shared HTTP client.
+                # Repository discovery above is never capped; deep content
+                # reads share one profile-wide budget for API/rate-limit safety.
+                content_budget = ContentBudget(DEFAULT_PROFILE_CONTENT_BUDGET)
                 inspected_repos, raw_signals, inspect_warnings = await self._inspect_profile_repositories(
                     client=client,
                     owner=owner,
                     repos_data=all_repos,
                     verified_at=verified_at,
                     concurrency=DEFAULT_PROFILE_CONCURRENCY,
+                    budget=content_budget,
                 )
+                if content_budget.remaining <= 0:
+                    all_warnings.append(
+                        "Profile-wide repository content budget exhausted: some repositories were "
+                        "analysed from structure and manifests only."
+                    )
                 all_warnings.extend(inspect_warnings)
 
                 # Aggregate signals across repositories
@@ -1428,6 +1901,13 @@ class GitHubProvider(EvidenceProvider):
                     "forked_repositories": forked_repos,
                     "archived_repositories": archived_repos,
                     "active_repositories": active_repos,
+                    "repositories_content_analyzed": sum(
+                        1
+                        for r in inspected_repos
+                        if int((r.get("inspection") or {}).get("content_fetches") or 0) > 0
+                    ),
+                    "content_fetches_used": content_budget.used,
+                    "content_budget": content_budget.total,
                     "repositories": inspected_repos,
                     # Backward compatibility
                     "owner": owner,
@@ -1471,12 +1951,17 @@ class GitHubProvider(EvidenceProvider):
         """
         Convert structured repository inspection facts into verified technical signals.
         Enforces EvidenceDepth levels:
-        - Level 1: README / description mention
+        - Level 1: README / description / topic mention (documentation only)
         - Level 2: Dependencies / configs detected (package.json, requirements.txt, Dockerfile)
-        - Level 3: Concrete implementation detected
+        - Level 3: Concrete implementation detected (source files, imports/usages)
         - Level 4: Substantial implementation (deps + code + workflows/tests)
+
+        At most one signal per canonical skill is emitted per repository: the
+        strongest evidence wins and weaker corroboration is kept as provenance,
+        so repeated mentions inside one repository cannot inflate proficiency.
         """
-        signals: List[ExtractedSignal] = []
+        signal_map: Dict[str, ExtractedSignal] = {}
+        evidence_notes: Dict[str, List[str]] = {}
         warnings: List[str] = []
         repo_name = inspection.get("name") or repo
         description = inspection.get("description") or ""
@@ -1503,6 +1988,16 @@ class GitHubProvider(EvidenceProvider):
                 if dot > 0 and f[dot:] in EXTENSION_SKILL_MAP:
                     ext_file_counts[f[dot:]] = ext_file_counts.get(f[dot:], 0) + 1
         tree_scanned = bool(inspection.get("tree_scanned"))
+        # Repository content evidence (stage 2 of the pipeline)
+        readme_text = str(inspection.get("readme_text") or "")
+        config_text = str(inspection.get("config_text") or "")
+        topics = inspection.get("topics") or []
+        import_tokens = {
+            str(k).lower(): int(v or 0)
+            for k, v in (inspection.get("import_tokens") or {}).items()
+        }
+        sampled_source_files = list(inspection.get("source_files_sampled") or [])
+        sampled_config_files = list(inspection.get("config_files_sampled") or [])
         has_workflows = bool(inspection.get("has_workflows"))
         has_ci_config = bool(inspection.get("has_ci_config"))
         has_k8s_manifests = bool(inspection.get("has_k8s_manifests"))
@@ -1556,31 +2051,52 @@ class GitHubProvider(EvidenceProvider):
 
         has_test_files = any(any(tf in f.lower() for tf in ("tests", "test", "__tests__", "spec", "pytest.ini", "tox.ini", "jest.config")) for f in all_files)
         has_test_deps = any(_is_test_lib(d) for d in all_deps)
-        has_tests = has_test_files or has_test_deps
+        has_tests = has_test_files or has_test_deps or int(inspection.get("test_file_count") or 0) > 0
 
-        # Helper to safely append signals honoring fork discounts
-        def _add_signal(skill_name: str, depth: int, reason_text: str, meta: Optional[dict] = None):
+        # Helper to safely record signals honoring fork discounts.
+        # Only the strongest evidence for a canonical skill is kept per
+        # repository; weaker corroborating findings are retained as provenance.
+        def _add_signal(
+            skill_name: str,
+            depth: int,
+            reason_text: str,
+            meta: Optional[dict] = None,
+            only_if_absent: bool = False,
+        ):
             canonical = normalize_skill(skill_name) or skill_name
             final_depth = min(depth, EvidenceDepth.LEVEL_2_CONFIG) if is_fork else depth
             raw_strength = EvidenceDepth.get_strength_for_depth(final_depth)
             final_strength = round(min(0.55, raw_strength * 0.70), 2) if is_fork else raw_strength
             final_reason = f"[Forked Repository] {reason_text}" if is_fork else reason_text
-            metadata = meta or {}
+            metadata = dict(meta or {})
             if is_fork:
                 metadata["is_fork"] = True
             if is_archived:
                 metadata["archived"] = True
                 if not is_fork:
                     final_reason = f"[Archived] {final_reason}"
-            signals.append(
-                ExtractedSignal(
-                    skill=canonical,
-                    signal_strength=final_strength,
-                    depth=final_depth,
-                    reason=final_reason,
-                    source_reliability=GITHUB_RELIABILITY,
-                    metadata=metadata,
-                )
+
+            notes = evidence_notes.setdefault(canonical, [])
+            existing = signal_map.get(canonical)
+            if existing is not None:
+                if only_if_absent:
+                    return
+                if len(notes) < 8:
+                    notes.append(final_reason)
+                if (existing.depth, existing.signal_strength) >= (final_depth, final_strength):
+                    # Keep the stronger evidence: corroboration does not raise strength.
+                    return
+                metadata = {**existing.metadata, **metadata}
+            else:
+                notes.append(final_reason)
+
+            signal_map[canonical] = ExtractedSignal(
+                skill=canonical,
+                signal_strength=final_strength,
+                depth=final_depth,
+                reason=final_reason,
+                source_reliability=GITHUB_RELIABILITY,
+                metadata=metadata,
             )
 
         # 1. Docker Detection
@@ -1959,6 +2475,99 @@ class GitHubProvider(EvidenceProvider):
                 EvidenceDepth.LEVEL_3_IMPLEMENTATION,
                 f"Verified public repository '{repo_name}' hosted on GitHub with commit history.",
             )
+
+        # 11. Declared dependencies -> canonical skills (taxonomy driven).
+        # Any dependency in any ecosystem manifest that resolves to a canonical
+        # skill becomes configuration/dependency-level evidence. No technology
+        # is special-cased here: resolution goes through normalize_skill.
+        dep_skills = dependency_skill_names(all_deps)
+        for dep_skill, dep_token in sorted(dep_skills.items()):
+            _add_signal(
+                dep_skill,
+                EvidenceDepth.LEVEL_2_CONFIG,
+                f"Repository '{repo_name}' declares '{dep_token}' in its dependency/build manifest.",
+                {"dependency": dep_token, "evidence_kind": "dependency_manifest"},
+            )
+
+        # 12. Imports / usages observed in sampled implementation files.
+        # Depth scales with how often the technology is actually used and
+        # whether the usage is backed by a declared dependency or tests.
+        usage_counts = import_skill_counts(import_tokens)
+        for use_skill, use_count in sorted(usage_counts.items()):
+            declared = use_skill in dep_skills
+            if use_count >= 3 and (declared or has_tests):
+                use_depth = EvidenceDepth.LEVEL_4_SUBSTANTIAL
+            elif use_count >= 2 or (use_count >= 1 and declared):
+                use_depth = EvidenceDepth.LEVEL_3_IMPLEMENTATION
+            else:
+                use_depth = EvidenceDepth.LEVEL_2_CONFIG
+            _add_signal(
+                use_skill,
+                use_depth,
+                (
+                    f"Repository '{repo_name}' imports/uses {use_skill} in {use_count} place(s) "
+                    f"across inspected source files"
+                    f"{' with a matching declared dependency' if declared else ''}."
+                ),
+                {
+                    "usage_count": use_count,
+                    "declared_dependency": declared,
+                    "source_files_inspected": sampled_source_files[:MAX_SOURCE_FILES_PER_REPO],
+                    "evidence_kind": "source_usage",
+                },
+            )
+
+        # 13. Configuration / infrastructure file contents.
+        # A technology repeated inside a real config file is configuration
+        # evidence; a single passing mention stays documentation-level.
+        for cfg_skill, cfg_count in sorted(skill_mention_counts(config_text).items()):
+            cfg_depth = (
+                EvidenceDepth.LEVEL_2_CONFIG if cfg_count >= 2 else EvidenceDepth.LEVEL_1_MENTION
+            )
+            _add_signal(
+                cfg_skill,
+                cfg_depth,
+                (
+                    f"Repository '{repo_name}' references {cfg_skill} in project configuration "
+                    f"({', '.join(sampled_config_files[:3]) or 'config files'})."
+                ),
+                {
+                    "config_mentions": cfg_count,
+                    "config_files": sampled_config_files[:3],
+                    "evidence_kind": "configuration",
+                },
+            )
+
+        # 14. Documentation-only evidence (README / description / topics).
+        # Weakest tier by design: recorded only when no stronger evidence for
+        # the same skill was found anywhere else in this repository.
+        doc_text = " ".join(
+            [str(description or ""), " ".join(str(t) for t in topics), readme_text]
+        ).strip()
+        for doc_skill, doc_count in sorted(skill_mention_counts(doc_text).items()):
+            _add_signal(
+                doc_skill,
+                EvidenceDepth.LEVEL_1_MENTION,
+                (
+                    f"Repository '{repo_name}' mentions {doc_skill} in its documentation "
+                    f"(README/description/topics) without supporting implementation evidence."
+                ),
+                {
+                    "documentation_only": True,
+                    "mentions": doc_count,
+                    "evidence_kind": "documentation",
+                },
+                only_if_absent=True,
+            )
+
+        # Attach corroborating evidence provenance without changing strength.
+        signals: List[ExtractedSignal] = []
+        for canonical, sig in signal_map.items():
+            notes = evidence_notes.get(canonical) or []
+            if notes:
+                sig.metadata["supporting_evidence"] = notes[:5]
+                sig.metadata["evidence_signal_count"] = len(notes)
+            signals.append(sig)
 
         detected_names = [s.skill for s in signals]
         message = (

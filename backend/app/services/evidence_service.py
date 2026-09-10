@@ -6,6 +6,7 @@ import uuid
 import re
 
 from ..core.supabase import get_supabase_client
+from .evidence.base import EVIDENCE_PIPELINE_VERSION
 from .evidence.manager import evidence_manager
 from . import document_parser
 
@@ -152,14 +153,17 @@ def update_evidence(user_id: str, evidence_id: str, payload: dict) -> dict:
         raise HTTPException(status_code=500, detail="Failed to update evidence")
 
 
-async def verify_evidence_item(user_id: str, evidence_id: str) -> dict:
+async def verify_evidence_item(user_id: str, evidence_id: str, force_refresh: bool = False) -> dict:
     """
     Independently inspect an evidence item using its provider.
     Updates verification status, message, verified_at, and saves verified signals in metadata.
     Enforces user ownership.
+
+    `force_refresh` bypasses the freshness cache — used when stored signals were
+    produced by an older evidence pipeline version.
     """
     ev = get_evidence(user_id, evidence_id)
-    result = await evidence_manager.verify_evidence(ev)
+    result = await evidence_manager.verify_evidence(ev, force_refresh=force_refresh)
 
     now_iso = (result.verified_at or datetime.now(timezone.utc)).isoformat()
     meta = ev.get("metadata") or {}
@@ -170,6 +174,7 @@ async def verify_evidence_item(user_id: str, evidence_id: str) -> dict:
         "verified_at": now_iso,
         "provider": result.provider,
         "verified_signals": [s.to_dict() for s in result.signals],
+        "evidence_pipeline_version": EVIDENCE_PIPELINE_VERSION,
         "inspection": result.raw_metadata,
         "profile": result.profile,
         "facts": result.facts,

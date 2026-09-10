@@ -437,8 +437,18 @@ def test_github_java_weak_footprint_does_not_overaward():
         assert prof <= 0.60
 
 
-def test_github_java_readme_mention_only_yields_no_java_signal():
-    """README saying 'Java' with zero implementation evidence must NOT award Java."""
+def test_github_java_readme_mention_only_stays_documentation_level():
+    """
+    README/description/topics saying 'Java' with zero implementation evidence
+    must never reach implementation depth.
+
+    Behaviour update (deep GitHub evidence pipeline): documentation is now an
+    explicit, weakest evidence tier (LEVEL_1_MENTION, 0.40) instead of being
+    dropped entirely, so the provider can distinguish documentation-only from
+    configuration and implementation evidence. The original guarantee — a
+    README mention must not be treated as demonstrated Java implementation —
+    is asserted below and unchanged.
+    """
     provider = GitHubProvider()
     inspection = _java_repo_inspection(
         name="java-notes",
@@ -456,7 +466,16 @@ def test_github_java_readme_mention_only_yields_no_java_signal():
         java_build_deps=[],
     )
     res = provider._build_result_from_inspection("student", "java-notes", inspection, datetime.now(timezone.utc))
-    assert [s for s in res.signals if s.skill == "Java"] == []
+    java_sigs = [s for s in res.signals if s.skill == "Java"]
+    assert len(java_sigs) <= 1
+    if java_sigs:
+        sig = java_sigs[0]
+        assert sig.depth == EvidenceDepth.LEVEL_1_MENTION
+        assert sig.signal_strength == pytest.approx(0.40)
+        assert sig.metadata.get("documentation_only") is True
+        prof, _, _, _ = skill_engine.proficiency([sig.to_dict()])
+        assert prof == pytest.approx(0.40)
+        assert prof < 0.75  # strictly below implementation-level evidence
 
 
 def test_github_java_manifest_without_sources_is_weak():
