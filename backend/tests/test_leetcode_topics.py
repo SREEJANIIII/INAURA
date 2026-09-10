@@ -407,6 +407,8 @@ def test_topic_data_unavailable_graceful_fallback():
     """
     When profile or mock does not supply topic statistics, provider falls back cleanly
     to difficulty-weighted problem index with topic_data_status = 'unavailable' without failing.
+    DSA proficiency is conservatively capped (<= 0.35) so missing topic data never falsely awards 66%.
+    Problem Solving signal appropriately credits the problem count.
     """
     async def _run():
         provider = LeetCodeProvider()
@@ -430,8 +432,78 @@ def test_topic_data_unavailable_graceful_fallback():
 
         assert meta["topic_data_status"] == "unavailable"
         assert meta["total_solved"] == 120
-        assert dsa_signal.signal_strength >= 0.65
-        assert dsa_signal.depth == EvidenceDepth.LEVEL_3_IMPLEMENTATION
+        # Conservative estimate capped at <= 0.35 without topic data
+        assert dsa_signal.signal_strength <= 0.35
+        assert dsa_signal.signal_strength >= 0.12
+        assert dsa_signal.depth in (EvidenceDepth.LEVEL_1_MENTION, EvidenceDepth.LEVEL_2_CONFIG)
+
+        # Problem Solving signal appropriately rewards the 120 problems solved
+        ps_signal = next(s for s in res.signals if s.skill == "Problem Solving")
+        assert ps_signal.signal_strength >= 0.35
+
+    asyncio.run(_run())
+
+
+def test_single_topic_arrays_only_strictly_capped():
+    """
+    CRITICAL USER REQUIREMENT TEST:
+    A student has solved 100 questions exclusively in Arrays & Strings (0 in other 8 topics).
+    DSA proficiency must NOT be 66%. It must strictly be <= 15% (~0.08 - 0.12),
+    accurately reflecting that only 1 of 9 pillars has been covered, and all 8 other
+    pillars must be flagged as missing.
+    """
+    async def _run():
+        provider = LeetCodeProvider()
+        ev = {
+            "evidence_type": "leetcode",
+            "source_url": "https://leetcode.com/u/arrays_only_student",
+            "mock_inspection": {
+                "username": "arrays_only_student",
+                "total_solved": 100,
+                "easy_solved": 40,
+                "medium_solved": 55,
+                "hard_solved": 5,
+                "topics": {
+                    "Arrays & Strings": 100,
+                },
+            },
+        }
+
+        res = await provider.verify(ev)
+        assert res.status == VerificationStatus.VERIFIED
+
+        dsa_signal = next(s for s in res.signals if s.skill == "Data Structures & Algorithms")
+        meta = dsa_signal.metadata
+
+        # Strictly 1 of 9 pillars covered, 8 missing
+        assert meta["covered_topics"] == ["Arrays & Strings"]
+        assert len(meta["missing_topics"]) == 8
+        assert "Trees" in meta["missing_topics"]
+        assert "Graphs" in meta["missing_topics"]
+        assert "Dynamic Programming" in meta["missing_topics"]
+        assert "Linked Lists" in meta["missing_topics"]
+
+        # Breadth score is ~11% (1/9)
+        assert meta["topic_breadth_score"] <= 0.15
+        assert meta["topic_breadth_score"] >= 0.10
+
+        # CRITICAL ASSERTION: DSA signal strength MUST be <= 0.15 (under 15%)
+        assert dsa_signal.signal_strength <= 0.15, f"Expected <= 0.15, got {dsa_signal.signal_strength}"
+        assert dsa_signal.signal_strength >= 0.06
+
+        # Problem Solving signal appropriately credits the 100 problems
+        ps_signal = next(s for s in res.signals if s.skill == "Problem Solving")
+        assert ps_signal.signal_strength >= 0.30
+
+        # Full skill engine integration check
+        prof, _, _, _ = skill_engine.proficiency([
+            {
+                "skill": dsa_signal.skill,
+                "signal_strength": dsa_signal.signal_strength,
+                "source_reliability": dsa_signal.source_reliability,
+            }
+        ])
+        assert prof <= 0.15, f"DSA proficiency in skill engine expected <= 0.15, got {prof}"
 
     asyncio.run(_run())
 

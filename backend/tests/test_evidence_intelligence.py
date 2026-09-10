@@ -121,6 +121,17 @@ def test_leetcode_facts_and_signals_substantial_activity():
                 "contest_ranking": 1240,
                 "top_percentage": 6.5,
                 "contests_attended": 18,
+                "topics": {
+                    "Arrays & Strings": 50,
+                    "Linked Lists": 25,
+                    "Stacks & Queues": 25,
+                    "Trees": 45,
+                    "Graphs": 45,
+                    "Searching & Sorting": 35,
+                    "Dynamic Programming": 50,
+                    "Greedy": 25,
+                    "Backtracking": 20,
+                },
             }
         }
         res = await provider.verify(ev)
