@@ -71,17 +71,33 @@ async def upload_evidence_file(
     allowed = {"resume", "syllabus", "certification_file", "project_doc"}
     if evidence_type not in allowed:
         raise HTTPException(status_code=400, detail=f"Invalid evidence_type for upload. Allowed: {', '.join(allowed)}")
-    # Upload to storage
-    storage_path = await evidence_service.upload_file(current_user.id, evidence_type, file)
+    # Upload to storage + extract document text (resume content is parsed here)
+    storage_path, doc_meta = await evidence_service.upload_file(current_user.id, evidence_type, file)
     # Create evidence record
     payload = {
         "evidence_type": evidence_type,
         "source_url": None,
         "file_path": storage_path,
         "title": title or file.filename,
-        "metadata": {"original_filename": file.filename, "content_type": file.content_type},
+        "metadata": {
+            "original_filename": file.filename,
+            "content_type": file.content_type,
+            **doc_meta,
+        },
     }
     return evidence_service.create_evidence(current_user.id, payload)
+
+
+@router.post("/{evidence_id}/reparse", response_model=EvidenceResponse)
+async def reparse_evidence_file(
+    evidence_id: str, current_user: CurrentUser = Depends(get_current_user)
+):
+    """Re-download the stored file and refresh parsed_text/sections.
+
+    Use for resumes uploaded before text extraction existed, or to retry
+    a failed parse after re-uploading a text-based PDF/DOCX.
+    """
+    return evidence_service.reparse_evidence(current_user.id, evidence_id)
 
 
 # Projects

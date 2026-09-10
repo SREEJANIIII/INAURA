@@ -8,7 +8,229 @@ from .base import EvidenceProvider, VerificationResult, ExtractedSignal, Evidenc
 from .url_utils import validate_platform_url, GITHUB_HOSTS
 from ..skill_taxonomy import normalize_skill, normalize_skill_slug
 
-GITHUB_RELIABILITY = 0.90
+# GitHub is supporting evidence (MEDIUM), not a definitive skill test.
+# Performance-based sources (LeetCode/Codeforces/Kaggle 0.85) and verified
+# coursework (0.80) outrank it; resume/LinkedIn (0.50/0.40) rank below.
+GITHUB_RELIABILITY = 0.70
+
+# Cap on extra raw manifest fetches per repository inspection (rate-limit safety).
+MAX_EXTRA_MANIFEST_FETCHES = 4
+
+# Extension -> canonical skill for implementation-file counting.
+# Only skills present in the canonical taxonomy are listed (no invented skills).
+EXTENSION_SKILL_MAP: Dict[str, str] = {
+    ".py": "Python",
+    ".js": "JavaScript",
+    ".jsx": "JavaScript",
+    ".mjs": "JavaScript",
+    ".cjs": "JavaScript",
+    ".ts": "TypeScript",
+    ".tsx": "TypeScript",
+    ".java": "Java",
+    ".kt": "Kotlin",
+    ".kts": "Kotlin",
+    ".go": "Go",
+    ".rs": "Rust",
+    ".cpp": "C++",
+    ".cc": "C++",
+    ".cxx": "C++",
+    ".hpp": "C++",
+    ".hh": "C++",
+    ".h": "C++",
+    ".c": "C",
+    ".cs": "C#",
+    ".swift": "Swift",
+    ".dart": "Flutter",
+    ".sql": "SQL",
+    ".tf": "Terraform",
+}
+
+# Canonical skill -> GitHub language stats keys that count as bytes evidence.
+LANGUAGE_SKILL_KEYS: Dict[str, tuple] = {
+    "Python": ("Python",),
+    "JavaScript": ("JavaScript",),
+    "TypeScript": ("TypeScript",),
+    "Java": ("Java",),
+    "Kotlin": ("Kotlin",),
+    "Go": ("Go",),
+    "Rust": ("Rust",),
+    "C++": ("C++",),
+    "C": ("C",),
+    "C#": ("C#",),
+    "Swift": ("Swift",),
+    "Flutter": ("Dart",),
+    "SQL": ("SQL", "PLpgSQL", "TSQL", "PLSQL"),
+    "Terraform": ("HCL",),
+}
+
+# Canonical skill -> build/dependency manifest basenames proving project setup.
+SKILL_MANIFESTS: Dict[str, tuple] = {
+    "Python": ("requirements.txt", "pyproject.toml", "setup.py", "setup.cfg", "Pipfile", "Pipfile.lock"),
+    "JavaScript": ("package.json", "package-lock.json", "yarn.lock", "pnpm-lock.yaml"),
+    "TypeScript": ("package.json", "tsconfig.json"),
+    "Java": ("pom.xml", "build.gradle", "build.gradle.kts"),
+    "Kotlin": ("build.gradle", "build.gradle.kts"),
+    "Go": ("go.mod", "go.sum"),
+    "Rust": ("Cargo.toml", "Cargo.lock"),
+    "C++": ("CMakeLists.txt", "Makefile"),
+    "C": ("CMakeLists.txt", "Makefile"),
+    "C#": (".csproj", ".sln"),
+    "Swift": ("Package.swift",),
+    "Flutter": ("pubspec.yaml",),
+    "Terraform": (".terraform.lock.hcl",),
+}
+
+# Ecosystem manifests fetched as raw text (priority order) with their parser.
+# Each parser returns lowercase dependency names using only stdlib parsing.
+ECOSYSTEM_MANIFESTS: tuple = (
+    ("pyproject.toml", "pyproject"),
+    ("setup.py", "setuppy"),
+    ("Pipfile", "pipfile"),
+    ("go.mod", "gomod"),
+    ("Cargo.toml", "cargo"),
+    ("Gemfile", "gemfile"),
+    ("composer.json", "composer"),
+    ("pubspec.yaml", "pubspec"),
+    ("build.sbt", "sbt"),
+    ("Package.swift", "swiftpm"),
+)
+
+# Web framework dependency -> canonical REST APIs skill (same precedent as
+# the existing fastapi/flask/django -> REST APIs mapping).
+REST_FRAMEWORK_DEPS = frozenset({
+    "gin", "echo", "fiber", "mux", "gorilla/mux", "chi",
+    "actix-web", "actix", "rocket", "axum", "warp",
+    "rails", "laravel", "symfony",
+    "nest", "nestjs", "fastify", "koa", "hapi",
+})
+
+# Extra ORM/migration libraries -> canonical DBMS skill.
+EXTRA_ORM_LIBS = frozenset({
+    "gorm", "diesel", "sqlx", "activerecord", "eloquent",
+    "entityframework", "efcore",
+})
+
+# Extra precise test library names (exact/prefixed matching only, same as
+# the existing known_test_libs mechanism — no substring false positives).
+EXTRA_TEST_LIBS = frozenset({
+    "testify", "junit", "testng", "mockito", "assertj",
+    "xunit", "nunit", "mstest", "gtest", "catch2", "phpunit", "rspec",
+})
+
+# Styling dependencies -> canonical CSS skill.
+CSS_DEPS = frozenset({"tailwind", "tailwindcss", "sass", "scss", "less"})
+
+# Filenames/paths marking Kubernetes manifests or non-GitHub CI configs.
+K8S_MARKERS = (
+    "deployment.yaml", "deployment.yml", "service.yaml", "service.yml",
+    "ingress.yaml", "ingress.yml", "kustomization.yaml", "kustomization.yml",
+    "chart.yaml", "chart.yml", "helmfile.yaml", "helmfile.yml",
+)
+K8S_DIR_MARKERS = ("k8s/", "kubernetes/", "helm/", "charts/")
+CI_CONFIG_MARKERS = (
+    "jenkinsfile", ".gitlab-ci.yml", ".travis.yml", "azure-pipelines.yml",
+    "circle.yml", ".circleci/config.yml", "buildspec.yml",
+)
+
+
+def _clean_dep_name(raw: str) -> str:
+    """Normalize a dependency token: lowercase, strip version specs/extras."""
+    token = str(raw or "").strip().lower()
+    token = re.split(r"[<>=!~\s;,\[\]]+", token)[0].strip("\"' ")
+    return token
+
+
+def parse_manifest_deps(parser: str, text: str) -> List[str]:
+    """Extract lowercase dependency names from a manifest using stdlib parsing."""
+    deps: List[str] = []
+    try:
+        if parser == "pyproject":
+            for block in re.findall(r"dependencies\s*=\s*\[(.*?)\]", text, re.S | re.I):
+                for tok in re.findall(r'"([^"]+)"|\'([^\']+)\'', block):
+                    name = _clean_dep_name(tok[0] or tok[1])
+                    if name:
+                        deps.append(name)
+        elif parser == "setuppy":
+            for block in re.findall(r"install_requires\s*=\s*\[(.*?)\]", text, re.S | re.I):
+                for tok in re.findall(r'"([^"]+)"|\'([^\']+)\'', block):
+                    name = _clean_dep_name(tok[0] or tok[1])
+                    if name:
+                        deps.append(name)
+        elif parser == "pipfile":
+            in_packages = False
+            for line in text.splitlines():
+                s = line.strip().lower()
+                if s.startswith("["):
+                    in_packages = s in ("[packages]", "[dev-packages]")
+                    continue
+                if in_packages and "=" in s:
+                    name = _clean_dep_name(s.split("=")[0])
+                    if name and not name.startswith("#"):
+                        deps.append(name)
+        elif parser == "gomod":
+            for line in re.findall(r"^\s*(?:require\s+)?([\w.\-/]+)\s+v\d+\.\d+\.\d+",
+                                   text, re.M):
+                seg = line.rsplit("/", 1)[-1].lower()
+                if seg and seg not in ("go",):
+                    deps.append(seg)
+        elif parser == "cargo":
+            in_deps = False
+            for line in text.splitlines():
+                s = line.strip()
+                if s.startswith("["):
+                    in_deps = s.lower() in ("[dependencies]", "[dev-dependencies]")
+                    continue
+                if in_deps and "=" in s:
+                    name = s.split("=")[0].strip().strip("\"'").lower().replace("_", "-")
+                    if name:
+                        deps.append(name)
+        elif parser == "gemfile":
+            for m in re.findall(r"gem\s+['\"]([^'\"]+)['\"]", text, re.I):
+                name = _clean_dep_name(m)
+                if name:
+                    deps.append(name)
+        elif parser == "composer":
+            data = json.loads(text)
+            for section in ("require", "require-dev"):
+                reqs = data.get(section) or {}
+                if isinstance(reqs, dict):
+                    for full in reqs.keys():
+                        pkg = str(full).split("/")[-1].lower()
+                        if pkg and pkg != "php":
+                            deps.append(pkg)
+        elif parser == "pubspec":
+            in_deps = False
+            for line in text.splitlines():
+                if re.match(r"^\S.*:\s*$", line):
+                    in_deps = line.strip().lower().rstrip(":") in ("dependencies", "dev_dependencies")
+                    continue
+                if in_deps:
+                    m = re.match(r"^\s{2}([A-Za-z0-9_]+)\s*:", line)
+                    if m:
+                        deps.append(m.group(1).lower())
+                    elif line and not line.startswith(" ") and not line.startswith("\t"):
+                        in_deps = False
+        elif parser == "sbt":
+            for m in re.findall(r'%\s*"([^"]+)"\s*%', text):
+                artifact = m.lower().split("_")[0]
+                if artifact:
+                    deps.append(artifact)
+        elif parser == "swiftpm":
+            for m in re.findall(r'\.package\([^)]*url:\s*"[^"]*/([^"/]+?)(?:\.git)?"',
+                                text, re.I):
+                name = m.lower()
+                if name:
+                    deps.append(name)
+    except Exception:
+        pass
+    # De-duplicate preserving order
+    seen = set()
+    out = []
+    for d in deps:
+        if d and d not in seen:
+            seen.add(d)
+            out.append(d)
+    return out
 
 
 def parse_github_url(url_or_handle: str) -> Tuple[Optional[str], Optional[str], bool]:
@@ -209,6 +431,167 @@ class GitHubProvider(EvidenceProvider):
                     except Exception:
                         pass
 
+                # 6. Fetch recursive file tree (capped) to confirm real
+                # implementation files in EVERY ecosystem (src/**/*.py,
+                # frontend/**/*.tsx, backend/**/*.go, ...) and to locate
+                # build manifests outside the repo root (multi-module).
+                # Best-effort: any failure keeps the languages/root-only path.
+                tree_scanned = False
+                java_file_count = 0
+                java_test_file_count = 0
+                tree_build_paths: List[str] = []
+                tree_top_files: List[str] = []
+                ext_file_counts: Dict[str, int] = {}
+                tree_manifest_basenames: set = set()
+                tree_csproj_paths: List[str] = []
+                has_k8s_manifests = False
+                k8s_manifest_count = 0
+                has_ci_config = False
+                try:
+                    tree_res = await client.get(
+                        f"{repo_url}/git/trees/{default_branch}?recursive=1", headers=headers
+                    )
+                    if tree_res.status_code == 200 and isinstance(tree_res.json().get("tree"), list):
+                        tree_scanned = True
+                        entries = tree_res.json()["tree"][:3000]
+                        for entry in entries:
+                            path = str(entry.get("path") or "")
+                            if not path:
+                                continue
+                            low = path.lower()
+                            base = low.rsplit("/", 1)[-1]
+                            if base in ("pom.xml", "build.gradle", "build.gradle.kts"):
+                                tree_build_paths.append(path)
+                            if base.endswith(".csproj"):
+                                tree_csproj_paths.append(path)
+                            tree_manifest_basenames.add(base)
+                            # Per-extension implementation file counts
+                            dot = base.rfind(".")
+                            if dot > 0:
+                                ext = base[dot:]
+                                if ext in EXTENSION_SKILL_MAP:
+                                    ext_file_counts[ext] = ext_file_counts.get(ext, 0) + 1
+                            if low.endswith(".java"):
+                                java_file_count += 1
+                                if "test" in low:
+                                    java_test_file_count += 1
+                            # Kubernetes / extra-CI markers
+                            if base in K8S_MARKERS or low.startswith(K8S_DIR_MARKERS):
+                                has_k8s_manifests = True
+                                k8s_manifest_count += 1
+                            if base in CI_CONFIG_MARKERS:
+                                has_ci_config = True
+                            # Feed full paths AND basenames into the shared
+                            # file checks below (docker/CI layout,
+                            # frontend/backend structure incl. subdirectories).
+                            if len(tree_top_files) < 800:
+                                tree_top_files.append(low)
+                                if base != low:
+                                    tree_top_files.append(base)
+                except Exception:
+                    pass
+
+                # 7. Fetch Java build manifest contents (root first, then first
+                # tree hit) to infer frameworks (Spring/Hibernate) and Java
+                # test frameworks (JUnit/TestNG/Mockito).
+                build_system: Optional[str] = None
+                java_frameworks: List[str] = []
+                java_build_deps: List[str] = []
+                build_manifest_found = (
+                    "pom.xml" in root_files
+                    or "build.gradle" in root_files
+                    or "build.gradle.kts" in root_files
+                    or len(tree_build_paths) > 0
+                )
+                manifest_candidates: List[str] = []
+                for candidate in ("pom.xml", "build.gradle", "build.gradle.kts"):
+                    if candidate in root_files:
+                        manifest_candidates.append(candidate)
+                manifest_candidates.extend([p for p in tree_build_paths if p not in manifest_candidates][:2])
+                manifest_text = ""
+                for candidate in manifest_candidates[:2]:
+                    try:
+                        raw_res = await client.get(
+                            f"https://raw.githubusercontent.com/{owner}/{repo}/{default_branch}/{candidate}",
+                            headers={"User-Agent": "INAURA-Evidence-Intelligence/1.0"},
+                            timeout=4.0,
+                        )
+                        if raw_res.status_code == 200 and raw_res.text.strip():
+                            manifest_text += "\n" + raw_res.text.lower()
+                            if candidate == "pom.xml":
+                                build_system = build_system or "maven"
+                            else:
+                                build_system = build_system or "gradle"
+                    except Exception:
+                        continue
+                if manifest_text:
+                    if "spring-boot" in manifest_text or "springframework" in manifest_text:
+                        java_frameworks.append("spring_boot")
+                    if "hibernate" in manifest_text:
+                        java_frameworks.append("hibernate")
+                    for marker in ("junit", "testng", "mockito", "assertj", "surefire", "failsafe"):
+                        if marker in manifest_text:
+                            java_build_deps.append(marker)
+
+                # 8. Fetch ecosystem manifests (pyproject.toml, go.mod,
+                # Cargo.toml, ...) as raw text, root first then tree hits.
+                # Bounded by MAX_EXTRA_MANIFEST_FETCHES for rate-limit safety.
+                root_lower = {str(f).lower() for f in root_files}
+                eco_manifest_deps: List[str] = []
+                eco_python_deps: List[str] = []
+                eco_manifests_found: List[str] = []
+                extra_fetches = 0
+
+                async def _fetch_raw(path: str) -> str:
+                    try:
+                        r = await client.get(
+                            f"https://raw.githubusercontent.com/{owner}/{repo}/{default_branch}/{path}",
+                            headers={"User-Agent": "INAURA-Evidence-Intelligence/1.0"},
+                            timeout=4.0,
+                        )
+                        if r.status_code == 200 and r.text.strip():
+                            return r.text
+                    except Exception:
+                        pass
+                    return ""
+
+                for manifest_name, parser in ECOSYSTEM_MANIFESTS:
+                    if extra_fetches >= MAX_EXTRA_MANIFEST_FETCHES:
+                        break
+                    target: Optional[str] = None
+                    if manifest_name in root_lower:
+                        # Recover original-case root path
+                        for f in root_files:
+                            if str(f).lower() == manifest_name:
+                                target = str(f)
+                                break
+                    if target is None and manifest_name in tree_manifest_basenames:
+                        target = manifest_name
+                    if target is None:
+                        continue
+                    text = await _fetch_raw(target)
+                    if not text:
+                        continue
+                    extra_fetches += 1
+                    eco_manifests_found.append(manifest_name)
+                    parsed = parse_manifest_deps(parser, text)
+                    eco_manifest_deps.extend(parsed)
+                    if parser in ("pyproject", "setuppy", "pipfile"):
+                        eco_python_deps.extend(parsed)
+
+                # First .csproj found in the tree (C# package references)
+                if extra_fetches < MAX_EXTRA_MANIFEST_FETCHES and tree_csproj_paths:
+                    text = await _fetch_raw(tree_csproj_paths[0])
+                    if text:
+                        extra_fetches += 1
+                        eco_manifests_found.append("csproj")
+                        for m in re.findall(
+                            r'<PackageReference\s+Include\s*=\s*"([^"]+)"', text, re.I
+                        ):
+                            name = _clean_dep_name(m)
+                            if name:
+                                eco_manifest_deps.append(name)
+
                 inspection = {
                     "name": repo_data.get("name"),
                     "full_name": repo_data.get("full_name"),
@@ -216,13 +599,28 @@ class GitHubProvider(EvidenceProvider):
                     "topics": repo_data.get("topics") or [],
                     "languages": languages,
                     "root_files": root_files,
+                    "top_files": tree_top_files,
                     "package_json_deps": package_json_deps,
                     "python_deps": py_deps,
+                    "eco_manifest_deps": eco_manifest_deps,
+                    "eco_python_deps": eco_python_deps,
+                    "eco_manifests_found": eco_manifests_found,
+                    "ext_file_counts": ext_file_counts,
                     "has_workflows": has_workflows,
+                    "has_ci_config": has_ci_config,
+                    "has_k8s_manifests": has_k8s_manifests,
+                    "k8s_manifest_count": k8s_manifest_count,
                     "is_fork": repo_data.get("fork", False),
                     "size": repo_data.get("size", 0),
                     "pushed_at": repo_data.get("pushed_at"),
                     "updated_at": repo_data.get("updated_at"),
+                    "tree_scanned": tree_scanned,
+                    "java_file_count": java_file_count,
+                    "java_test_file_count": java_test_file_count,
+                    "has_java_build_manifest": build_manifest_found,
+                    "build_system": build_system,
+                    "java_frameworks": java_frameworks,
+                    "java_build_deps": java_build_deps,
                 }
 
                 return self._build_result_from_inspection(owner, repo, inspection, verified_at)
@@ -347,12 +745,31 @@ class GitHubProvider(EvidenceProvider):
         description = inspection.get("description") or ""
         root_files = set(inspection.get("root_files") or [])
         all_files = root_files.union(set(inspection.get("top_files") or []))
+        all_files_lower = {str(f).lower() for f in all_files}
         languages = inspection.get("languages") or {}
         generic_deps = [d.lower() for d in (inspection.get("dependencies") or [])]
         pkg_deps = [d.lower() for d in (inspection.get("package_json_deps") or [])] + generic_deps
-        py_deps = [d.lower() for d in (inspection.get("python_deps") or [])] + generic_deps
-        all_deps = set(pkg_deps + py_deps + generic_deps)
+        py_deps = (
+            [d.lower() for d in (inspection.get("python_deps") or [])]
+            + [d.lower() for d in (inspection.get("eco_python_deps") or [])]
+            + generic_deps
+        )
+        eco_deps = [d.lower() for d in (inspection.get("eco_manifest_deps") or [])]
+        all_deps = set(pkg_deps + py_deps + eco_deps + generic_deps)
+        ext_file_counts = {
+            str(k).lower(): int(v) for k, v in (inspection.get("ext_file_counts") or {}).items()
+        }
+        if not ext_file_counts and all_files_lower:
+            # Backward compatibility: fixtures listing sources via top_files
+            for f in all_files_lower:
+                dot = f.rfind(".")
+                if dot > 0 and f[dot:] in EXTENSION_SKILL_MAP:
+                    ext_file_counts[f[dot:]] = ext_file_counts.get(f[dot:], 0) + 1
+        tree_scanned = bool(inspection.get("tree_scanned"))
         has_workflows = bool(inspection.get("has_workflows"))
+        has_ci_config = bool(inspection.get("has_ci_config"))
+        has_k8s_manifests = bool(inspection.get("has_k8s_manifests"))
+        k8s_manifest_count = int(inspection.get("k8s_manifest_count") or 0)
         is_fork = bool(inspection.get("is_fork", False))
 
         if is_fork:
@@ -383,7 +800,7 @@ class GitHubProvider(EvidenceProvider):
             "jest", "mocha", "vitest", "cypress", "playwright", "supertest", "chai",
             "jasmine", "ava", "testing-library", "@testing-library/react",
             "pytest", "pytest-cov", "unittest", "nose", "tox", "coverage"
-        }
+        } | EXTRA_TEST_LIBS
         def _is_test_lib(dep: str) -> bool:
             d = dep.lower().strip()
             if d in known_test_libs:
@@ -539,12 +956,191 @@ class GitHubProvider(EvidenceProvider):
                     f"Repository '{repo_name}' specifies machine learning framework dependencies.",
                 )
 
-        # 5. Java / Spring Boot Detection
-        if any(f in root_files for f in ("pom.xml", "build.gradle", "build.gradle.kts")) or "Java" in languages:
+        # 5. Java / JVM Detection (tiered by implementation evidence).
+        # A README/description mention alone NEVER awards Java — there must be
+        # supporting implementation evidence (language bytes, build manifest,
+        # or actual .java source files).
+        java_bytes = languages.get("Java", 0) if isinstance(languages, dict) else 0
+        if not isinstance(java_bytes, (int, float)):
+            java_bytes = 0
+        java_file_count = int(inspection.get("java_file_count") or 0)
+        if java_file_count == 0 and all_files:
+            # Backward compatibility with fixtures that list sources via top_files
+            java_file_count = sum(1 for f in all_files if str(f).lower().endswith(".java"))
+        java_test_files = int(inspection.get("java_test_file_count") or 0)
+        has_build_manifest = bool(inspection.get("has_java_build_manifest")) or any(
+            f in root_files for f in ("pom.xml", "build.gradle", "build.gradle.kts")
+        )
+        java_frameworks = [str(x).lower() for x in (inspection.get("java_frameworks") or [])]
+        java_build_deps = [str(x).lower() for x in (inspection.get("java_build_deps") or [])]
+        has_spring = any("spring" in f for f in java_frameworks) or any("spring" in d for d in all_deps)
+        has_java_tests = (
+            java_test_files > 0
+            or any(m in java_build_deps for m in ("junit", "testng", "mockito", "assertj", "surefire"))
+        )
+        tree_scanned = bool(inspection.get("tree_scanned"))
+        has_java_footprint = "Java" in languages or has_build_manifest or java_file_count > 0
+
+        if has_java_footprint:
+            meaningful_impl = (
+                java_file_count >= 3
+                or (java_file_count >= 1 and has_build_manifest)
+                or (java_bytes >= 5000 and has_build_manifest)
+                or (java_bytes >= 20000)
+                # Tree could not be scanned (API failure): preserve prior
+                # behavior and trust the language/build-manifest footprint.
+                or (not tree_scanned and java_file_count == 0 and ("Java" in languages or has_build_manifest))
+            )
+            substantial_impl = java_file_count >= 10 and (
+                has_build_manifest or has_spring or has_java_tests or has_workflows
+            )
+            if substantial_impl:
+                java_depth = EvidenceDepth.LEVEL_4_SUBSTANTIAL
+                java_detail = (
+                    f"{java_file_count} Java source files with "
+                    f"{'build manifest (' + str(inspection.get('build_system') or 'maven/gradle') + ') ' if has_build_manifest else ''}"
+                    f"{'Spring framework ' if has_spring else ''}"
+                    f"{'and automated tests ' if (has_java_tests or has_tests) else ''}"
+                    f"({int(java_bytes)} bytes of Java)"
+                )
+            elif meaningful_impl:
+                java_depth = EvidenceDepth.LEVEL_3_IMPLEMENTATION
+                java_detail = (
+                    f"verified Java implementation ({java_file_count} Java source files, "
+                    f"{int(java_bytes)} bytes of Java"
+                    f"{', build manifest present' if has_build_manifest else ''})"
+                )
+            else:
+                # Weak footprint only (tiny language bytes, manifest without any
+                # sources, or a lone stray file): config-level signal at most.
+                java_depth = EvidenceDepth.LEVEL_2_CONFIG
+                java_detail = (
+                    f"limited Java footprint ({int(java_bytes)} bytes of Java, "
+                    f"{java_file_count} Java source files"
+                    f"{', build manifest present' if has_build_manifest else ', no build manifest'})"
+                )
             _add_signal(
                 "Java",
+                java_depth,
+                f"Repository '{repo_name}' {java_detail}.",
+                {
+                    "java_file_count": java_file_count,
+                    "java_bytes": int(java_bytes),
+                    "has_build_manifest": has_build_manifest,
+                    "build_system": inspection.get("build_system"),
+                },
+            )
+            if has_spring:
+                _add_signal(
+                    "Spring Boot",
+                    EvidenceDepth.LEVEL_3_IMPLEMENTATION,
+                    f"Repository '{repo_name}' declares Spring framework dependencies in its Java build manifest.",
+                    {"framework": "spring_boot"},
+                )
+
+        # 5b. General ecosystem language detection (every other canonical
+        # language). Python/JavaScript/TypeScript/Java keep their bespoke
+        # blocks above; everything here is tiered the same way:
+        # substantial implementation (L4) > meaningful sources (L3) >
+        # weak footprint, e.g. manifest without sources (L2).
+        # README/description mentions alone NEVER award a language.
+        def _has_manifest(names: tuple) -> bool:
+            for n in names:
+                nl = n.lower()
+                if nl in root_files or nl in all_files_lower:
+                    return True
+                if nl.startswith(".") and any(f.endswith(nl) for f in all_files_lower):
+                    return True
+            return False
+
+        def _lang_bytes(keys: tuple) -> int:
+            total = 0
+            if isinstance(languages, dict):
+                for k, v in languages.items():
+                    if str(k) in keys and isinstance(v, (int, float)):
+                        total += v
+            return int(total)
+
+        def _skill_file_count(skill: str) -> int:
+            return sum(c for ext, c in ext_file_counts.items() if EXTENSION_SKILL_MAP.get(ext) == skill)
+
+        for _skill in ("Go", "Rust", "C++", "C", "C#", "Kotlin", "Swift", "Flutter", "SQL", "Terraform"):
+            _exts = [e for e, s in EXTENSION_SKILL_MAP.items() if s == _skill]
+            _files = _skill_file_count(_skill)
+            _bytes = _lang_bytes(LANGUAGE_SKILL_KEYS.get(_skill, ()))
+            _manifest = _has_manifest(SKILL_MANIFESTS.get(_skill, ()))
+            _footprint = _files > 0 or _bytes > 0 or _manifest
+            if not _footprint:
+                continue
+            if _skill == "C" and _files == 0 and _bytes == 0:
+                # CMakeLists/Makefile are shared with C++: a manifest alone
+                # must not invent C evidence without C sources or bytes.
+                continue
+            _substantial = _files >= 10 and (_manifest or has_tests or has_workflows)
+            _meaningful = (
+                _files >= 3
+                or (_files >= 1 and _manifest)
+                or (_bytes >= 5000 and _manifest)
+                or (_bytes >= 20000)
+                or (not tree_scanned and (_bytes > 0 or _manifest))
+            )
+            if _substantial:
+                _depth = EvidenceDepth.LEVEL_4_SUBSTANTIAL
+                _detail = f"substantial {_skill} implementation ({_files} source files, {_bytes} bytes)"
+            elif _meaningful:
+                _depth = EvidenceDepth.LEVEL_3_IMPLEMENTATION
+                _detail = (
+                    f"verified {_skill} implementation ({_files} source files, {_bytes} bytes"
+                    f"{', build manifest present' if _manifest else ''})"
+                )
+            else:
+                _depth = EvidenceDepth.LEVEL_2_CONFIG
+                _detail = (
+                    f"limited {_skill} footprint ({_files} source files, {_bytes} bytes"
+                    f"{', build manifest present' if _manifest else ', no build manifest'})"
+                )
+            _add_signal(
+                _skill,
+                _depth,
+                f"Repository '{repo_name}' {_detail}.",
+                {"source_file_count": _files, "language_bytes": _bytes, "has_build_manifest": _manifest},
+            )
+
+        # 5c. Cross-ecosystem web frameworks -> canonical REST APIs skill.
+        rest_hits = sorted({d for d in all_deps if d in REST_FRAMEWORK_DEPS})
+        if rest_hits:
+            _add_signal(
+                "REST APIs",
                 EvidenceDepth.LEVEL_3_IMPLEMENTATION,
-                f"Repository '{repo_name}' implements Java enterprise application (build manifest verified).",
+                f"Repository '{repo_name}' implements REST API services ({', '.join(rest_hits[:5])}).",
+                {"frameworks": rest_hits[:5]},
+            )
+
+        # 5d. Styling dependencies -> canonical CSS skill.
+        css_hits = sorted({d for d in all_deps if d in CSS_DEPS})
+        if css_hits:
+            _add_signal(
+                "CSS",
+                EvidenceDepth.LEVEL_2_CONFIG,
+                f"Repository '{repo_name}' declares styling dependencies ({', '.join(css_hits[:5])}).",
+                {"dependencies": css_hits[:5]},
+            )
+
+        # 5e. Kubernetes manifests -> canonical Kubernetes skill (config-level).
+        if has_k8s_manifests:
+            _add_signal(
+                "Kubernetes",
+                EvidenceDepth.LEVEL_2_CONFIG,
+                f"Repository '{repo_name}' contains Kubernetes deployment manifests ({k8s_manifest_count} file(s)).",
+                {"manifest_count": k8s_manifest_count},
+            )
+
+        # 5f. Non-GitHub CI configs (Jenkins/GitLab/Travis/Circle/Azure) -> CI/CD.
+        if has_ci_config and not has_workflows:
+            _add_signal(
+                "CI/CD",
+                EvidenceDepth.LEVEL_2_CONFIG,
+                f"Repository '{repo_name}' configures continuous integration pipelines.",
             )
 
         # 6. Database Dependencies & ORMs
@@ -560,6 +1156,12 @@ class GitHubProvider(EvidenceProvider):
                 EvidenceDepth.LEVEL_2_CONFIG,
                 f"Repository '{repo_name}' contains MongoDB driver dependencies.",
             )
+        if any(d in all_deps for d in ("mysql", "mysql2", "pymysql", "mysqldb", "mysql-connector")):
+            _add_signal(
+                "MySQL",
+                EvidenceDepth.LEVEL_2_CONFIG,
+                f"Repository '{repo_name}' contains explicit MySQL database adapter dependencies.",
+            )
         if any(d in all_deps for d in ("redis", "ioredis")):
             _add_signal(
                 "Redis",
@@ -567,20 +1169,20 @@ class GitHubProvider(EvidenceProvider):
                 f"Repository '{repo_name}' includes Redis client dependencies.",
             )
 
-        # Database Design (ORMs and migration engines)
-        orm_libs = {"prisma", "typeorm", "sequelize", "sqlalchemy", "alembic", "mongoose", "knex", "hibernate", "mikro-orm"}
+        # Database Design (ORMs and migration engines) -> canonical DBMS skill
+        orm_libs = {"prisma", "typeorm", "sequelize", "sqlalchemy", "alembic", "mongoose", "knex", "hibernate", "mikro-orm"} | EXTRA_ORM_LIBS
         if any(any(ol in d for ol in orm_libs) for d in all_deps):
             _add_signal(
-                "Database Design",
+                "DBMS",
                 EvidenceDepth.LEVEL_3_IMPLEMENTATION,
                 f"Repository '{repo_name}' implements structured database ORM/schema migration models.",
             )
 
-        # 7. Authentication & Security
+        # 7. Authentication & Security -> canonical Application Security skill
         auth_libs = {"jsonwebtoken", "jwt", "bcrypt", "passport", "auth0", "next-auth", "passlib", "pyjwt", "oauthlib"}
         if any(any(al in d for al in auth_libs) for d in all_deps):
             _add_signal(
-                "Authentication & Authorization",
+                "Application Security",
                 EvidenceDepth.LEVEL_3_IMPLEMENTATION,
                 f"Repository '{repo_name}' configures secure authentication/authorization libraries.",
             )

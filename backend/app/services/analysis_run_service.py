@@ -806,6 +806,13 @@ async def run_analysis(user_id: str, target_role: str) -> dict:
     # 2. Load evidence
     evidence, projects, certs = load_evidence(user_id)
 
+    # 2b. Best-effort backfill: parse legacy resume/syllabus uploads that
+    # have no parsed_text yet so they still contribute skill signals.
+    try:
+        evidence_service.ensure_file_evidence_parsed(user_id, evidence)
+    except Exception:
+        pass
+
     # Auto-verify unverified evidence items where an inspector is available (e.g. GitHub, LeetCode, Codeforces, Kaggle)
     for ev in evidence:
         meta = ev.get("metadata") or {}

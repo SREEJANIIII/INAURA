@@ -7,11 +7,13 @@ import re
 
 from ..core.supabase import get_supabase_client
 from .evidence.manager import evidence_manager
+from . import document_parser
 
 BUCKET = "user-evidence"
 EVIDENCE_TABLE = "evidence"
 PROJECTS_TABLE = "projects"
 CERTS_TABLE = "certifications"
+FILE_TYPES = {"resume", "syllabus", "certification_file", "project_doc"}
 
 ALLOWED_FILE_TYPES = {
     "application/pdf": ".pdf",
@@ -212,7 +214,14 @@ def delete_evidence(user_id: str, evidence_id: str):
 
 
 # File upload helper
-async def upload_file(user_id: str, evidence_type: str, file: UploadFile) -> str:
+async def upload_file(user_id: str, evidence_type: str, file: UploadFile) -> tuple:
+    """Upload file bytes to storage and extract document text.
+
+    Returns (storage_path, doc_meta) where doc_meta is the
+    signal_extractor-ready parsed document dict from document_parser.
+    Never fails the upload because of a parse error — parse failures
+    are reported via doc_meta["parse_status"] instead.
+    """
     if file.content_type not in ALLOWED_FILE_TYPES:
         ext = "." + (file.filename or "").split(".")[-1].lower() if file.filename and "." in file.filename else ""
         if ext not in ALLOWED_EXTS:
@@ -249,7 +258,98 @@ async def upload_file(user_id: str, evidence_type: str, file: UploadFile) -> str
         else:
             raise HTTPException(status_code=500, detail=f"Failed to upload file: {str(e)[:200]}")
 
-    return storage_path
+    # Parse document text now (while bytes are in hand) so resume/
+    # syllabus content is immediately usable by signal_extractor.
+    try:
+        doc_meta = document_parser.parse_document_bytes(
+            content, filename=file.filename or filename, content_type=file.content_type
+        )
+    except Exception:
+        doc_meta = {
+            "parsed_text": "",
+            "sections": {},
+            "text_char_count": 0,
+            "word_count": 0,
+            "parser": "none",
+            "parse_status": "failed",
+            "parse_warning": "Parser crashed unexpectedly",
+        }
+
+    return storage_path, doc_meta
+
+
+def download_file_bytes(user_id: str, storage_path: str) -> bytes:
+    """Download raw file bytes from Supabase storage (enforces user isolation)."""
+    if not storage_path or ".." in storage_path or storage_path.startswith("/"):
+        raise HTTPException(status_code=400, detail="Invalid file path")
+    # Enforce user folder isolation unless path already scoped
+    if not storage_path.startswith(f"{user_id}/"):
+        raise HTTPException(status_code=404, detail="File not found")
+    c = _client()
+    try:
+        data = c.storage.from_(BUCKET).download(storage_path)
+    except Exception as e:
+        raise HTTPException(status_code=404, detail=f"File not found in storage: {str(e)[:150]}")
+    if isinstance(data, (bytes, bytearray)):
+        return bytes(data)
+    # storage3 may return dict/response wrappers in some versions
+    for attr in ("data", "content"):
+        val = getattr(data, attr, None)
+        if isinstance(val, (bytes, bytearray)):
+            return bytes(val)
+    if isinstance(data, dict) and isinstance(data.get("data"), (bytes, bytearray)):
+        return bytes(data["data"])
+    raise HTTPException(status_code=500, detail="Unexpected storage download format")
+
+
+def reparse_evidence(user_id: str, evidence_id: str) -> dict:
+    """Re-download a stored file and refresh its parsed_text/sections metadata.
+
+    Used for resumes uploaded before text extraction existed, and as a
+    manual retry when the first parse failed (e.g. scanned PDF).
+    """
+    ev = get_evidence(user_id, evidence_id)
+    if (ev.get("evidence_type") or "") not in FILE_TYPES:
+        raise HTTPException(status_code=400, detail="Only file evidence (resume, syllabus, ...) can be reparsed")
+    file_path = ev.get("file_path")
+    if not file_path:
+        raise HTTPException(status_code=400, detail="Evidence has no stored file to reparse")
+    # Strip bucket prefix if present
+    path = file_path
+    if path.startswith(f"{BUCKET}/"):
+        path = path[len(f"{BUCKET}/"):]
+
+    content = download_file_bytes(user_id, path)
+    meta = ev.get("metadata") or {}
+    filename = meta.get("original_filename") or ev.get("title") or path.split("/")[-1]
+    doc_meta = document_parser.parse_document_bytes(
+        content, filename=filename, content_type=meta.get("content_type")
+    )
+    updated_meta = {**meta, **doc_meta}
+    return update_evidence(user_id, evidence_id, {"metadata": updated_meta})
+
+
+def ensure_file_evidence_parsed(user_id: str, evidence_list: list) -> list:
+    """Best-effort backfill: parse any file evidence missing parsed_text.
+
+    Called by the analysis pipeline so old uploads still contribute skills.
+    Never raises — parse/download failures are skipped silently.
+    Mutates evidence_list items in place and returns it.
+    """
+    for ev in evidence_list or []:
+        try:
+            if (ev.get("evidence_type") or "") not in FILE_TYPES:
+                continue
+            meta = ev.get("metadata") or {}
+            if (meta.get("parsed_text") or "").strip():
+                continue
+            if not ev.get("file_path") or not ev.get("id"):
+                continue
+            refreshed = reparse_evidence(user_id, ev["id"])
+            ev["metadata"] = refreshed.get("metadata") or ev.get("metadata")
+        except Exception:
+            continue
+    return evidence_list
 
 
 # Projects

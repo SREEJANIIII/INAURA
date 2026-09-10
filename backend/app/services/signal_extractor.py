@@ -9,8 +9,11 @@ from .evidence.github import GitHubProvider, parse_github_url
 from .evidence.manager import evidence_manager, get_evidence_dedup_key
 
 # Configurable source reliability weights — heuristic prototype values
+# Hierarchy: performance-based (leetcode/codeforces/kaggle 0.85) and verified
+# coursework (0.80) > GitHub supporting evidence (0.70, MEDIUM) >
+# certifications (0.55, MEDIUM-LOW) > resume/linkedin/self-declared (LOW).
 SOURCE_RELIABILITY: Dict[str, float] = {
-    "github": 0.90,           # repository/code implementation evidence
+    "github": 0.70,           # supporting repo evidence, not a definitive test
     "project": 0.90,          # concrete project work
     "leetcode": 0.85,         # verified coding assessment platform
     "codeforces": 0.85,
@@ -18,8 +21,8 @@ SOURCE_RELIABILITY: Dict[str, float] = {
     "syllabus": 0.80,         # accredited coursework
     "coursework": 0.80,
     "project_doc": 0.75,      # technical project documentation
-    "certification": 0.65,    # industry certification
-    "certification_file": 0.65,
+    "certification": 0.55,    # industry certification (MEDIUM-LOW)
+    "certification_file": 0.55,
     "resume": 0.50,           # self-reported resume document
     "linkedin": 0.40,         # social profile
     "self_declared": 0.30,    # unverified declaration

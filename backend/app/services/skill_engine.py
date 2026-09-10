@@ -4,16 +4,11 @@ import math
 # Heuristic weights and calibration constants — prototype engine
 # ASSUMPTION DOCUMENTATION:
 # 1. Source Reliability (0.0 - 1.0): Weight reflecting institutional / platform credibility.
-#    Project work (0.90) and coding platforms (0.85) carry higher credibility than self-reported resume (0.50).
-# 2. Confidence Calibration:
-#    Confidence evaluates trustworthiness of assessment based on evidence volume (55%) and source diversity (45%).
-#    Saturation points: 2.5 total reliability weight and 3 distinct source types achieve 100% confidence.
-# 3. Career Readiness:
-#    Readiness synthesizes skill proficiency alignment (45%), industry gap coverage (25%), and evidence confidence (30%).
-# NOTE: These values are heuristic estimates for prototype career guidance, not scientifically validated psychometrics.
-
+#    Hierarchy: coding platforms (0.85) and verified coursework (0.80) carry higher
+#    credibility than GitHub supporting evidence (0.70, MEDIUM), which in turn
+#    outranks certifications (0.55, MEDIUM-LOW) and self-reported resume (0.50).
 SOURCE_RELIABILITY: Dict[str, float] = {
-    "github": 0.90,
+    "github": 0.70,
     "project": 0.90,
     "leetcode": 0.85,
     "codeforces": 0.85,
@@ -21,11 +16,18 @@ SOURCE_RELIABILITY: Dict[str, float] = {
     "syllabus": 0.80,
     "coursework": 0.80,
     "project_doc": 0.75,
-    "certification": 0.65,
+    "certification": 0.55,
+    "certification_file": 0.55,
     "resume": 0.50,
     "linkedin": 0.40,
     "self_declared": 0.30,
 }
+# 2. Confidence Calibration:
+#    Confidence evaluates trustworthiness of assessment based on evidence volume (55%) and source diversity (45%).
+#    Saturation points: 2.5 total reliability weight and 3 distinct source types achieve 100% confidence.
+# 3. Career Readiness:
+#    Readiness synthesizes skill proficiency alignment (45%), industry gap coverage (25%), and evidence confidence (30%).
+# NOTE: These values are heuristic estimates for prototype career guidance, not scientifically validated psychometrics.
 
 # Confidence model weights and saturation ceilings
 CONFIDENCE_W_WEIGHT = 0.55

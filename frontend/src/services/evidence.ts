@@ -109,6 +109,12 @@ export function verifyEvidence(id: string) {
   });
 }
 
+export function reparseEvidence(id: string) {
+  return apiFetch<Evidence>(`/evidence/${id}/reparse`, {
+    method: "POST",
+  });
+}
+
 // Projects
 export function listProjects() {
   return apiFetch<Project[]>("/evidence/projects");
