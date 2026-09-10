@@ -8,6 +8,7 @@ import Dashboard from "./pages/Dashboard";
 import Analysis from "./pages/Analysis";
 import AnalysisResults from "./pages/AnalysisResults";
 import Roadmap from "./pages/Roadmap";
+import AIReviewTest from "./pages/AIReviewTest";
 import { ProtectedRoute, GuestOnly } from "./components/auth/ProtectedRoute";
 
 export default function App() {
@@ -73,6 +74,15 @@ export default function App() {
         element={
           <ProtectedRoute>
             <Roadmap />
+          </ProtectedRoute>
+        }
+      />
+      {/* EXPERIMENTAL side feature — isolated, no impact on other routes */}
+      <Route
+        path="/ai-review-test"
+        element={
+          <ProtectedRoute>
+            <AIReviewTest />
           </ProtectedRoute>
         }
       />
