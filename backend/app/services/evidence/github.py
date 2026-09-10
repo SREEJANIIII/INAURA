@@ -1,12 +1,17 @@
-from typing import Dict, List, Optional, Tuple, Any
+from typing import Dict, List, Optional, Tuple, Any, Set
 import re
 import json
+import os
+import logging
+import asyncio
 from datetime import datetime, timezone
 import httpx
 
 from .base import EvidenceProvider, VerificationResult, ExtractedSignal, EvidenceDepth, VerificationStatus
 from .url_utils import validate_platform_url, GITHUB_HOSTS
 from ..skill_taxonomy import normalize_skill, normalize_skill_slug
+
+logger = logging.getLogger(__name__)
 
 # GitHub is supporting evidence (MEDIUM), not a definitive skill test.
 # Performance-based sources (LeetCode/Codeforces/Kaggle 0.85) and verified
@@ -15,6 +20,24 @@ GITHUB_RELIABILITY = 0.70
 
 # Cap on extra raw manifest fetches per repository inspection (rate-limit safety).
 MAX_EXTRA_MANIFEST_FETCHES = 4
+
+# Controlled profile inspection concurrency limit (conservative 3-5 range)
+DEFAULT_PROFILE_CONCURRENCY = 4
+
+# Maximum profile pages safety ceiling (50 pages * 100 per page = 5,000 repos)
+MAX_PROFILE_PAGES = 50
+
+# Activity thresholds for classification
+REPO_ACTIVE_DAYS = 365 * 2
+REPO_STALE_YEARS = 3.0
+
+# Reliable patterns identifying tutorial, demo, or template repositories
+TUTORIAL_DEMO_PATTERNS = re.compile(
+    r"\b(tutorial|tutorials|course|coursework|assignment|homework|demo|demos|"
+    r"template|templates|boilerplate|sample|samples|playground|sandbox|study|"
+    r"100[-_]?days|exercises?|practice|starter[-_]?kit|learning)\b",
+    re.IGNORECASE,
+)
 
 # Extension -> canonical skill for implementation-file counting.
 # Only skills present in the canonical taxonomy are listed (no invented skills).
@@ -267,6 +290,122 @@ def parse_github_url(url_or_handle: str) -> Tuple[Optional[str], Optional[str], 
     return None, None, False
 
 
+def _get_github_headers() -> Dict[str, str]:
+    headers = {
+        "User-Agent": "INAURA-Evidence-Intelligence/1.0",
+        "Accept": "application/vnd.github.v3+json",
+    }
+    token = os.environ.get("GITHUB_TOKEN") or os.environ.get("GH_TOKEN")
+    if token and token.strip():
+        headers["Authorization"] = f"Bearer {token.strip()}"
+    return headers
+
+
+def _check_rate_limit(res: httpx.Response) -> Tuple[bool, int, Optional[str]]:
+    """
+    Check if response indicates rate limiting.
+    Returns: (is_limited, remaining, reset_time_iso)
+    """
+    remaining_header = res.headers.get("x-ratelimit-remaining")
+    reset_header = res.headers.get("x-ratelimit-reset")
+    remaining = int(remaining_header) if remaining_header and remaining_header.isdigit() else 100
+
+    reset_time = None
+    if reset_header and reset_header.isdigit():
+        try:
+            reset_dt = datetime.fromtimestamp(int(reset_header), tz=timezone.utc)
+            reset_time = reset_dt.isoformat()
+        except Exception:
+            pass
+
+    is_limited = res.status_code in (403, 429) or remaining <= 0
+    return is_limited, remaining, reset_time
+
+
+def _classify_repository(repo_data: dict, profile_owner: str, now: datetime) -> Dict[str, Any]:
+    """
+    Classify a repository across ownership, activity, structure, and evidence density.
+    Returns a dict with primary classification string and detailed flags.
+    """
+    name = str(repo_data.get("name") or "")
+    desc = str(repo_data.get("description") or "")
+    is_fork = bool(repo_data.get("fork", False))
+    is_archived = bool(repo_data.get("archived", False))
+    is_disabled = bool(repo_data.get("disabled", False))
+    is_template = bool(repo_data.get("is_template", False))
+    size = int(repo_data.get("size") or 0)
+    has_language = bool(repo_data.get("language"))
+
+    # Ownership: belongs directly to profile user and is not an upstream fork
+    owner_login = ""
+    owner_obj = repo_data.get("owner")
+    if isinstance(owner_obj, dict):
+        owner_login = str(owner_obj.get("login") or "").lower()
+    elif isinstance(owner_obj, str):
+        owner_login = owner_obj.lower()
+    is_owned = (not is_fork) and (not owner_login or owner_login == profile_owner.lower())
+
+    # Activity / recency
+    pushed_at = repo_data.get("pushed_at") or repo_data.get("updated_at")
+    is_active = False
+    is_stale = False
+    if pushed_at:
+        try:
+            p_str = str(pushed_at).replace("Z", "+00:00")
+            pushed_dt = datetime.fromisoformat(p_str)
+            if pushed_dt.tzinfo is None:
+                pushed_dt = pushed_dt.replace(tzinfo=timezone.utc)
+            v_dt = now if now.tzinfo is not None else now.replace(tzinfo=timezone.utc)
+            age_days = (v_dt - pushed_dt).days
+            if age_days <= REPO_ACTIVE_DAYS:
+                is_active = True
+            elif age_days > 365 * REPO_STALE_YEARS:
+                is_stale = True
+        except Exception:
+            pass
+    else:
+        is_stale = True
+
+    # Low evidence: 0 size or disabled without code
+    is_low_evidence = (size == 0 and not has_language) or is_disabled
+
+    # Tutorial / demo / template detection
+    name_low = name.lower()
+    desc_low = desc.lower()
+    is_tutorial_demo = (
+        is_template
+        or bool(TUTORIAL_DEMO_PATTERNS.search(name_low))
+        or bool(TUTORIAL_DEMO_PATTERNS.search(desc_low))
+    )
+
+    # Primary classification string
+    if is_fork:
+        primary = "fork"
+    elif is_archived:
+        primary = "archived"
+    elif is_low_evidence:
+        primary = "low_evidence"
+    elif is_tutorial_demo:
+        primary = "tutorial_demo"
+    elif is_active:
+        primary = "owned_active"
+    elif is_stale:
+        primary = "owned_stale"
+    else:
+        primary = "owned"
+
+    return {
+        "classification": primary,
+        "is_owned": is_owned,
+        "is_fork": is_fork,
+        "is_archived": is_archived,
+        "is_active": is_active,
+        "is_stale": is_stale,
+        "is_low_evidence": is_low_evidence,
+        "is_tutorial_demo": is_tutorial_demo,
+    }
+
+
 class GitHubProvider(EvidenceProvider):
     """
     Evidence Intelligence Provider for GitHub.
@@ -337,19 +476,23 @@ class GitHubProvider(EvidenceProvider):
         if repo and not is_profile:
             return await self._inspect_repository(owner, repo, now)
 
-        # 3. If it's a profile URL, inspect recent public repositories
-        return await self._inspect_profile(owner, now)
+        # 3. If it's a profile URL, inspect all public repositories
+        return await self._inspect_profile(owner, now, evidence=evidence)
 
-    async def _inspect_repository(self, owner: str, repo: str, verified_at: datetime) -> VerificationResult:
-        headers = {
-            "User-Agent": "INAURA-Evidence-Intelligence/1.0",
-            "Accept": "application/vnd.github.v3+json",
-        }
+    async def _inspect_repository_core(
+        self,
+        owner: str,
+        repo: str,
+        verified_at: datetime,
+        client: httpx.AsyncClient,
+        repo_data: Optional[dict] = None,
+    ) -> VerificationResult:
+        headers = _get_github_headers()
         repo_url = f"https://api.github.com/repos/{owner}/{repo}"
 
         try:
-            async with httpx.AsyncClient(timeout=6.0) as client:
-                # 1. Fetch repo metadata
+            # 1. Fetch repo metadata if not provided
+            if repo_data is None:
                 res = await client.get(repo_url, headers=headers)
                 if res.status_code == 404:
                     return VerificationResult(
@@ -375,255 +518,291 @@ class GitHubProvider(EvidenceProvider):
                         raw_metadata={"owner": owner, "repo": repo, "http_status": res.status_code},
                         verified_at=verified_at,
                     )
-
                 repo_data = res.json()
-                default_branch = repo_data.get("default_branch", "main")
 
-                # 2. Fetch languages breakdown
+            # Pre-injected mock inspection support
+            if "mock_inspection" in repo_data:
+                return self._build_result_from_inspection(owner, repo, repo_data["mock_inspection"], verified_at)
+            if "inspection" in repo_data and isinstance(repo_data["inspection"], dict) and repo_data["inspection"]:
+                return self._build_result_from_inspection(owner, repo, repo_data["inspection"], verified_at)
+
+            default_branch = repo_data.get("default_branch") or "main"
+
+            # 2. Fetch languages breakdown
+            languages = {}
+            try:
                 lang_res = await client.get(f"{repo_url}/languages", headers=headers)
-                languages = lang_res.json() if lang_res.status_code == 200 else {}
+                if lang_res.status_code in (403, 429):
+                    return VerificationResult(
+                        status="failed",
+                        message=f"GitHub API access rate limited or forbidden for '{owner}/{repo}'.",
+                        provider=self.provider_name,
+                        raw_metadata={"owner": owner, "repo": repo, "http_status": lang_res.status_code},
+                        verified_at=verified_at,
+                    )
+                if lang_res.status_code >= 500:
+                    return VerificationResult(
+                        status="failed",
+                        message=f"GitHub API returned error {lang_res.status_code} while inspecting '{owner}/{repo}'.",
+                        provider=self.provider_name,
+                        raw_metadata={"owner": owner, "repo": repo, "http_status": lang_res.status_code},
+                        verified_at=verified_at,
+                    )
+                if lang_res.status_code == 200 and isinstance(lang_res.json(), dict):
+                    languages = lang_res.json()
+            except Exception:
+                pass
+            if not languages and repo_data.get("language"):
+                languages = {repo_data["language"]: int(repo_data.get("size", 10000) or 10000)}
 
-                # 3. Fetch root contents list
+            # 3. Fetch root contents list
+            root_files = []
+            try:
                 contents_res = await client.get(f"{repo_url}/contents", headers=headers)
-                root_files = []
+                if contents_res.status_code in (403, 429):
+                    return VerificationResult(
+                        status="failed",
+                        message=f"GitHub API access rate limited or forbidden for '{owner}/{repo}'.",
+                        provider=self.provider_name,
+                        raw_metadata={"owner": owner, "repo": repo, "http_status": contents_res.status_code},
+                        verified_at=verified_at,
+                    )
+                if contents_res.status_code >= 500:
+                    return VerificationResult(
+                        status="failed",
+                        message=f"GitHub API returned error {contents_res.status_code} while inspecting '{owner}/{repo}'.",
+                        provider=self.provider_name,
+                        raw_metadata={"owner": owner, "repo": repo, "http_status": contents_res.status_code},
+                        verified_at=verified_at,
+                    )
                 if contents_res.status_code == 200 and isinstance(contents_res.json(), list):
                     root_files = [item.get("name", "") for item in contents_res.json()]
+            except Exception:
+                pass
 
-                # 4. Fetch package.json if present
-                package_json_deps = []
-                if "package.json" in root_files:
-                    try:
-                        pkg_res = await client.get(
-                            f"https://raw.githubusercontent.com/{owner}/{repo}/{default_branch}/package.json",
-                            headers={"User-Agent": "INAURA-Evidence-Intelligence/1.0"},
-                            timeout=4.0,
-                        )
-                        if pkg_res.status_code == 200:
-                            pkg_data = json.loads(pkg_res.text)
-                            deps = {**pkg_data.get("dependencies", {}), **pkg_data.get("devDependencies", {})}
-                            package_json_deps = list(deps.keys())
-                    except Exception:
-                        pass
-
-                # 5. Fetch requirements.txt if present
-                py_deps = []
-                if "requirements.txt" in root_files:
-                    try:
-                        req_res = await client.get(
-                            f"https://raw.githubusercontent.com/{owner}/{repo}/{default_branch}/requirements.txt",
-                            headers={"User-Agent": "INAURA-Evidence-Intelligence/1.0"},
-                            timeout=4.0,
-                        )
-                        if req_res.status_code == 200:
-                            for line in req_res.text.splitlines():
-                                line = line.strip().split("==")[0].split(">=")[0].split("<=")[0].strip()
-                                if line and not line.startswith("#"):
-                                    py_deps.append(line.lower())
-                    except Exception:
-                        pass
-
-                # Check workflows directory
-                has_workflows = False
-                if ".github" in root_files:
-                    try:
-                        wf_res = await client.get(f"{repo_url}/contents/.github/workflows", headers=headers)
-                        has_workflows = wf_res.status_code == 200 and len(wf_res.json()) > 0
-                    except Exception:
-                        pass
-
-                # 6. Fetch recursive file tree (capped) to confirm real
-                # implementation files in EVERY ecosystem (src/**/*.py,
-                # frontend/**/*.tsx, backend/**/*.go, ...) and to locate
-                # build manifests outside the repo root (multi-module).
-                # Best-effort: any failure keeps the languages/root-only path.
-                tree_scanned = False
-                java_file_count = 0
-                java_test_file_count = 0
-                tree_build_paths: List[str] = []
-                tree_top_files: List[str] = []
-                ext_file_counts: Dict[str, int] = {}
-                tree_manifest_basenames: set = set()
-                tree_csproj_paths: List[str] = []
-                has_k8s_manifests = False
-                k8s_manifest_count = 0
-                has_ci_config = False
+            # 4. Fetch package.json if present
+            package_json_deps = []
+            if "package.json" in root_files:
                 try:
-                    tree_res = await client.get(
-                        f"{repo_url}/git/trees/{default_branch}?recursive=1", headers=headers
+                    pkg_res = await client.get(
+                        f"https://raw.githubusercontent.com/{owner}/{repo}/{default_branch}/package.json",
+                        headers=_get_github_headers(),
+                        timeout=4.0,
                     )
-                    if tree_res.status_code == 200 and isinstance(tree_res.json().get("tree"), list):
-                        tree_scanned = True
-                        entries = tree_res.json()["tree"][:3000]
-                        for entry in entries:
-                            path = str(entry.get("path") or "")
-                            if not path:
-                                continue
-                            low = path.lower()
-                            base = low.rsplit("/", 1)[-1]
-                            if base in ("pom.xml", "build.gradle", "build.gradle.kts"):
-                                tree_build_paths.append(path)
-                            if base.endswith(".csproj"):
-                                tree_csproj_paths.append(path)
-                            tree_manifest_basenames.add(base)
-                            # Per-extension implementation file counts
-                            dot = base.rfind(".")
-                            if dot > 0:
-                                ext = base[dot:]
-                                if ext in EXTENSION_SKILL_MAP:
-                                    ext_file_counts[ext] = ext_file_counts.get(ext, 0) + 1
-                            if low.endswith(".java"):
-                                java_file_count += 1
-                                if "test" in low:
-                                    java_test_file_count += 1
-                            # Kubernetes / extra-CI markers
-                            if base in K8S_MARKERS or low.startswith(K8S_DIR_MARKERS):
-                                has_k8s_manifests = True
-                                k8s_manifest_count += 1
-                            if base in CI_CONFIG_MARKERS:
-                                has_ci_config = True
-                            # Feed full paths AND basenames into the shared
-                            # file checks below (docker/CI layout,
-                            # frontend/backend structure incl. subdirectories).
-                            if len(tree_top_files) < 800:
-                                tree_top_files.append(low)
-                                if base != low:
-                                    tree_top_files.append(base)
+                    if pkg_res.status_code == 200:
+                        pkg_data = json.loads(pkg_res.text)
+                        deps = {**pkg_data.get("dependencies", {}), **pkg_data.get("devDependencies", {})}
+                        package_json_deps = list(deps.keys())
                 except Exception:
                     pass
 
-                # 7. Fetch Java build manifest contents (root first, then first
-                # tree hit) to infer frameworks (Spring/Hibernate) and Java
-                # test frameworks (JUnit/TestNG/Mockito).
-                build_system: Optional[str] = None
-                java_frameworks: List[str] = []
-                java_build_deps: List[str] = []
-                build_manifest_found = (
-                    "pom.xml" in root_files
-                    or "build.gradle" in root_files
-                    or "build.gradle.kts" in root_files
-                    or len(tree_build_paths) > 0
+            # 5. Fetch requirements.txt if present
+            py_deps = []
+            if "requirements.txt" in root_files:
+                try:
+                    req_res = await client.get(
+                        f"https://raw.githubusercontent.com/{owner}/{repo}/{default_branch}/requirements.txt",
+                        headers=_get_github_headers(),
+                        timeout=4.0,
+                    )
+                    if req_res.status_code == 200:
+                        for line in req_res.text.splitlines():
+                            line = line.strip().split("==")[0].split(">=")[0].split("<=")[0].strip()
+                            if line and not line.startswith("#"):
+                                py_deps.append(line.lower())
+                except Exception:
+                    pass
+
+            # Check workflows directory
+            has_workflows = False
+            if ".github" in root_files:
+                try:
+                    wf_res = await client.get(f"{repo_url}/contents/.github/workflows", headers=headers)
+                    has_workflows = wf_res.status_code == 200 and isinstance(wf_res.json(), list) and len(wf_res.json()) > 0
+                except Exception:
+                    pass
+
+            # 6. Fetch recursive file tree (capped)
+            tree_scanned = False
+            java_file_count = 0
+            java_test_file_count = 0
+            tree_build_paths: List[str] = []
+            tree_top_files: List[str] = []
+            ext_file_counts: Dict[str, int] = {}
+            tree_manifest_basenames: set = set()
+            tree_csproj_paths: List[str] = []
+            has_k8s_manifests = False
+            k8s_manifest_count = 0
+            has_ci_config = False
+            try:
+                tree_res = await client.get(
+                    f"{repo_url}/git/trees/{default_branch}?recursive=1", headers=headers
                 )
-                manifest_candidates: List[str] = []
-                for candidate in ("pom.xml", "build.gradle", "build.gradle.kts"):
-                    if candidate in root_files:
-                        manifest_candidates.append(candidate)
-                manifest_candidates.extend([p for p in tree_build_paths if p not in manifest_candidates][:2])
-                manifest_text = ""
-                for candidate in manifest_candidates[:2]:
-                    try:
-                        raw_res = await client.get(
-                            f"https://raw.githubusercontent.com/{owner}/{repo}/{default_branch}/{candidate}",
-                            headers={"User-Agent": "INAURA-Evidence-Intelligence/1.0"},
-                            timeout=4.0,
-                        )
-                        if raw_res.status_code == 200 and raw_res.text.strip():
-                            manifest_text += "\n" + raw_res.text.lower()
-                            if candidate == "pom.xml":
-                                build_system = build_system or "maven"
-                            else:
-                                build_system = build_system or "gradle"
-                    except Exception:
-                        continue
-                if manifest_text:
-                    if "spring-boot" in manifest_text or "springframework" in manifest_text:
-                        java_frameworks.append("spring_boot")
-                    if "hibernate" in manifest_text:
-                        java_frameworks.append("hibernate")
-                    for marker in ("junit", "testng", "mockito", "assertj", "surefire", "failsafe"):
-                        if marker in manifest_text:
-                            java_build_deps.append(marker)
+                if tree_res.status_code == 200 and isinstance(tree_res.json().get("tree"), list):
+                    tree_scanned = True
+                    entries = tree_res.json()["tree"][:3000]
+                    for entry in entries:
+                        path = str(entry.get("path") or "")
+                        if not path:
+                            continue
+                        low = path.lower()
+                        base = low.rsplit("/", 1)[-1]
+                        if base in ("pom.xml", "build.gradle", "build.gradle.kts"):
+                            tree_build_paths.append(path)
+                        if base.endswith(".csproj"):
+                            tree_csproj_paths.append(path)
+                        tree_manifest_basenames.add(base)
+                        # Per-extension implementation file counts
+                        dot = base.rfind(".")
+                        if dot > 0:
+                            ext = base[dot:]
+                            if ext in EXTENSION_SKILL_MAP:
+                                ext_file_counts[ext] = ext_file_counts.get(ext, 0) + 1
+                        if low.endswith(".java"):
+                            java_file_count += 1
+                            if "test" in low:
+                                java_test_file_count += 1
+                        # Kubernetes / extra-CI markers
+                        if base in K8S_MARKERS or low.startswith(K8S_DIR_MARKERS):
+                            has_k8s_manifests = True
+                            k8s_manifest_count += 1
+                        if base in CI_CONFIG_MARKERS:
+                            has_ci_config = True
+                        if len(tree_top_files) < 800:
+                            tree_top_files.append(low)
+                            if base != low:
+                                tree_top_files.append(base)
+            except Exception:
+                pass
 
-                # 8. Fetch ecosystem manifests (pyproject.toml, go.mod,
-                # Cargo.toml, ...) as raw text, root first then tree hits.
-                # Bounded by MAX_EXTRA_MANIFEST_FETCHES for rate-limit safety.
-                root_lower = {str(f).lower() for f in root_files}
-                eco_manifest_deps: List[str] = []
-                eco_python_deps: List[str] = []
-                eco_manifests_found: List[str] = []
-                extra_fetches = 0
+            # 7. Fetch Java build manifest contents
+            build_system: Optional[str] = None
+            java_frameworks: List[str] = []
+            java_build_deps: List[str] = []
+            build_manifest_found = (
+                "pom.xml" in root_files
+                or "build.gradle" in root_files
+                or "build.gradle.kts" in root_files
+                or len(tree_build_paths) > 0
+            )
+            manifest_candidates: List[str] = []
+            for candidate in ("pom.xml", "build.gradle", "build.gradle.kts"):
+                if candidate in root_files:
+                    manifest_candidates.append(candidate)
+            manifest_candidates.extend([p for p in tree_build_paths if p not in manifest_candidates][:2])
+            manifest_text = ""
+            for candidate in manifest_candidates[:2]:
+                try:
+                    raw_res = await client.get(
+                        f"https://raw.githubusercontent.com/{owner}/{repo}/{default_branch}/{candidate}",
+                        headers=_get_github_headers(),
+                        timeout=4.0,
+                    )
+                    if raw_res.status_code == 200 and raw_res.text.strip():
+                        manifest_text += "\n" + raw_res.text.lower()
+                        if candidate == "pom.xml":
+                            build_system = build_system or "maven"
+                        else:
+                            build_system = build_system or "gradle"
+                except Exception:
+                    continue
+            if manifest_text:
+                if "spring-boot" in manifest_text or "springframework" in manifest_text:
+                    java_frameworks.append("spring_boot")
+                if "hibernate" in manifest_text:
+                    java_frameworks.append("hibernate")
+                for marker in ("junit", "testng", "mockito", "assertj", "surefire", "failsafe"):
+                    if marker in manifest_text:
+                        java_build_deps.append(marker)
 
-                async def _fetch_raw(path: str) -> str:
-                    try:
-                        r = await client.get(
-                            f"https://raw.githubusercontent.com/{owner}/{repo}/{default_branch}/{path}",
-                            headers={"User-Agent": "INAURA-Evidence-Intelligence/1.0"},
-                            timeout=4.0,
-                        )
-                        if r.status_code == 200 and r.text.strip():
-                            return r.text
-                    except Exception:
-                        pass
-                    return ""
+            # 8. Fetch ecosystem manifests
+            root_lower = {str(f).lower() for f in root_files}
+            eco_manifest_deps: List[str] = []
+            eco_python_deps: List[str] = []
+            eco_manifests_found: List[str] = []
+            extra_fetches = 0
 
-                for manifest_name, parser in ECOSYSTEM_MANIFESTS:
-                    if extra_fetches >= MAX_EXTRA_MANIFEST_FETCHES:
-                        break
-                    target: Optional[str] = None
-                    if manifest_name in root_lower:
-                        # Recover original-case root path
-                        for f in root_files:
-                            if str(f).lower() == manifest_name:
-                                target = str(f)
-                                break
-                    if target is None and manifest_name in tree_manifest_basenames:
-                        target = manifest_name
-                    if target is None:
-                        continue
-                    text = await _fetch_raw(target)
-                    if not text:
-                        continue
+            async def _fetch_raw(path: str) -> str:
+                try:
+                    r = await client.get(
+                        f"https://raw.githubusercontent.com/{owner}/{repo}/{default_branch}/{path}",
+                        headers=_get_github_headers(),
+                        timeout=4.0,
+                    )
+                    if r.status_code == 200 and r.text.strip():
+                        return r.text
+                except Exception:
+                    pass
+                return ""
+
+            for manifest_name, parser in ECOSYSTEM_MANIFESTS:
+                if extra_fetches >= MAX_EXTRA_MANIFEST_FETCHES:
+                    break
+                target: Optional[str] = None
+                if manifest_name in root_lower:
+                    for f in root_files:
+                        if str(f).lower() == manifest_name:
+                            target = str(f)
+                            break
+                if target is None and manifest_name in tree_manifest_basenames:
+                    target = manifest_name
+                if target is None:
+                    continue
+                text = await _fetch_raw(target)
+                if not text:
+                    continue
+                extra_fetches += 1
+                eco_manifests_found.append(manifest_name)
+                parsed = parse_manifest_deps(parser, text)
+                eco_manifest_deps.extend(parsed)
+                if parser in ("pyproject", "setuppy", "pipfile"):
+                    eco_python_deps.extend(parsed)
+
+            if extra_fetches < MAX_EXTRA_MANIFEST_FETCHES and tree_csproj_paths:
+                text = await _fetch_raw(tree_csproj_paths[0])
+                if text:
                     extra_fetches += 1
-                    eco_manifests_found.append(manifest_name)
-                    parsed = parse_manifest_deps(parser, text)
-                    eco_manifest_deps.extend(parsed)
-                    if parser in ("pyproject", "setuppy", "pipfile"):
-                        eco_python_deps.extend(parsed)
+                    eco_manifests_found.append("csproj")
+                    for m in re.findall(
+                        r'<PackageReference\s+Include\s*=\s*"([^"]+)"', text, re.I
+                    ):
+                        name = _clean_dep_name(m)
+                        if name:
+                            eco_manifest_deps.append(name)
 
-                # First .csproj found in the tree (C# package references)
-                if extra_fetches < MAX_EXTRA_MANIFEST_FETCHES and tree_csproj_paths:
-                    text = await _fetch_raw(tree_csproj_paths[0])
-                    if text:
-                        extra_fetches += 1
-                        eco_manifests_found.append("csproj")
-                        for m in re.findall(
-                            r'<PackageReference\s+Include\s*=\s*"([^"]+)"', text, re.I
-                        ):
-                            name = _clean_dep_name(m)
-                            if name:
-                                eco_manifest_deps.append(name)
+            inspection = {
+                "name": repo_data.get("name") or repo,
+                "full_name": repo_data.get("full_name") or f"{owner}/{repo}",
+                "description": repo_data.get("description") or "",
+                "topics": repo_data.get("topics") or [],
+                "languages": languages,
+                "root_files": root_files,
+                "top_files": tree_top_files,
+                "package_json_deps": package_json_deps,
+                "python_deps": py_deps,
+                "eco_manifest_deps": eco_manifest_deps,
+                "eco_python_deps": eco_python_deps,
+                "eco_manifests_found": eco_manifests_found,
+                "ext_file_counts": ext_file_counts,
+                "has_workflows": has_workflows,
+                "has_ci_config": has_ci_config,
+                "has_k8s_manifests": has_k8s_manifests,
+                "k8s_manifest_count": k8s_manifest_count,
+                "is_fork": repo_data.get("fork", False),
+                "archived": repo_data.get("archived", False),
+                "size": repo_data.get("size", 0),
+                "pushed_at": repo_data.get("pushed_at"),
+                "updated_at": repo_data.get("updated_at"),
+                "tree_scanned": tree_scanned,
+                "java_file_count": java_file_count,
+                "java_test_file_count": java_test_file_count,
+                "has_java_build_manifest": build_manifest_found,
+                "build_system": build_system,
+                "java_frameworks": java_frameworks,
+                "java_build_deps": java_build_deps,
+            }
 
-                inspection = {
-                    "name": repo_data.get("name"),
-                    "full_name": repo_data.get("full_name"),
-                    "description": repo_data.get("description") or "",
-                    "topics": repo_data.get("topics") or [],
-                    "languages": languages,
-                    "root_files": root_files,
-                    "top_files": tree_top_files,
-                    "package_json_deps": package_json_deps,
-                    "python_deps": py_deps,
-                    "eco_manifest_deps": eco_manifest_deps,
-                    "eco_python_deps": eco_python_deps,
-                    "eco_manifests_found": eco_manifests_found,
-                    "ext_file_counts": ext_file_counts,
-                    "has_workflows": has_workflows,
-                    "has_ci_config": has_ci_config,
-                    "has_k8s_manifests": has_k8s_manifests,
-                    "k8s_manifest_count": k8s_manifest_count,
-                    "is_fork": repo_data.get("fork", False),
-                    "size": repo_data.get("size", 0),
-                    "pushed_at": repo_data.get("pushed_at"),
-                    "updated_at": repo_data.get("updated_at"),
-                    "tree_scanned": tree_scanned,
-                    "java_file_count": java_file_count,
-                    "java_test_file_count": java_test_file_count,
-                    "has_java_build_manifest": build_manifest_found,
-                    "build_system": build_system,
-                    "java_frameworks": java_frameworks,
-                    "java_build_deps": java_build_deps,
-                }
-
-                return self._build_result_from_inspection(owner, repo, inspection, verified_at)
+            return self._build_result_from_inspection(owner, repo, inspection, verified_at)
 
         except httpx.RequestError as e:
             return VerificationResult(
@@ -633,86 +812,644 @@ class GitHubProvider(EvidenceProvider):
                 raw_metadata={"owner": owner, "repo": repo, "error": str(e)},
                 verified_at=verified_at,
             )
+        except Exception as e:
+            return VerificationResult(
+                status="failed",
+                message=f"Unexpected error while inspecting repository '{owner}/{repo}': {str(e)[:100]}",
+                provider=self.provider_name,
+                raw_metadata={"owner": owner, "repo": repo, "error": str(e)},
+                verified_at=verified_at,
+            )
 
-    async def _inspect_profile(self, owner: str, verified_at: datetime) -> VerificationResult:
-        """Inspect public profile and its top repositories."""
-        headers = {
-            "User-Agent": "INAURA-Evidence-Intelligence/1.0",
-            "Accept": "application/vnd.github.v3+json",
-        }
-        profile_url = f"https://api.github.com/users/{owner}"
+    async def _inspect_repository(
+        self,
+        owner: str,
+        repo: str,
+        verified_at: datetime,
+        client: Optional[httpx.AsyncClient] = None,
+        repo_data: Optional[dict] = None,
+    ) -> VerificationResult:
+        """Inspect a single repository reusing an existing client or creating a bounded one."""
+        if client is not None:
+            return await self._inspect_repository_core(owner, repo, verified_at, client, repo_data=repo_data)
 
         try:
-            async with httpx.AsyncClient(timeout=6.0) as client:
-                res = await client.get(profile_url, headers=headers)
-                if res.status_code == 404:
-                    return VerificationResult(
-                        status="failed",
-                        message=f"GitHub user '{owner}' does not exist.",
-                        provider=self.provider_name,
-                        raw_metadata={"owner": owner, "http_status": 404},
+            async with httpx.AsyncClient(timeout=6.0) as new_client:
+                return await self._inspect_repository_core(owner, repo, verified_at, new_client, repo_data=repo_data)
+        except httpx.RequestError as e:
+            return VerificationResult(
+                status="failed",
+                message=f"Network connection to GitHub failed: {str(e)[:100]}",
+                provider=self.provider_name,
+                raw_metadata={"owner": owner, "repo": repo, "error": str(e)},
+                verified_at=verified_at,
+            )
+
+    async def _fetch_repository_page(
+        self,
+        client: httpx.AsyncClient,
+        owner: str,
+        page: int,
+        per_page: int = 100,
+        headers: Optional[dict] = None,
+    ) -> Tuple[int, List[dict], Dict[str, Any]]:
+        """Fetch a single page of public repositories for a GitHub user."""
+        hdrs = headers or _get_github_headers()
+        url = f"https://api.github.com/users/{owner}/repos"
+        params = {
+            "per_page": per_page,
+            "page": page,
+            "sort": "updated",
+        }
+        try:
+            res = await client.get(url, headers=hdrs, params=params)
+            is_limited, remaining, reset_time = _check_rate_limit(res)
+            meta = {
+                "status_code": res.status_code,
+                "remaining": remaining,
+                "reset_time": reset_time,
+                "link_header": res.headers.get("link", ""),
+                "is_limited": is_limited,
+            }
+            if res.status_code == 200:
+                data = res.json()
+                if isinstance(data, list):
+                    return 200, data, meta
+                return 200, [], meta
+            return res.status_code, [], meta
+        except Exception as e:
+            return 0, [], {"error": str(e), "is_limited": False}
+
+    async def _fetch_profile_repositories(
+        self,
+        client: httpx.AsyncClient,
+        owner: str,
+        headers: Optional[dict] = None,
+    ) -> Tuple[List[dict], Dict[str, Any]]:
+        """
+        Fetch ALL public repositories for a GitHub user using pagination.
+        Handles rate limits, empty portfolios, single-page, and multi-page portfolios.
+        """
+        all_repos: List[dict] = []
+        page = 1
+        per_page = 100
+        warnings: List[str] = []
+        meta = {
+            "pages_fetched": 0,
+            "rate_limited": False,
+            "warnings": warnings,
+        }
+
+        while page <= MAX_PROFILE_PAGES:
+            logger.debug(f"GitHub profile @{owner}: fetching repositories page {page}")
+            status, repos, page_meta = await self._fetch_repository_page(
+                client, owner, page, per_page=per_page, headers=headers
+            )
+            meta["pages_fetched"] += 1
+
+            if page_meta.get("is_limited"):
+                msg = f"GitHub API rate limit reached while fetching page {page} for @{owner}."
+                if page_meta.get("reset_time"):
+                    msg += f" Reset at {page_meta['reset_time']}."
+                warnings.append(msg)
+                meta["rate_limited"] = True
+                break
+
+            if status == 404 and page == 1:
+                meta["user_not_found"] = True
+                break
+
+            if status != 200 and page == 1 and not repos:
+                err = page_meta.get("error") or f"HTTP {status}"
+                warnings.append(f"Failed to fetch repositories for @{owner}: {err}")
+                break
+
+            if not repos:
+                break
+
+            all_repos.extend(repos)
+            logger.debug(f"GitHub profile @{owner}: fetched {len(repos)} repositories")
+
+            # Check if this was the last page
+            if len(repos) < per_page:
+                break
+
+            link_header = page_meta.get("link_header", "")
+            if link_header and 'rel="next"' not in link_header:
+                break
+
+            page += 1
+
+        logger.debug(f"GitHub profile @{owner}: total repositories = {len(all_repos)}")
+        return all_repos, meta
+
+    async def _inspect_profile_repositories(
+        self,
+        client: httpx.AsyncClient,
+        owner: str,
+        repos_data: List[dict],
+        verified_at: datetime,
+        concurrency: int = DEFAULT_PROFILE_CONCURRENCY,
+    ) -> Tuple[List[Dict[str, Any]], List[Tuple[ExtractedSignal, Dict[str, Any]]], List[str]]:
+        """
+        Concurrently inspect a portfolio of repositories under controlled concurrency.
+        Safeguards against runaway rate limits and isolates individual repository failures.
+        """
+        sem = asyncio.Semaphore(concurrency)
+        inspected_repos: List[Dict[str, Any]] = []
+        raw_signals: List[Tuple[ExtractedSignal, Dict[str, Any]]] = []
+        warnings: List[str] = []
+        rate_limited = False
+
+        async def _inspect_one(repo_meta: dict):
+            nonlocal rate_limited
+            repo_name = str(repo_meta.get("name") or "")
+            full_name = str(repo_meta.get("full_name") or f"{owner}/{repo_name}")
+            html_url = str(repo_meta.get("html_url") or f"https://github.com/{owner}/{repo_name}")
+            desc = repo_meta.get("description") or ""
+            stars = int(repo_meta.get("stargazers_count") or 0)
+            forks = int(repo_meta.get("forks_count") or 0)
+            watchers = int(repo_meta.get("watchers_count") or 0)
+            pushed_at = repo_meta.get("pushed_at") or repo_meta.get("updated_at")
+            primary_lang = repo_meta.get("language")
+
+            classification_info = _classify_repository(repo_meta, owner, verified_at)
+
+            # Check for pre-injected test mock inspection inside repository dict
+            mock_insp = repo_meta.get("mock_inspection") or repo_meta.get("inspection")
+            if mock_insp and isinstance(mock_insp, dict):
+                res = self._build_result_from_inspection(owner, repo_name, mock_insp, verified_at)
+                summary = {
+                    "id": repo_meta.get("id"),
+                    "name": repo_name,
+                    "full_name": full_name,
+                    "url": html_url,
+                    "html_url": html_url,
+                    "description": desc,
+                    "language": primary_lang,
+                    "languages": mock_insp.get("languages") or (res.raw_metadata.get("languages") or {}),
+                    "stars": stars,
+                    "forks": forks,
+                    "watchers": watchers,
+                    "fork": classification_info["is_fork"],
+                    "archived": classification_info["is_archived"],
+                    "disabled": bool(repo_meta.get("disabled", False)),
+                    "pushed_at": pushed_at,
+                    "default_branch": repo_meta.get("default_branch", "main"),
+                    "topics": repo_meta.get("topics") or [],
+                    "owner": repo_meta.get("owner"),
+                    "classification": classification_info["classification"],
+                    "classification_details": classification_info,
+                    "status": "inspected",
+                    "inspection": res.raw_metadata,
+                }
+                return summary, res.signals, None
+
+            # Skip network inspection for low evidence (empty / disabled) repos
+            if classification_info["is_low_evidence"]:
+                summary = {
+                    "id": repo_meta.get("id"),
+                    "name": repo_name,
+                    "full_name": full_name,
+                    "url": html_url,
+                    "html_url": html_url,
+                    "description": desc,
+                    "language": primary_lang,
+                    "languages": {},
+                    "stars": stars,
+                    "forks": forks,
+                    "watchers": watchers,
+                    "fork": classification_info["is_fork"],
+                    "archived": classification_info["is_archived"],
+                    "disabled": bool(repo_meta.get("disabled", False)),
+                    "pushed_at": pushed_at,
+                    "default_branch": repo_meta.get("default_branch", "main"),
+                    "topics": repo_meta.get("topics") or [],
+                    "owner": repo_meta.get("owner"),
+                    "classification": classification_info["classification"],
+                    "classification_details": classification_info,
+                    "status": "skipped_low_evidence",
+                    "inspection": {},
+                }
+                return summary, [], None
+
+            if rate_limited:
+                summary = {
+                    "id": repo_meta.get("id"),
+                    "name": repo_name,
+                    "full_name": full_name,
+                    "url": html_url,
+                    "html_url": html_url,
+                    "description": desc,
+                    "language": primary_lang,
+                    "stars": stars,
+                    "fork": classification_info["is_fork"],
+                    "archived": classification_info["is_archived"],
+                    "pushed_at": pushed_at,
+                    "classification": classification_info["classification"],
+                    "classification_details": classification_info,
+                    "status": "skipped_rate_limited",
+                }
+                return summary, [], "Skipped due to API rate limit"
+
+            async with sem:
+                try:
+                    logger.debug(f"GitHub profile @{owner}: inspecting repository {owner}/{repo_name}")
+                    result = await self._inspect_repository_core(
+                        owner=owner,
+                        repo=repo_name,
                         verified_at=verified_at,
+                        client=client,
+                        repo_data=repo_meta,
                     )
-                if res.status_code in (403, 429):
-                    return VerificationResult(
-                        status="failed",
-                        message=f"GitHub API access rate limited or forbidden for user '{owner}'.",
-                        provider=self.provider_name,
-                        raw_metadata={"owner": owner, "http_status": res.status_code},
-                        verified_at=verified_at,
+                    if result.status == "verified":
+                        summary = {
+                            "id": repo_meta.get("id"),
+                            "name": repo_name,
+                            "full_name": full_name,
+                            "url": html_url,
+                            "html_url": html_url,
+                            "description": desc,
+                            "language": primary_lang,
+                            "languages": result.raw_metadata.get("languages") or {},
+                            "stars": stars,
+                            "forks": forks,
+                            "watchers": watchers,
+                            "fork": classification_info["is_fork"],
+                            "archived": classification_info["is_archived"],
+                            "disabled": bool(repo_meta.get("disabled", False)),
+                            "pushed_at": pushed_at,
+                            "default_branch": repo_meta.get("default_branch", "main"),
+                            "topics": repo_meta.get("topics") or [],
+                            "owner": repo_meta.get("owner"),
+                            "classification": classification_info["classification"],
+                            "classification_details": classification_info,
+                            "status": "inspected",
+                            "inspection": result.raw_metadata,
+                        }
+                        return summary, result.signals, None
+                    else:
+                        logger.debug(f"GitHub profile @{owner}: repository inspection failed for {owner}/{repo_name}: {result.message}")
+                        if "rate limit" in result.message.lower() or result.raw_metadata.get("http_status") in (403, 429):
+                            rate_limited = True
+                        summary = {
+                            "id": repo_meta.get("id"),
+                            "name": repo_name,
+                            "full_name": full_name,
+                            "url": html_url,
+                            "html_url": html_url,
+                            "description": desc,
+                            "language": primary_lang,
+                            "stars": stars,
+                            "fork": classification_info["is_fork"],
+                            "archived": classification_info["is_archived"],
+                            "pushed_at": pushed_at,
+                            "classification": classification_info["classification"],
+                            "classification_details": classification_info,
+                            "status": "failed",
+                            "error": result.message,
+                        }
+                        return summary, [], f"Inspection failed for '{owner}/{repo_name}': {result.message}"
+                except Exception as e:
+                    logger.debug(f"GitHub profile @{owner}: repository inspection exception for {owner}/{repo_name}: {e}")
+                    summary = {
+                        "id": repo_meta.get("id"),
+                        "name": repo_name,
+                        "full_name": full_name,
+                        "url": html_url,
+                        "html_url": html_url,
+                        "description": desc,
+                        "language": primary_lang,
+                        "classification": classification_info["classification"],
+                        "status": "failed",
+                        "error": str(e),
+                    }
+                    return summary, [], f"Inspection exception for '{owner}/{repo_name}': {str(e)[:100]}"
+
+        tasks = [_inspect_one(r) for r in repos_data]
+        results = await asyncio.gather(*tasks)
+
+        for summary, signals, warn in results:
+            inspected_repos.append(summary)
+            if warn:
+                warnings.append(warn)
+            if signals:
+                for sig in signals:
+                    raw_signals.append((sig, summary))
+
+        return inspected_repos, raw_signals, warnings
+
+    def _aggregate_profile_signals(
+        self,
+        owner: str,
+        raw_signals: List[Tuple[ExtractedSignal, Dict[str, Any]]],
+        verified_at: datetime,
+    ) -> List[ExtractedSignal]:
+        """
+        Aggregate and deduplicate signals across all repositories on a profile.
+        Preserves:
+        - Canonical taxonomy skill
+        - Strongest demonstrated EvidenceDepth
+        - Ownership vs fork discount
+        - Recency and archival status
+        - Full provenance with supporting repositories list
+        """
+        if not raw_signals:
+            return []
+
+        # Group by canonical skill name
+        by_skill: Dict[str, List[Tuple[ExtractedSignal, Dict[str, Any]]]] = {}
+        for sig, repo in raw_signals:
+            canonical = normalize_skill(sig.skill) or sig.skill
+            by_skill.setdefault(canonical, []).append((sig, repo))
+
+        aggregated: List[ExtractedSignal] = []
+
+        for skill, items in by_skill.items():
+            # Deduplicate by repository: keep strongest signal per repo
+            repo_map: Dict[str, Tuple[ExtractedSignal, Dict[str, Any]]] = {}
+            for s, r in items:
+                r_key = r.get("full_name") or r.get("name") or "unknown"
+                if r_key not in repo_map:
+                    repo_map[r_key] = (s, r)
+                else:
+                    existing_s, _ = repo_map[r_key]
+                    if (s.depth, s.signal_strength) > (existing_s.depth, existing_s.signal_strength):
+                        repo_map[r_key] = (s, r)
+
+            unique_items = list(repo_map.values())
+            total_repos = len(unique_items)
+            if total_repos == 0:
+                continue
+
+            # Classify supporting repositories
+            owned_items = [
+                (s, r) for s, r in unique_items
+                if r.get("classification_details", {}).get("is_owned") or (not r.get("fork") and not r.get("is_fork"))
+            ]
+            fork_items = [
+                (s, r) for s, r in unique_items
+                if r.get("fork") or r.get("is_fork") or r.get("classification") == "fork"
+            ]
+            archived_items = [
+                (s, r) for s, r in unique_items
+                if r.get("archived") or r.get("is_archived") or r.get("classification") == "archived"
+            ]
+            active_owned = [
+                (s, r) for s, r in owned_items
+                if not (r.get("archived") or r.get("is_archived"))
+            ]
+
+            # Determine depth and strength
+            if active_owned:
+                best_sig, _ = max(active_owned, key=lambda x: (x[0].depth, x[0].signal_strength))
+                final_depth = best_sig.depth
+                base_strength = best_sig.signal_strength
+                impl_count = sum(1 for s, _ in active_owned if s.depth >= EvidenceDepth.LEVEL_3_IMPLEMENTATION)
+                if impl_count >= 2 and final_depth == EvidenceDepth.LEVEL_3_IMPLEMENTATION:
+                    final_strength = min(0.82, round(base_strength + 0.03 * min(impl_count - 1, 3), 2))
+                else:
+                    final_strength = base_strength
+            elif owned_items:
+                # All owned repos are archived: preserve historical evidence with archival discount
+                best_sig, _ = max(owned_items, key=lambda x: (x[0].depth, x[0].signal_strength))
+                final_depth = min(best_sig.depth, EvidenceDepth.LEVEL_3_IMPLEMENTATION)
+                final_strength = round(min(0.70, best_sig.signal_strength * 0.90), 2)
+            else:
+                # Only forks exist: strictly enforce fork discount
+                best_sig, _ = max(fork_items, key=lambda x: (x[0].depth, x[0].signal_strength))
+                final_depth = min(best_sig.depth, EvidenceDepth.LEVEL_2_CONFIG)
+                final_strength = round(min(0.55, best_sig.signal_strength), 2)
+
+            # Build provenance repository list
+            provenance_repos = [
+                {
+                    "name": r.get("name"),
+                    "full_name": r.get("full_name") or f"{owner}/{r.get('name')}",
+                    "url": r.get("url") or r.get("html_url") or f"https://github.com/{owner}/{r.get('name')}",
+                    "fork": bool(r.get("fork") or r.get("is_fork")),
+                    "archived": bool(r.get("archived") or r.get("is_archived")),
+                    "classification": r.get("classification", "owned_active"),
+                    "depth": s.depth,
+                    "signal_strength": s.signal_strength,
+                }
+                for s, r in unique_items
+            ]
+
+            # Build evidence explanation with provenance
+            names = [r.get("name") for _, r in unique_items if r.get("name")]
+            sample_names = ", ".join(names[:3])
+            if len(names) > 3:
+                sample_names += f" and {len(names) - 3} other(s)"
+
+            if active_owned:
+                if total_repos == 1:
+                    reason = f"{skill} demonstrated in owned public repository '{names[0]}'."
+                else:
+                    fork_note = f", {len(fork_items)} forked" if fork_items else ""
+                    arch_note = f", {len(archived_items)} archived" if archived_items else ""
+                    reason = (
+                        f"{skill} demonstrated across {total_repos} public repositories "
+                        f"({len(owned_items)} owned{fork_note}{arch_note}), including implementation evidence (e.g., {sample_names})."
                     )
+            elif owned_items:
+                reason = (
+                    f"[Archived Repositories] Historical evidence: {skill} demonstrated across "
+                    f"{total_repos} archived repositories (e.g., {sample_names})."
+                )
+            else:
+                reason = (
+                    f"[Forked Repositories] {skill} referenced across "
+                    f"{total_repos} forked repositories (e.g., {sample_names})."
+                )
 
-                u_data = res.json()
-                public_repos = u_data.get("public_repos", 0)
+            metadata: Dict[str, Any] = {
+                "owner": owner,
+                "repo_count": total_repos,
+                "owned_count": len(owned_items),
+                "fork_count": len(fork_items),
+                "archived_count": len(archived_items),
+                "evidence_depth": final_depth,
+                "repositories": provenance_repos,
+            }
+            if not owned_items:
+                metadata["is_fork"] = True
+            if not active_owned and owned_items:
+                metadata["archived"] = True
+                metadata["historical_only"] = True
 
-                # Fetch up to 5 recent public repos
-                repos_res = await client.get(f"{profile_url}/repos?sort=updated&per_page=5", headers=headers)
-                repo_list = repos_res.json() if repos_res.status_code == 200 and isinstance(repos_res.json(), list) else []
+            aggregated.append(
+                ExtractedSignal(
+                    skill=skill,
+                    signal_strength=final_strength,
+                    depth=final_depth,
+                    reason=reason,
+                    source_reliability=GITHUB_RELIABILITY,
+                    metadata=metadata,
+                )
+            )
 
-                # Accumulate languages across repos
-                all_langs = set()
-                repo_names = []
-                for r in repo_list:
-                    rname = r.get("name")
-                    if rname:
-                        repo_names.append(rname)
-                    lang = r.get("language")
-                    if lang:
-                        all_langs.add(lang)
+        # Sort by depth and signal_strength descending
+        aggregated.sort(key=lambda s: (s.depth, s.signal_strength), reverse=True)
+        return aggregated
 
-                if public_repos == 0:
+    async def _inspect_profile(
+        self,
+        owner: str,
+        verified_at: datetime,
+        evidence: Optional[dict] = None,
+    ) -> VerificationResult:
+        """
+        Inspect all public repositories for a GitHub profile:
+        1. Fetch all repositories page-by-page (no arbitrary 5-repo limit)
+        2. Collect metadata and classify each repository
+        3. Inspect public repositories with bounded concurrency using a shared HTTP client
+        4. Aggregate signals across repositories without duplicate skill inflation
+        5. Return structured verification result with complete profile and repository provenance
+        """
+        headers = _get_github_headers()
+        profile_url = f"https://api.github.com/users/{owner}"
+        all_warnings: List[str] = []
+
+        mock_repos = None
+        if evidence and isinstance(evidence, dict):
+            mock_repos = evidence.get("mock_profile_repos") or evidence.get("mock_repos")
+
+        try:
+            async with httpx.AsyncClient(timeout=10.0) as client:
+                public_repos_count = 0
+
+                if mock_repos is not None:
+                    all_repos = list(mock_repos)
+                    public_repos_count = len(all_repos)
+                    logger.debug(f"GitHub profile @{owner}: loaded {len(all_repos)} repositories from mock evidence")
+                else:
+                    # Verify user existence via /users/{owner}
+                    res = await client.get(profile_url, headers=headers)
+                    if res.status_code == 404:
+                        return VerificationResult(
+                            status="failed",
+                            message=f"GitHub user '{owner}' does not exist.",
+                            provider=self.provider_name,
+                            raw_metadata={"owner": owner, "http_status": 404},
+                            verified_at=verified_at,
+                        )
+                    if res.status_code in (403, 429):
+                        return VerificationResult(
+                            status="failed",
+                            message=f"GitHub API access rate limited or forbidden for user '{owner}'.",
+                            provider=self.provider_name,
+                            raw_metadata={"owner": owner, "http_status": res.status_code},
+                            verified_at=verified_at,
+                        )
+
+                    u_data = res.json() if res.status_code == 200 and isinstance(res.json(), dict) else {}
+                    public_repos_count = u_data.get("public_repos", 0)
+
+                    # Fetch ALL public repositories page-by-page
+                    all_repos, fetch_meta = await self._fetch_profile_repositories(client, owner, headers=headers)
+                    all_warnings.extend(fetch_meta.get("warnings", []))
+
+                    if fetch_meta.get("rate_limited") and not all_repos:
+                        return VerificationResult(
+                            status="failed",
+                            message=f"GitHub API rate limited while fetching repositories for user '{owner}'.",
+                            provider=self.provider_name,
+                            raw_metadata={"owner": owner, "rate_limited": True},
+                            verified_at=verified_at,
+                            warnings=all_warnings,
+                        )
+
+                    # Calibrate public_repos_count
+                    public_repos_count = max(public_repos_count, len(all_repos))
+
+                # Handle zero repositories
+                if len(all_repos) == 0:
                     return VerificationResult(
                         status="verified",
                         message=f"GitHub profile '{owner}' verified, but has 0 public repositories to inspect.",
                         provider=self.provider_name,
                         signals=[],
-                        raw_metadata={"owner": owner, "public_repos": 0},
+                        raw_metadata={
+                            "username": owner,
+                            "profile_url": f"https://github.com/{owner}",
+                            "public_repositories": 0,
+                            "repositories_fetched": 0,
+                            "repositories_inspected": 0,
+                            "repositories_failed": 0,
+                            "repositories_skipped": 0,
+                            "owned_repositories": 0,
+                            "forked_repositories": 0,
+                            "archived_repositories": 0,
+                            "active_repositories": 0,
+                            "repositories": [],
+                            # Backward compatibility
+                            "owner": owner,
+                            "public_repos": 0,
+                            "repos": [],
+                        },
                         verified_at=verified_at,
+                        warnings=all_warnings,
                     )
 
-                # Extract signals for verified public repos languages
-                signals: List[ExtractedSignal] = []
-                for lang in all_langs:
-                    canonical = normalize_skill(lang)
-                    if canonical:
-                        signals.append(
-                            ExtractedSignal(
-                                skill=canonical,
-                                signal_strength=EvidenceDepth.get_strength_for_depth(EvidenceDepth.LEVEL_2_CONFIG),
-                                depth=EvidenceDepth.LEVEL_2_CONFIG,
-                                reason=f"Primary language across verified public repositories for user '{owner}'",
-                                source_reliability=GITHUB_RELIABILITY,
-                                metadata={"owner": owner, "language": lang},
-                            )
-                        )
+                # Inspect repositories concurrently using shared HTTP client
+                inspected_repos, raw_signals, inspect_warnings = await self._inspect_profile_repositories(
+                    client=client,
+                    owner=owner,
+                    repos_data=all_repos,
+                    verified_at=verified_at,
+                    concurrency=DEFAULT_PROFILE_CONCURRENCY,
+                )
+                all_warnings.extend(inspect_warnings)
+
+                # Aggregate signals across repositories
+                signals = self._aggregate_profile_signals(owner, raw_signals, verified_at)
+                logger.debug(f"GitHub profile @{owner}: aggregation complete ({len(signals)} skills extracted)")
+
+                # Compile statistics
+                repos_fetched = len(all_repos)
+                repos_inspected = sum(1 for r in inspected_repos if r.get("status") == "inspected")
+                repos_failed = sum(1 for r in inspected_repos if r.get("status") == "failed")
+                repos_skipped = sum(1 for r in inspected_repos if r.get("status") not in ("inspected", "failed"))
+                owned_repos = sum(1 for r in inspected_repos if r.get("classification_details", {}).get("is_owned"))
+                forked_repos = sum(1 for r in inspected_repos if r.get("fork"))
+                archived_repos = sum(1 for r in inspected_repos if r.get("archived"))
+                active_repos = sum(1 for r in inspected_repos if r.get("classification_details", {}).get("is_active"))
+
+                raw_metadata = {
+                    "username": owner,
+                    "profile_url": f"https://github.com/{owner}",
+                    "public_repositories": public_repos_count,
+                    "repositories_fetched": repos_fetched,
+                    "repositories_inspected": repos_inspected,
+                    "repositories_failed": repos_failed,
+                    "repositories_skipped": repos_skipped,
+                    "owned_repositories": owned_repos,
+                    "forked_repositories": forked_repos,
+                    "archived_repositories": archived_repos,
+                    "active_repositories": active_repos,
+                    "repositories": inspected_repos,
+                    # Backward compatibility
+                    "owner": owner,
+                    "public_repos": public_repos_count,
+                    "repos": [r["name"] for r in inspected_repos if r.get("name")],
+                }
+
+                detected_names = [s.skill for s in signals]
+                skills_preview = f" Detected {len(signals)} technical skill(s): {', '.join(detected_names[:5])}." if signals else " No technical skills detected."
+                message = (
+                    f"Verified GitHub profile '{owner}' with {public_repos_count} public repositories "
+                    f"({repos_inspected} inspected, {repos_failed} failed, {repos_skipped} skipped).{skills_preview}"
+                )
 
                 return VerificationResult(
                     status="verified",
-                    message=f"Verified GitHub profile '{owner}' with {public_repos} public repositories. Inspected: {', '.join(repo_names[:3])}.",
+                    message=message,
                     provider=self.provider_name,
                     signals=signals,
-                    raw_metadata={"owner": owner, "public_repos": public_repos, "repos": repo_names},
+                    raw_metadata=raw_metadata,
                     verified_at=verified_at,
+                    warnings=all_warnings,
                 )
 
         except httpx.RequestError as e:
@@ -771,11 +1508,16 @@ class GitHubProvider(EvidenceProvider):
         has_k8s_manifests = bool(inspection.get("has_k8s_manifests"))
         k8s_manifest_count = int(inspection.get("k8s_manifest_count") or 0)
         is_fork = bool(inspection.get("is_fork", False))
+        is_archived = bool(inspection.get("archived", False) or inspection.get("is_archived", False))
 
         if is_fork:
             warnings.append(
                 f"Repository '{repo_name}' is a fork of an upstream repository. "
                 f"Implementation signals are discounted to configuration/reference level."
+            )
+        if is_archived:
+            warnings.append(
+                f"Repository '{repo_name}' is archived. Technical evidence reflects historical implementation."
             )
 
         # Check recency / staleness
@@ -826,6 +1568,10 @@ class GitHubProvider(EvidenceProvider):
             metadata = meta or {}
             if is_fork:
                 metadata["is_fork"] = True
+            if is_archived:
+                metadata["archived"] = True
+                if not is_fork:
+                    final_reason = f"[Archived] {final_reason}"
             signals.append(
                 ExtractedSignal(
                     skill=canonical,
@@ -1207,11 +1953,12 @@ class GitHubProvider(EvidenceProvider):
             )
 
         # 10. Git Skill
-        _add_signal(
-            "Git",
-            EvidenceDepth.LEVEL_3_IMPLEMENTATION,
-            f"Verified public repository '{repo_name}' hosted on GitHub with commit history.",
-        )
+        if bool(languages) or bool(root_files) or bool(inspection.get("top_files")) or int(inspection.get("size") or 0) > 0:
+            _add_signal(
+                "Git",
+                EvidenceDepth.LEVEL_3_IMPLEMENTATION,
+                f"Verified public repository '{repo_name}' hosted on GitHub with commit history.",
+            )
 
         detected_names = [s.skill for s in signals]
         message = (
