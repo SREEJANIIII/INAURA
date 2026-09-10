@@ -63,3 +63,4 @@ create index if not exists idx_profiles_graduation_year on public.profiles (grad
 
 -- Comment for future expansion
 comment on table public.profiles is 'INAURA user onboarding — Phase 3. Future tables: evidence, skills, career_goals, skill_gaps, roadmaps, roadmap_progress, industry_requirements will reference user_id.';
+

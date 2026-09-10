@@ -137,7 +137,6 @@ def normalize_tag_display_name(tag: str) -> str:
     slug = normalize_tag_slug(tag)
     return TAG_DISPLAY_NAME_MAP.get(slug, tag.strip())
 
-
 @dataclass
 class LeetCodeTopicSummary:
     """Structured DSA topic coverage, breadth, and depth analysis."""
@@ -287,7 +286,7 @@ class LeetCodeProvider(EvidenceProvider):
         }
         """
         headers = {
-            "User-Agent": "INAURA-Evidence-Intelligence/1.0",
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
             "Content-Type": "application/json",
             "Referer": "https://leetcode.com",
         }
@@ -553,17 +552,17 @@ class LeetCodeProvider(EvidenceProvider):
             }
 
         # Calculate Topic Breadth Score with Concentration Penalty
-        raw_breadth = (len(covered_pillars) * 1.0 + len(moderate_pillars) * 0.5 + len(weak_pillars) * 0.2) / 9.0
+        raw_breadth = (len(covered_pillars) * 1.0 + len(moderate_pillars) * 0.55 + len(weak_pillars) * 0.20) / 9.0
 
         pillar_sum = sum(pillar_counts.values())
         if pillar_sum > 0:
             sorted_counts = sorted(pillar_counts.values(), reverse=True)
             top2_sum = sum(sorted_counts[:2])
             top2_share = top2_sum / float(pillar_sum)
-            # Penalize if top 2 pillars represent >75% of practice and student has <4 moderate/covered pillars
-            if top2_share > 0.75 and (len(covered_pillars) + len(moderate_pillars)) < 4:
-                penalty = min(0.60, (top2_share - 0.75) * 1.6)
-                breadth_score = max(0.08, raw_breadth * (1.0 - penalty))
+            # Penalize when student has 2 or 3 moderate/covered pillars but top 2 dominate >75%
+            if top2_share > 0.75 and 2 <= (len(covered_pillars) + len(moderate_pillars)) < 4:
+                penalty = min(0.50, (top2_share - 0.75) * 1.5)
+                breadth_score = raw_breadth * (1.0 - penalty)
             else:
                 breadth_score = raw_breadth
         else:
@@ -653,61 +652,52 @@ class LeetCodeProvider(EvidenceProvider):
                 verified_at=verified_at,
             )
 
-        # Calibrate DSA Signal Strength
+        # Calibrate DSA Signal Strength strictly by Topic Breadth across the 9 DSA pillars
         if topic_summary.status == "available":
-            # 1. Volume factor with diminishing returns:
-            volume_curve = 1.0 - math.exp(-total / 180.0)
-
-            # 2. Difficulty weighting index:
             diff_index = weighted_score / max(1.0, (total * WEIGHT_MEDIUM))
             diff_factor = max(0.40, min(1.30, diff_index))
 
-            # 3. Topic coverage composite:
-            composite = (
-                0.20 * volume_curve
-                + 0.25 * (volume_curve * diff_factor)
-                + 0.35 * topic_summary.breadth_score
-                + 0.20 * topic_summary.depth_score
+            # Pillar quality multiplier evaluates challenge difficulty & advanced topic depth
+            quality_mult = (
+                0.55
+                + 0.20 * (diff_factor / 1.0)
+                + 0.15 * topic_summary.depth_score
             )
 
-            # Map composite to base signal strength [0.35, 0.88]
-            base_strength = round(min(0.88, max(0.35, 0.25 + 0.65 * composite)), 2)
+            # DSA proficiency is strictly gated by topic breadth across the 9 canonical pillars:
+            base_strength = round(min(0.88, max(0.0, topic_summary.breadth_score * quality_mult)), 2)
 
             if base_strength >= 0.78:
                 depth = EvidenceDepth.LEVEL_4_SUBSTANTIAL
-            elif base_strength >= 0.65:
+            elif base_strength >= 0.55:
                 depth = EvidenceDepth.LEVEL_3_IMPLEMENTATION
-            elif base_strength >= 0.48:
+            elif base_strength >= 0.25:
                 depth = EvidenceDepth.LEVEL_2_CONFIG
             else:
                 depth = EvidenceDepth.LEVEL_1_MENTION
 
             dsa_reason = (
                 f"LeetCode profile '{username}' shows verified practice of {total} problems "
-                f"({easy} Easy, {med} Medium, {hard} Hard). Topic analysis shows breadth {int(topic_summary.breadth_score * 100)}% "
-                f"across {len(topic_summary.covered_pillars)} covered and {len(topic_summary.moderate_pillars)} moderate pillars; "
-                f"{len(topic_summary.missing_pillars)} pillars unpracticed."
+                f"({easy} Easy, {med} Medium, {hard} Hard). Topic analysis across the 9 DSA pillars: "
+                f"{len(topic_summary.covered_pillars)} covered, {len(topic_summary.moderate_pillars)} moderate, "
+                f"{len(topic_summary.missing_pillars)} unpracticed "
+                f"(Breadth {int(topic_summary.breadth_score * 100)}%, Depth {int(topic_summary.depth_score * 100)}%)."
             )
         else:
-            # Fallback: difficulty-weighted problem solving alone when topic data is unavailable
-            if weighted_score < 20:
-                depth = EvidenceDepth.LEVEL_1_MENTION
-                base_strength = 0.40 + (weighted_score / 20.0) * 0.10
-            elif weighted_score < 75:
+            # Fallback: Topic breakdown across the 9 pillars is unverified
+            # Since topic breadth cannot be confirmed, we MUST NOT assume multi-topic mastery.
+            # Base DSA strength is conservatively capped at 0.35.
+            base_strength = round(min(0.35, max(0.08, 0.08 + (weighted_score / 200.0) * 0.22)), 2)
+            if base_strength >= 0.25:
                 depth = EvidenceDepth.LEVEL_2_CONFIG
-                base_strength = 0.50 + ((weighted_score - 20) / 55.0) * 0.12
-            elif weighted_score < 200:
-                depth = EvidenceDepth.LEVEL_3_IMPLEMENTATION
-                base_strength = 0.65 + ((weighted_score - 75) / 125.0) * 0.12
             else:
-                depth = EvidenceDepth.LEVEL_4_SUBSTANTIAL
-                bonus = min(0.10, (weighted_score - 200) / 300.0 * 0.10)
-                base_strength = 0.78 + bonus
+                depth = EvidenceDepth.LEVEL_1_MENTION
 
-            base_strength = round(min(0.88, max(0.35, base_strength)), 2)
             dsa_reason = (
                 f"LeetCode profile '{username}' shows verified practice of {total} problems "
-                f"({easy} Easy, {med} Medium, {hard} Hard; difficulty-weighted index {weighted_score:.1f})."
+                f"({easy} Easy, {med} Medium, {hard} Hard; difficulty-weighted index {weighted_score:.1f}). "
+                f"Topic breakdown across the 9 DSA pillars is unverified; DSA proficiency is conservatively "
+                f"capped until topic data is synced."
             )
 
         signals: List[ExtractedSignal] = []
@@ -743,17 +733,28 @@ class LeetCodeProvider(EvidenceProvider):
             )
         )
 
-        # 2. Problem Solving
+        # 2. Problem Solving: Evaluated on problem solving stamina, challenge difficulty, and volume
         ps_canonical = normalize_skill("Problem Solving") or "Problem Solving"
-        ps_strength = round(min(0.85, base_strength * 0.95), 2)
+        ps_volume = 1.0 - math.exp(-total / 150.0)
+        ps_diff = max(0.40, min(1.25, weighted_score / max(1.0, (total * WEIGHT_MEDIUM))))
+        ps_strength = round(min(0.85, max(0.15, 0.18 + 0.65 * ps_volume * ps_diff)), 2)
+        if ps_strength >= 0.75:
+            ps_depth = EvidenceDepth.LEVEL_4_SUBSTANTIAL
+        elif ps_strength >= 0.55:
+            ps_depth = EvidenceDepth.LEVEL_3_IMPLEMENTATION
+        elif ps_strength >= 0.25:
+            ps_depth = EvidenceDepth.LEVEL_2_CONFIG
+        else:
+            ps_depth = EvidenceDepth.LEVEL_1_MENTION
+
         signals.append(
             ExtractedSignal(
                 skill=ps_canonical,
                 signal_strength=ps_strength,
-                depth=depth,
-                reason=f"Demonstrated algorithmic problem solving across {total} LeetCode challenges.",
+                depth=ps_depth,
+                reason=f"Demonstrated algorithmic problem solving across {total} LeetCode challenges (weighted index {weighted_score:.1f}).",
                 source_reliability=LEETCODE_RELIABILITY,
-                metadata={"total_solved": total},
+                metadata={"total_solved": total, "weighted_score": round(weighted_score, 1)},
             )
         )
 
