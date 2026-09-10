@@ -424,13 +424,15 @@ def test_verified_github_outweighs_linkedin_claim():
     gh_sig = next(s for s in docker_signals if s.get("source") == "github")
     li_sig = next(s for s in docker_signals if s.get("source") == "linkedin")
 
-    assert gh_sig["source_reliability"] == 0.70  # GitHub MEDIUM: below LC/CF/Kaggle 0.85, above LinkedIn 0.40
+    # GitHub MEDIUM (0.60 after the 2026-09 recalibration): below LeetCode/
+    # Codeforces/Kaggle (0.85) and INAURA assessment (0.95), above LinkedIn (0.40).
+    assert gh_sig["source_reliability"] == 0.60
     assert gh_sig["signal_strength"] >= 0.70
     assert li_sig["source_reliability"] == 0.40
     assert li_sig["signal_strength"] <= 0.35
 
     # Proficiency reflects weighted dominance of implementation evidence
-    # (GitHub MEDIUM 0.70 still dominates LinkedIn 0.40: 0.586 > LinkedIn-only 0.30)
+    # (GitHub MEDIUM 0.60 still dominates LinkedIn 0.40 vs LinkedIn-only 0.30)
     prof, _, _, _ = skill_engine.proficiency(docker_signals)
     assert prof > 0.55
 

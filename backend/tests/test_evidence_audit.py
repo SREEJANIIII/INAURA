@@ -390,7 +390,7 @@ def test_github_java_meaningful_implementation_produces_java_evidence():
     assert "Java" in skills
     assert skills["Java"].depth == EvidenceDepth.LEVEL_4_SUBSTANTIAL
     assert skills["Java"].signal_strength == pytest.approx(0.85)
-    assert skills["Java"].source_reliability == pytest.approx(0.70)
+    assert skills["Java"].source_reliability == pytest.approx(0.60)  # GitHub MEDIUM tier
     assert "Spring Boot" in skills  # canonical framework signal
 
     # End-to-end through the shared extractor: single GitHub source proficiency
@@ -406,7 +406,7 @@ def test_github_java_meaningful_implementation_produces_java_evidence():
     prof, _, cnt, _ = skill_engine.proficiency(java_sigs)
     assert cnt == 1
     assert prof == pytest.approx(0.85)  # real implementation, still below definitive-test levels
-    assert java_sigs[0]["source_reliability"] == pytest.approx(0.70)
+    assert java_sigs[0]["source_reliability"] == pytest.approx(0.60)  # GitHub MEDIUM tier
 
 
 def test_github_java_weak_footprint_does_not_overaward():
@@ -504,13 +504,21 @@ def test_github_java_manifest_without_sources_is_weak():
 
 
 def test_evidence_hierarchy_github_below_performance_sources():
-    """GitHub MEDIUM (0.70) < LeetCode/Codeforces/Kaggle HIGH (0.85); certs MEDIUM-LOW."""
+    """
+    GitHub MEDIUM (0.60) < LeetCode/Codeforces/Kaggle HIGH (0.85) < INAURA
+    assessment VERY HIGH (0.95); certifications sit below GitHub.
+
+    2026-09 recalibration: GitHub moved 0.70 -> 0.60 so repository evidence,
+    which shows technology exposure rather than validated personal ability,
+    cannot dominate proficiency on its own. All weights now come from the
+    central evidence_weights module.
+    """
     from app.services.evidence.github import GITHUB_RELIABILITY
     from app.services.evidence.leetcode import LEETCODE_RELIABILITY
     from app.services.evidence.codeforces import CODEFORCES_RELIABILITY
     from app.services.evidence.kaggle import KAGGLE_RELIABILITY
 
-    assert GITHUB_RELIABILITY == pytest.approx(0.70)
+    assert GITHUB_RELIABILITY == pytest.approx(0.60)
     assert LEETCODE_RELIABILITY == pytest.approx(0.85)
     assert CODEFORCES_RELIABILITY == pytest.approx(0.85)
     assert KAGGLE_RELIABILITY == pytest.approx(0.85)
@@ -524,6 +532,11 @@ def test_evidence_hierarchy_github_below_performance_sources():
 
     assert skill_engine.SOURCE_RELIABILITY["github"] == pytest.approx(se.SOURCE_RELIABILITY["github"])
     assert skill_engine.SOURCE_RELIABILITY["leetcode"] == pytest.approx(se.SOURCE_RELIABILITY["leetcode"])
+
+    # VERY HIGH tier: INAURA's own assessment outranks every artifact source.
+    assert se.SOURCE_RELIABILITY["assessment"] > se.SOURCE_RELIABILITY["leetcode"]
+    assert se.SOURCE_RELIABILITY["assessment"] > se.SOURCE_RELIABILITY["github"]
+    assert se.SOURCE_RELIABILITY["project"] < se.SOURCE_RELIABILITY["leetcode"]
 
 
 def test_canonical_skill_normalization_required_set():
@@ -676,7 +689,7 @@ def test_github_go_repo_with_gin_and_tests():
     assert "Testing" in by_skill  # handler_test.go
     prof, _, _, _ = skill_engine.proficiency([by_skill["Go"]])
     assert prof > 0
-    assert by_skill["Go"]["source_reliability"] == pytest.approx(0.70)
+    assert by_skill["Go"]["source_reliability"] == pytest.approx(0.60)  # GitHub MEDIUM tier
 
 
 def test_github_rust_repo_with_cargo():

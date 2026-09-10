@@ -1,7 +1,12 @@
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { Link } from "react-router-dom";
 import { getLatestAnalysis, getGaps, type AnalysisResult, type SkillGap } from "../services/analysis";
 import { listEvidence, type Evidence } from "../services/evidence";
+import {
+  getAvailableAssessments,
+  type AvailableAssessment,
+} from "../services/assessment";
+import AssessmentModal from "../components/assessment/AssessmentModal";
 import Button from "../components/ui/Button";
 import "./AnalysisResults.css";
 
@@ -9,8 +14,20 @@ export default function AnalysisResults() {
   const [analysis, setAnalysis] = useState<AnalysisResult | null>(null);
   const [gaps, setGaps] = useState<SkillGap[]>([]);
   const [evidence, setEvidence] = useState<Evidence[]>([]);
+  const [assessable, setAssessable] = useState<AvailableAssessment[]>([]);
+  const [activeAssessment, setActiveAssessment] = useState<AvailableAssessment | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+
+  const loadAssessments = useCallback(async () => {
+    try {
+      const data = await getAvailableAssessments();
+      setAssessable(data.available || []);
+    } catch {
+      // Assessment layer is optional — never block the analysis view.
+      setAssessable([]);
+    }
+  }, []);
 
   useEffect(() => {
     const load = async () => {
@@ -23,6 +40,7 @@ export default function AnalysisResults() {
         setAnalysis(a);
         setGaps(g);
         setEvidence(ev);
+        await loadAssessments();
       } catch (e) {
         const msg = e instanceof Error ? e.message : "Failed to load analysis";
         if (msg.includes("404") || msg.toLowerCase().includes("no analysis")) {
@@ -39,7 +57,23 @@ export default function AnalysisResults() {
       }
     };
     load();
-  }, []);
+  }, [loadAssessments]);
+
+  // After a graded assessment the backend recalculates the analysis, so pull
+  // the refreshed numbers back into the page.
+  const refreshAfterAssessment = useCallback(async () => {
+    try {
+      const [a, g] = await Promise.all([
+        getLatestAnalysis(),
+        getGaps().catch(() => [] as SkillGap[]),
+      ]);
+      setAnalysis(a);
+      setGaps(g);
+    } catch {
+      // keep the current view if the refresh fails
+    }
+    await loadAssessments();
+  }, [loadAssessments]);
 
   if (loading) {
     return (
@@ -98,6 +132,32 @@ export default function AnalysisResults() {
     if (score >= 10) return { label: "Medium", cls: "priority--medium" };
     if (score > 0) return { label: "Low", cls: "priority--low" };
     return { label: "Covered", cls: "priority--covered" };
+  };
+
+  // Assessment lookup by canonical/display skill name
+  const assessmentFor = (g: SkillGap): AvailableAssessment | undefined => {
+    const names = [g.skills?.display_name, g.skills?.canonical_name].filter(Boolean) as string[];
+    return assessable.find((a) =>
+      names.some((n) => n.toLowerCase() === a.skill.toLowerCase() || n.toLowerCase() === a.skill_key.toLowerCase())
+    );
+  };
+
+  const renderAssessmentAction = (g: SkillGap) => {
+    const item = assessmentFor(g);
+    if (!item) return null;
+    const last = item.last_assessment;
+    return (
+      <span style={{ display: "inline-flex", gap: 6, alignItems: "center" }}>
+        {last && (
+          <span className="results__assessed-badge" title={`INAURA assessment ${item.skill}`}>
+            Assessment {last.correct_count}/{last.question_count}
+          </span>
+        )}
+        <button className="results__verify-btn" onClick={() => setActiveAssessment(item)}>
+          {last ? "Re-verify" : "Verify this skill"}
+        </button>
+      </span>
+    );
   };
 
   const getGapTypeBadge = (type?: string) => {
@@ -269,11 +329,12 @@ export default function AnalysisResults() {
                         <strong style={{ fontSize: "1.05rem" }}>{displayName}</strong>
                         <span className="results__cat" style={{ marginLeft: 8 }}>{g.skills?.category || ""}</span>
                       </div>
-                      <div className="results__gap-tags" style={{ margin: 0 }}>
+                      <div className="results__gap-tags" style={{ margin: 0, display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
                         <span className={`gap-type-badge ${typeBadge.cls}`}>{typeBadge.label}</span>
                         <span className={`priority ${prio.cls}`}>
                           {prio.label} · {g.priority_score.toFixed(1)}
                         </span>
+                        {renderAssessmentAction(g)}
                       </div>
                     </div>
 
@@ -466,6 +527,13 @@ export default function AnalysisResults() {
         <section className="results__section">
           <h2>Skill Overview</h2>
           <p>Current vs required, gap, confidence, market demand, and priority — sorted by priority.</p>
+          <p style={{ fontSize: "0.82rem", color: "#64748b", marginTop: -6 }}>
+            Evidence reliability: INAURA assessment (direct validation) &gt; LeetCode/Codeforces/Kaggle
+            performance and verified coursework &gt; GitHub/project evidence and certifications &gt;
+            resume/LinkedIn. A repository shows that you worked with a technology; a passed assessment
+            shows demonstrated understanding, which is why verifying a skill raises its confidence the most.
+            <em> Prototype heuristic model — not a validated measurement of proficiency.</em>
+          </p>
 
           <div className="results__table-wrap">
             <table className="results__table">
@@ -479,6 +547,7 @@ export default function AnalysisResults() {
                   <th>Demand</th>
                   <th>Confidence</th>
                   <th>Priority</th>
+                  <th>Verify</th>
                 </tr>
               </thead>
               <tbody>
@@ -508,12 +577,13 @@ export default function AnalysisResults() {
                       <td>
                         <span className={`priority ${prio.cls}`}>{prio.label}</span>
                       </td>
+                      <td>{renderAssessmentAction(g) || <span style={{ color: "#94a3b8" }}>—</span>}</td>
                     </tr>
                   );
                 })}
                 {sortedGaps.length === 0 && (
                   <tr>
-                    <td colSpan={8} style={{ textAlign: "center", color: "#64748b", padding: 16 }}>
+                    <td colSpan={9} style={{ textAlign: "center", color: "#64748b", padding: 16 }}>
                       No gaps found — all required skills covered or no requirements for this role.
                     </td>
                   </tr>
@@ -537,6 +607,19 @@ export default function AnalysisResults() {
           </div>
         </section>
       </main>
+
+      {activeAssessment && (
+        <AssessmentModal
+          key={activeAssessment.skill}
+          skill={activeAssessment.skill}
+          evidenceProficiency={activeAssessment.proficiency}
+          evidenceConfidence={activeAssessment.confidence}
+          onClose={() => setActiveAssessment(null)}
+          onCompleted={() => {
+            void refreshAfterAssessment();
+          }}
+        />
+      )}
     </div>
   );
 }

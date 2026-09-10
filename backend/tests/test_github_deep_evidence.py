@@ -612,7 +612,7 @@ def test_repeated_evidence_inside_one_repository_does_not_inflate_proficiency():
     prof, weight, count, _ = skill_engine.proficiency([sig.to_dict()])
     assert count == 1
     assert weight == pytest.approx(GITHUB_RELIABILITY)
-    assert prof <= 0.85
+    assert prof <= 0.85 + 1e-9
 
 
 def test_same_skill_across_many_repositories_stays_bounded():
@@ -634,7 +634,7 @@ def test_same_skill_across_many_repositories_stays_bounded():
     assert python[0].metadata["repo_count"] == 12
     prof, _, count, _ = skill_engine.proficiency([python[0].to_dict()])
     assert count == 1
-    assert prof <= 0.85, "12 repositories must not push GitHub evidence to certainty"
+    assert prof <= 0.85 + 1e-9, "12 repositories must not push GitHub evidence to certainty"
 
 
 # ===========================================================================
@@ -642,8 +642,10 @@ def test_same_skill_across_many_repositories_stays_bounded():
 # ===========================================================================
 
 def test_github_reliability_ranks_below_performance_based_evidence():
-    assert GITHUB_RELIABILITY == pytest.approx(0.70)
+    # MEDIUM tier after the 2026-09 recalibration (was 0.70).
+    assert GITHUB_RELIABILITY == pytest.approx(0.60)
     assert se.SOURCE_RELIABILITY["github"] == pytest.approx(GITHUB_RELIABILITY)
+    assert se.SOURCE_RELIABILITY["assessment"] > se.SOURCE_RELIABILITY["github"]
     for stronger in ("leetcode", "codeforces", "kaggle", "syllabus", "coursework"):
         assert se.SOURCE_RELIABILITY[stronger] > se.SOURCE_RELIABILITY["github"]
     for weaker in ("certification", "resume", "linkedin", "self_declared"):
@@ -678,7 +680,7 @@ def test_deep_github_evidence_does_not_exceed_depth_strength_ceiling():
         assert sig.signal_strength <= 0.85
         assert sig.source_reliability == pytest.approx(GITHUB_RELIABILITY)
         prof, _, _, _ = skill_engine.proficiency([sig.to_dict()])
-        assert prof <= 0.85
+        assert prof <= 0.85 + 1e-9
 
 
 # ===========================================================================
@@ -896,7 +898,10 @@ def test_scoring_formulas_remain_unchanged():
         EvidenceDepth.LEVEL_3_IMPLEMENTATION: 0.75,
         EvidenceDepth.LEVEL_4_SUBSTANTIAL: 0.85,
     }
-    assert GITHUB_RELIABILITY == 0.70
+    # Reliability values are recalibrated in evidence_weights (GitHub 0.70 ->
+    # 0.60); the depth->strength map and the weighted-average formula itself
+    # are unchanged.
+    assert GITHUB_RELIABILITY == 0.60
 
     sigs = [
         {"signal_strength": 0.80, "source_reliability": 0.70},

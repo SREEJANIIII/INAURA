@@ -8,25 +8,13 @@ from .evidence.base import EvidenceDepth, VerificationStatus
 from .evidence.github import GitHubProvider, parse_github_url
 from .evidence.manager import evidence_manager, get_evidence_dedup_key
 
-# Configurable source reliability weights — heuristic prototype values
-# Hierarchy: performance-based (leetcode/codeforces/kaggle 0.85) and verified
-# coursework (0.80) > GitHub supporting evidence (0.70, MEDIUM) >
-# certifications (0.55, MEDIUM-LOW) > resume/linkedin/self-declared (LOW).
-SOURCE_RELIABILITY: Dict[str, float] = {
-    "github": 0.70,           # supporting repo evidence, not a definitive test
-    "project": 0.90,          # concrete project work
-    "leetcode": 0.85,         # verified coding assessment platform
-    "codeforces": 0.85,
-    "kaggle": 0.85,
-    "syllabus": 0.80,         # accredited coursework
-    "coursework": 0.80,
-    "project_doc": 0.75,      # technical project documentation
-    "certification": 0.55,    # industry certification (MEDIUM-LOW)
-    "certification_file": 0.55,
-    "resume": 0.50,           # self-reported resume document
-    "linkedin": 0.40,         # social profile
-    "self_declared": 0.30,    # unverified declaration
-}
+# Source reliability weights are centralized in evidence_weights (single
+# source of truth) and re-exported here for backward compatibility.
+# Hierarchy: INAURA assessment (0.95, VERY HIGH) > performance platforms
+# (0.85) and verified coursework (0.80, HIGH) > project/GitHub artifact
+# evidence (0.62/0.60) and certifications (0.55, MEDIUM) >
+# resume/LinkedIn/self-declared (LOW).
+from .evidence_weights import SOURCE_RELIABILITY, DEFAULT_RELIABILITY, reliability as _source_reliability
 
 # Calibrated signal strengths by depth
 SIGNAL_STRENGTH: Dict[str, float] = {
@@ -47,7 +35,7 @@ SIGNAL_STRENGTH: Dict[str, float] = {
 
 
 def _reliability(source_type: str) -> float:
-    return SOURCE_RELIABILITY.get(source_type, 0.50)
+    return _source_reliability(source_type)
 
 
 def _make_signal(
@@ -84,6 +72,11 @@ def _make_signal(
         "certification_id": certification_id,
         "metadata": metadata or {},
     }
+
+
+# Public alias: other services (e.g. the assessment service) build signals
+# through the same constructor so every signal keeps an identical contract.
+make_signal = _make_signal
 
 
 def _assess_desc_depth(desc_text: str) -> str:

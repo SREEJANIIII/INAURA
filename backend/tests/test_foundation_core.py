@@ -146,9 +146,11 @@ def test_evidence_strength_separate_from_source_reliability():
     }]
     signals = extractor.extract_signals([], projects, [])
     docker_sig = [s for s in signals if s["skill"] == "Docker"][0]
-    # Tech-only listing gives moderate/weak depth (0.30), while project source reliability is 0.90
+    # Tech-only listing gives moderate/weak depth (0.30), while the project
+    # source reliability weight is read from the central config (0.62 after the
+    # 2026-09 recalibration that moved artifact evidence into the MEDIUM tier).
     assert docker_sig["signal_strength"] == pytest.approx(0.30)
-    assert docker_sig["source_reliability"] == pytest.approx(0.90)
+    assert docker_sig["source_reliability"] == pytest.approx(extractor.SOURCE_RELIABILITY["project"])
     assert docker_sig["signal_strength"] != docker_sig["source_reliability"]
 
 
