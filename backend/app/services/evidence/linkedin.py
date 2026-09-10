@@ -3,10 +3,11 @@ from datetime import datetime, timezone
 
 from .base import EvidenceProvider, VerificationResult, ExtractedSignal, EvidenceDepth, VerificationStatus
 from .url_utils import validate_platform_url, extract_username_from_path, LINKEDIN_HOSTS
+from ..evidence_weights import reliability as source_reliability
 from ..skill_taxonomy import normalize_skill
 
 # LinkedIn claims are self-reported with low technical verification reliability
-LINKEDIN_RELIABILITY = 0.40
+LINKEDIN_RELIABILITY = source_reliability("linkedin")
 CLAIM_SIGNAL_STRENGTH = 0.30
 
 

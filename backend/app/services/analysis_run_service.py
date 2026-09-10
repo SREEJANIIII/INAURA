@@ -12,6 +12,8 @@ from .signal_extractor import extract_signals
 from .skill_taxonomy import normalize_skill, normalize_skill_slug, get_all_skills
 from .evidence.base import EVIDENCE_PIPELINE_VERSION
 from .evidence.manager import evidence_manager
+from .evidence_weights import ASSESSMENT_SOURCE
+from .assessment.service import load_assessment_signals
 
 TABLE_RESULTS = "analysis_results"
 TABLE_ASSESSMENTS = "skill_assessments"
@@ -100,6 +102,28 @@ def load_industry_requirements(target_role: str) -> List[dict]:
         if e.status_code == 503:
             raise HTTPException(status_code=503, detail="Industry knowledge not configured — run 003_industry_knowledge.sql")
         raise
+
+
+def _signal_source(signal: dict) -> str:
+    return str(signal.get("source") or signal.get("source_type") or "").strip().lower()
+
+
+def _signal_strength(signal: dict) -> float:
+    try:
+        return float(signal.get("signal_strength", signal.get("signal_value", 0.0)) or 0.0)
+    except (TypeError, ValueError):
+        return 0.0
+
+
+def _signal_spread(signals: List[dict]) -> float:
+    """
+    Disagreement between a skill's evidence signals (max - min strength).
+    Used to flag conflicting evidence worth resolving with an assessment.
+    """
+    if len(signals) < 2:
+        return 0.0
+    strengths = [_signal_strength(s) for s in signals]
+    return round(max(strengths) - min(strengths), 4)
 
 
 def evidence_refresh_state(ev: dict) -> Tuple[bool, bool]:
@@ -348,7 +372,21 @@ def calculate_assessments(
 
         prof, ev_weight, ev_count, _ = engine.proficiency(sigs)
         diversity = len(set(s.get("source", s.get("source_type", "")) for s in sigs))
-        conf, _, _ = engine.confidence(ev_weight, diversity)
+        # Confidence now also accounts for how directly the strongest evidence
+        # demonstrates the person's own ability (assessment > platform > artifact).
+        conf, _, _, validation = engine.confidence_from_signals(sigs)
+
+        # Separate the evidence-based estimate from the assessment-validated
+        # result so both can be shown and compared.
+        assessment_sigs = [s for s in sigs if _signal_source(s) == ASSESSMENT_SOURCE]
+        evidence_sigs = [s for s in sigs if _signal_source(s) != ASSESSMENT_SOURCE]
+        evidence_prof, _, evidence_count_only, _ = engine.proficiency(evidence_sigs)
+        assessment_score = (
+            max(float(s.get("signal_strength", s.get("signal_value", 0.0)) or 0.0) for s in assessment_sigs)
+            if assessment_sigs else None
+        )
+        assessment_meta = (assessment_sigs[0].get("metadata") or {}) if assessment_sigs else {}
+        signal_spread = _signal_spread(sigs)
 
         # Lookup role requirement if applicable
         req = requirements_map.get(skill_name)
@@ -439,6 +477,15 @@ def calculate_assessments(
             "quadrant_guidance": quadrant_guidance,
             "signals": sigs,
             "is_missing_evidence": False,
+            # Assessment layer (evidence estimate vs direct validation)
+            "evidence_proficiency": evidence_prof,
+            "evidence_signal_count": evidence_count_only,
+            "assessment_score": assessment_score,
+            "has_assessment": bool(assessment_sigs),
+            "assessment_attempt_id": assessment_meta.get("assessment_attempt_id"),
+            "assessment_version": assessment_meta.get("assessment_version"),
+            "validation_strength": validation,
+            "signal_spread": signal_spread,
         })
 
     # 2. Process required skills that have NO evidence (Missing Skills)
@@ -516,6 +563,14 @@ def calculate_assessments(
             "quadrant_guidance": quadrant_guidance,
             "signals": [],
             "is_missing_evidence": True,
+            "evidence_proficiency": 0.0,
+            "evidence_signal_count": 0,
+            "assessment_score": None,
+            "has_assessment": False,
+            "assessment_attempt_id": None,
+            "assessment_version": None,
+            "validation_strength": 0.0,
+            "signal_spread": 0.0,
         })
 
     return assessments
@@ -715,10 +770,29 @@ def persist_analysis(
             "evidence_count": a["evidence_count"],
             "explanation": a["explanation"],
         }
+        # Assessment layer columns (012 migration) — persisted separately so a
+        # pre-012 database still records the baseline row.
+        enriched = {
+            **row,
+            "evidence_proficiency": a.get("evidence_proficiency"),
+            "assessment_score": a.get("assessment_score"),
+            "validation_strength": a.get("validation_strength"),
+            "has_assessment": bool(a.get("has_assessment")),
+            "metadata": {
+                "signal_spread": a.get("signal_spread", 0.0),
+                "assessment_attempt_id": a.get("assessment_attempt_id"),
+                "assessment_version": a.get("assessment_version"),
+                "gap_type": a.get("gap_type"),
+                "quadrant": a.get("quadrant"),
+            },
+        }
         try:
-            c.table(TABLE_ASSESSMENTS).insert(row).execute()
+            c.table(TABLE_ASSESSMENTS).insert(enriched).execute()
         except Exception:
-            pass
+            try:
+                c.table(TABLE_ASSESSMENTS).insert(row).execute()
+            except Exception:
+                pass
 
     # 4. Persist skill_gaps
     for g in gaps:
@@ -858,6 +932,11 @@ async def run_analysis(user_id: str, target_role: str) -> dict:
     # 4. Extract raw evidence signals
     raw_signals = extract_skill_signals(evidence, projects, certs)
 
+    # 4b. Add INAURA assessment evidence (VERY HIGH reliability, direct
+    # validation). Missing or unavailable assessments simply contribute
+    # nothing — analysis never depends on them.
+    raw_signals.extend(load_assessment_signals(user_id))
+
     # 5. Normalize signals through canonical taxonomy
     signals = normalize_signals(raw_signals, c)
 
@@ -947,6 +1026,12 @@ async def run_analysis(user_id: str, target_role: str) -> dict:
                 "source_diversity": a["source_diversity"],
                 "explanation": a["explanation"],
                 "is_missing_evidence": a.get("is_missing_evidence", False),
+                # Assessment layer: evidence-only estimate vs direct validation
+                "evidence_proficiency": a.get("evidence_proficiency", 0.0),
+                "assessment_score": a.get("assessment_score"),
+                "has_assessment": bool(a.get("has_assessment")),
+                "validation_strength": a.get("validation_strength", 0.0),
+                "signal_spread": a.get("signal_spread", 0.0),
             }
             for a in sorted(assessments, key=lambda x: x["priority"], reverse=True)
         ],

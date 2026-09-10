@@ -650,7 +650,7 @@ def test_aggregation_deduplicates_same_skill_across_repositories():
         # Verify skill engine calculation: ONE GitHub signal weight (0.70)
         prof, weight, count, avg_val = skill_engine.proficiency([sig.to_dict()])
         assert weight == GITHUB_RELIABILITY
-        assert prof == 0.85
+        assert prof == pytest.approx(0.85)
 
     asyncio.run(_test())
 

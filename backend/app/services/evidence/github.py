@@ -9,6 +9,7 @@ import httpx
 
 from .base import EvidenceProvider, VerificationResult, ExtractedSignal, EvidenceDepth, VerificationStatus
 from .url_utils import validate_platform_url, GITHUB_HOSTS
+from ..evidence_weights import reliability as source_reliability
 from ..skill_taxonomy import (
     normalize_skill,
     normalize_skill_slug,
@@ -18,9 +19,11 @@ from ..skill_taxonomy import (
 logger = logging.getLogger(__name__)
 
 # GitHub is supporting evidence (MEDIUM), not a definitive skill test.
-# Performance-based sources (LeetCode/Codeforces/Kaggle 0.85) and verified
+# Repository contents prove technology exposure, not personal mastery, so the
+# INAURA assessment (0.95), performance platforms (0.85) and verified
 # coursework (0.80) outrank it; resume/LinkedIn (0.50/0.40) rank below.
-GITHUB_RELIABILITY = 0.70
+# Value is owned by services.evidence_weights (single source of truth).
+GITHUB_RELIABILITY = source_reliability("github")
 
 # Cap on extra raw manifest fetches per repository inspection (rate-limit safety).
 MAX_EXTRA_MANIFEST_FETCHES = 4

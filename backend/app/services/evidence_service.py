@@ -6,7 +6,7 @@ import uuid
 import re
 
 from ..core.supabase import get_supabase_client
-from .evidence.base import EVIDENCE_PIPELINE_VERSION
+from .evidence.base import EVIDENCE_PIPELINE_VERSION, VerificationStatus
 from .evidence.manager import evidence_manager
 from . import document_parser
 
@@ -167,6 +167,34 @@ async def verify_evidence_item(user_id: str, evidence_id: str, force_refresh: bo
 
     now_iso = (result.verified_at or datetime.now(timezone.utc)).isoformat()
     meta = ev.get("metadata") or {}
+    prior_signals = meta.get("verified_signals")
+    had_prior_success = bool(prior_signals) and (
+        meta.get("verification_status") in (VerificationStatus.VERIFIED, VerificationStatus.PARTIALLY_VERIFIED)
+        or ev.get("verification_status") in (VerificationStatus.VERIFIED, VerificationStatus.PARTIALLY_VERIFIED)
+    )
+
+    if result.status == VerificationStatus.FAILED and had_prior_success:
+        # A transient failure (rate limit, outage, network error) must not wipe
+        # evidence that was successfully inspected before. Keep the previous
+        # verification and record the failed attempt alongside it.
+        updated_meta = {
+            **meta,
+            "last_verification_error": result.message,
+            "last_verification_attempt_at": now_iso,
+        }
+        update_payload = {"metadata": updated_meta}
+        updated = update_evidence(user_id, evidence_id, update_payload)
+        return {
+            **updated,
+            "detected_skills": [
+                s.get("skill") or s.get("canonical_name", "") for s in prior_signals
+            ],
+            "facts": meta.get("facts") or [],
+            "warnings": (meta.get("warnings") or []) + [
+                f"Re-verification failed; retained the previous successful inspection. {result.message}"
+            ],
+        }
+
     updated_meta = {
         **meta,
         "verification_status": result.status,
@@ -180,6 +208,8 @@ async def verify_evidence_item(user_id: str, evidence_id: str, force_refresh: bo
         "facts": result.facts,
         "warnings": result.warnings,
     }
+    updated_meta.pop("last_verification_error", None)
+    updated_meta.pop("last_verification_attempt_at", None)
 
     update_payload = {
         "metadata": updated_meta,

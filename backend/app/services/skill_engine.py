@@ -1,39 +1,43 @@
 from typing import List, Dict, Tuple, Optional
 import math
 
+from .evidence_weights import (
+    SOURCE_RELIABILITY,
+    DEFAULT_RELIABILITY,
+    validation_strength as signals_validation_strength,
+)
+
 # Heuristic weights and calibration constants — prototype engine
 # ASSUMPTION DOCUMENTATION:
 # 1. Source Reliability (0.0 - 1.0): Weight reflecting institutional / platform credibility.
-#    Hierarchy: coding platforms (0.85) and verified coursework (0.80) carry higher
-#    credibility than GitHub supporting evidence (0.70, MEDIUM), which in turn
-#    outranks certifications (0.55, MEDIUM-LOW) and self-reported resume (0.50).
-SOURCE_RELIABILITY: Dict[str, float] = {
-    "github": 0.70,
-    "project": 0.90,
-    "leetcode": 0.85,
-    "codeforces": 0.85,
-    "kaggle": 0.85,
-    "syllabus": 0.80,
-    "coursework": 0.80,
-    "project_doc": 0.75,
-    "certification": 0.55,
-    "certification_file": 0.55,
-    "resume": 0.50,
-    "linkedin": 0.40,
-    "self_declared": 0.30,
-}
+#    The single source of truth now lives in evidence_weights.SOURCE_RELIABILITY
+#    (re-exported here for backward compatibility). Hierarchy: INAURA assessment
+#    (0.95) > coding platforms (0.85) and verified coursework (0.80) >
+#    project/GitHub artifact evidence (0.62/0.60) and certifications (0.55) >
+#    self-reported resume/LinkedIn (0.50/0.40).
 # 2. Confidence Calibration:
-#    Confidence evaluates trustworthiness of assessment based on evidence volume (55%) and source diversity (45%).
-#    Saturation points: 2.5 total reliability weight and 3 distinct source types achieve 100% confidence.
+#    Confidence evaluates trustworthiness of an estimate using evidence volume,
+#    source diversity, and — when supplied — how *directly* the strongest source
+#    demonstrates the person's own ability (see `confidence`).
+#    Saturation points: 2.5 total reliability weight and 3 distinct source types.
 # 3. Career Readiness:
 #    Readiness synthesizes skill proficiency alignment (45%), industry gap coverage (25%), and evidence confidence (30%).
 # NOTE: These values are heuristic estimates for prototype career guidance, not scientifically validated psychometrics.
 
-# Confidence model weights and saturation ceilings
+# Confidence model weights and saturation ceilings.
+# Two-term (legacy) form, used when no validation strength is supplied:
 CONFIDENCE_W_WEIGHT = 0.55
 CONFIDENCE_D_WEIGHT = 0.45
 CONFIDENCE_W_NORM = 2.5   # Volume saturation: sum of source reliabilities >= 2.5 reaches 1.0
 CONFIDENCE_D_NORM = 3.0   # Diversity saturation: >= 3 distinct source types reaches 1.0
+
+# Three-term form, used when the caller can supply validation strength
+# (how directly the evidence demonstrates the person's own current ability).
+# Same architecture — normalized components combined by fixed weights — with
+# volume and diversity re-scaled proportionally to make room for the new term.
+CONFIDENCE_VOL_WEIGHT = 0.40
+CONFIDENCE_DIV_WEIGHT = 0.25
+CONFIDENCE_VAL_WEIGHT = 0.35
 
 # Readiness component weighting
 READINESS_WEIGHTS: Dict[str, float] = {
@@ -76,7 +80,7 @@ def proficiency(signals: List[dict]) -> Tuple[float, float, int, float]:
         # Support both 'signal_strength' and 'signal_value'
         val = float(s.get("signal_strength", s.get("signal_value", 0.0)))
         # Support both 'source_reliability' and fallback lookup
-        rel = float(s.get("source_reliability", SOURCE_RELIABILITY.get(s.get("source", s.get("source_type", "")), 0.50)))
+        rel = float(s.get("source_reliability", SOURCE_RELIABILITY.get(s.get("source", s.get("source_type", "")), DEFAULT_RELIABILITY)))
         rel = clamp01(rel)
         val = clamp01(val)
 
@@ -92,12 +96,30 @@ def proficiency(signals: List[dict]) -> Tuple[float, float, int, float]:
     return clamp01(prof), total_weight, len(signals), clamp01(avg_sig)
 
 
-def confidence(evidence_weight: float, source_diversity: int) -> Tuple[float, float, float]:
+def confidence(
+    evidence_weight: float,
+    source_diversity: int,
+    validation_strength: Optional[float] = None,
+) -> Tuple[float, float, float]:
     """
-    Calculate confidence in the skill assessment.
-    Confidence answers: 'How certain is INAURA that this assessment is well-supported?'
+    Calculate confidence in the skill estimate.
+    Confidence answers: 'How certain is INAURA that this estimate is well-supported?'
 
-    Formula: Confidence = 0.55 × min(1, W / 2.5) + 0.45 × min(1, D / 3)
+    Two forms of the same architecture (normalized components × fixed weights):
+
+    1. Legacy two-term form (validation_strength omitted) — unchanged:
+         Confidence = 0.55 × min(1, W / 2.5) + 0.45 × min(1, D / 3)
+
+    2. Three-term form (validation_strength supplied):
+         Confidence = 0.40 × min(1, W / 2.5)
+                    + 0.25 × min(1, D / 3)
+                    + 0.35 × V
+       where V is how directly the strongest evidence demonstrates the person's
+       own current ability (evidence_weights.validation_strength). Artifact
+       evidence such as an inspected repository scores low on V, so a portfolio
+       of repositories can no longer produce high confidence on its own; a
+       graded INAURA assessment scores high on V and raises confidence sharply.
+
       W = evidence_weight (sum of source reliabilities)
       D = source_diversity (number of distinct source types)
 
@@ -109,8 +131,38 @@ def confidence(evidence_weight: float, source_diversity: int) -> Tuple[float, fl
 
     w_norm = min(1.0, max(0.0, evidence_weight / CONFIDENCE_W_NORM))
     d_norm = min(1.0, max(0.0, float(source_diversity) / CONFIDENCE_D_NORM))
-    conf = CONFIDENCE_W_WEIGHT * w_norm + CONFIDENCE_D_WEIGHT * d_norm
+
+    if validation_strength is None:
+        conf = CONFIDENCE_W_WEIGHT * w_norm + CONFIDENCE_D_WEIGHT * d_norm
+    else:
+        v_norm = clamp01(validation_strength)
+        conf = (
+            CONFIDENCE_VOL_WEIGHT * w_norm
+            + CONFIDENCE_DIV_WEIGHT * d_norm
+            + CONFIDENCE_VAL_WEIGHT * v_norm
+        )
     return clamp01(conf), w_norm, d_norm
+
+
+def confidence_from_signals(signals: List[dict]) -> Tuple[float, float, float, float]:
+    """
+    Confidence for a skill computed directly from its evidence signals.
+
+    Derives the three inputs of the extended confidence model from the signals
+    themselves: total reliability weight, distinct source types, and validation
+    strength (directness × signal strength of the strongest direct evidence).
+
+    Returns:
+      (confidence, evidence_weight, source_diversity, validation_strength)
+    """
+    if not signals:
+        return 0.0, 0.0, 0.0, 0.0
+
+    _, ev_weight, _, _ = proficiency(signals)
+    diversity = len({str(s.get("source", s.get("source_type", ""))) for s in signals})
+    val = signals_validation_strength(signals)
+    conf, _, _ = confidence(ev_weight, diversity, validation_strength=val)
+    return conf, ev_weight, float(diversity), val
 
 
 def gap(current_proficiency: float, required_level: float) -> float:

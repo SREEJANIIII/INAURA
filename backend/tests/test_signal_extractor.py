@@ -118,7 +118,9 @@ def test_tech_list_only_produces_030_not_090():
         # Tech only with generic desc should be 0.30 heuristic
         assert sigs[0]["signal_value"] == pytest.approx(0.30, abs=1e-6), f"{canon} tech-only expected 0.30, got {sigs[0]['signal_value']}"
         assert sigs[0]["signal_value"] != pytest.approx(0.90, abs=1e-6)
-        assert sigs[0]["source_reliability"] == 0.90  # weight remains 0.90
+        # Weight comes from the central config (project = MEDIUM tier after the
+        # 2026-09 recalibration); the signal value stays independent of it.
+        assert sigs[0]["source_reliability"] == pytest.approx(se.SOURCE_RELIABILITY["project"])
         prof, _, _, _ = skill_engine.proficiency(sigs)
         assert prof == pytest.approx(0.30, abs=1e-6)
 
@@ -178,7 +180,14 @@ def test_strong_concrete_produces_075():
         assert any(s["signal_value"] in [pytest.approx(0.65, abs=1e-6), pytest.approx(0.75, abs=1e-6)] for s in sigs)
 
 # 5. Source reliability remains 0.90 for project
-def test_source_reliability_remains_090_for_project():
+def test_source_reliability_for_project_is_medium_tier():
+    """
+    2026-09 recalibration: `project` moved 0.90 -> 0.62 (MEDIUM tier).
+    Self-described project work proves exposure, not validated proficiency, so
+    it must sit below performance platforms and INAURA assessment. The test
+    keeps its original intent (project signals carry a stable, centrally
+    configured reliability weight) but reads it from the single source of truth.
+    """
     projects = [{
         "id": "p1",
         "name": "Web App",
@@ -188,8 +197,10 @@ def test_source_reliability_remains_090_for_project():
         "github_url": None,
     }]
     signals = se.extract_signals([], projects, [])
-    assert signals[0]["source_reliability"] == 0.90
+    assert signals[0]["source_reliability"] == pytest.approx(se.SOURCE_RELIABILITY["project"])
     assert signals[0]["source_type"] == "project"
+    assert se.SOURCE_RELIABILITY["project"] < se.SOURCE_RELIABILITY["leetcode"]
+    assert se.SOURCE_RELIABILITY["project"] < se.SOURCE_RELIABILITY["assessment"]
 
 # 6. Source reliability does NOT equal signal_value (separation)
 def test_source_reliability_not_equal_signal():
@@ -203,12 +214,12 @@ def test_source_reliability_not_equal_signal():
     }]
     signals = se.extract_signals([], projects, [])
     s = signals[0]
-    # Tech-only signal 0.30 vs reliability 0.90 → clearly separate
+    # Tech-only signal 0.30 vs the project reliability weight → clearly separate
     assert s["signal_value"] == pytest.approx(0.30)
-    assert s["source_reliability"] == 0.90
+    assert s["source_reliability"] == pytest.approx(se.SOURCE_RELIABILITY["project"])
     assert s["signal_value"] != s["source_reliability"]
-    # Also direct check of constants
-    assert se.SOURCE_RELIABILITY["project"] == 0.90
+    # Also direct check of constants (weights centralized in evidence_weights)
+    assert se.SOURCE_RELIABILITY["project"] == pytest.approx(0.62)
     assert se.SIGNAL_STRENGTH["project_tech_only"] == 0.30
 
 # 7. Multiple evidence items use weighted-average

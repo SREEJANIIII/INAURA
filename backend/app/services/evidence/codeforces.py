@@ -4,9 +4,10 @@ from datetime import datetime, timezone
 
 from .base import EvidenceProvider, VerificationResult, ExtractedSignal, EvidenceDepth, VerificationStatus
 from .url_utils import validate_platform_url, extract_username_from_path, CODEFORCES_HOSTS
+from ..evidence_weights import reliability as source_reliability
 from ..skill_taxonomy import normalize_skill
 
-CODEFORCES_RELIABILITY = 0.85
+CODEFORCES_RELIABILITY = source_reliability("codeforces")
 
 # Codeforces Rating Benchmarks for algorithmic proficiency calibration
 RATING_NEWBIE = 1200

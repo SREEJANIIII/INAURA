@@ -7,9 +7,10 @@ from collections import defaultdict
 
 from .base import EvidenceProvider, VerificationResult, ExtractedSignal, EvidenceDepth, VerificationStatus
 from .url_utils import validate_platform_url, extract_username_from_path, LEETCODE_HOSTS
+from ..evidence_weights import reliability as source_reliability
 from ..skill_taxonomy import normalize_skill
 
-LEETCODE_RELIABILITY = 0.85
+LEETCODE_RELIABILITY = source_reliability("leetcode")
 
 # Documented heuristic weights for difficulty-calibrated problem solving
 WEIGHT_EASY = 0.15
