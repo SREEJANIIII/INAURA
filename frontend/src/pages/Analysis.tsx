@@ -11,6 +11,7 @@ import {
   listCerts,
   createCert,
   deleteCert,
+  verifyEvidence,
   type Evidence,
   type Project,
   type Certification,
@@ -49,6 +50,7 @@ export default function Analysis() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [saving, setSaving] = useState<string | null>(null);
+  const [verifyingId, setVerifyingId] = useState<string | null>(null);
 
   // Role & analysis state
   const [roles, setRoles] = useState<string[]>([]);
@@ -174,6 +176,19 @@ export default function Analysis() {
       setError(e instanceof Error ? e.message : "Failed to remove");
     } finally {
       setSaving(null);
+    }
+  };
+
+  const handleVerifyEvidence = async (id: string) => {
+    setVerifyingId(id);
+    setError(null);
+    try {
+      await verifyEvidence(id);
+      await loadAll();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Verification failed");
+    } finally {
+      setVerifyingId(null);
     }
   };
 
@@ -480,11 +495,35 @@ export default function Analysis() {
             {urlSources.map((s) => {
               const existing = findEvidence(s.type);
               const isSaving = saving === s.type;
+              const isVerifying = existing ? verifyingId === existing.id : false;
+              const vStatus = existing?.verification_status || "unverified";
+              const detectedSkills = (
+                (existing?.metadata as Record<string, unknown> | null)?.verified_signals as Array<{ skill?: string; canonical_name?: string }> | undefined
+              )?.map((sig) => sig.skill || sig.canonical_name).filter(Boolean) as string[] | undefined;
+
+              let badgeText = "Not added";
+              let badgeClass = "analysis__badge--muted";
+              if (existing) {
+                if (isVerifying) {
+                  badgeText = "Verifying…";
+                  badgeClass = "analysis__badge--verifying";
+                } else if (vStatus === "verified") {
+                  badgeText = "✓ Verified";
+                  badgeClass = "analysis__badge--verified";
+                } else if (vStatus === "failed") {
+                  badgeText = "⚠ Failed";
+                  badgeClass = "analysis__badge--failed";
+                } else {
+                  badgeText = "Unverified";
+                  badgeClass = "analysis__badge--unverified";
+                }
+              }
+
               return (
                 <div key={s.type} className="analysis__card">
                   <div className="analysis__card-head">
                     <h3>{s.label}</h3>
-                    {existing ? <span className="analysis__badge">Provided evidence</span> : <span className="analysis__badge analysis__badge--muted">Not added</span>}
+                    <span className={`analysis__badge ${badgeClass}`}>{badgeText}</span>
                   </div>
                   <p className="analysis__card-hint">{s.hint}</p>
                   <div className="analysis__field">
@@ -496,13 +535,50 @@ export default function Analysis() {
                       disabled={!!existing}
                     />
                   </div>
+                  {existing && (
+                    <div className="analysis__card-details">
+                      {detectedSkills && detectedSkills.length > 0 && (
+                        <p className="analysis__verification-details">
+                          <strong>Detected:</strong> {detectedSkills.join(", ")}
+                        </p>
+                      )}
+                      {Array.isArray((existing?.metadata as Record<string, unknown> | null)?.facts) &&
+                        ((existing?.metadata as Record<string, unknown>).facts as string[]).map((fact, idx) => (
+                          <p key={idx} className="analysis__verification-details">
+                            • {fact}
+                          </p>
+                        ))}
+                      {existing.verification_message && (
+                        <p className="analysis__verification-details">
+                          {existing.verification_message}
+                        </p>
+                      )}
+                      {s.type === "linkedin" && (
+                        <p className="analysis__verification-details" style={{ fontStyle: "italic", color: "var(--muted-2)" }}>
+                          Used only as supporting/self-reported evidence
+                        </p>
+                      )}
+                    </div>
+                  )}
                   <div className="analysis__card-actions">
                     {existing ? (
                       <>
                         <span className="analysis__saved">✓ {existing.source_url}</span>
-                        <Button variant="secondary" size="sm" onClick={() => handleRemoveUrl(s.type)} disabled={isSaving}>
-                          Remove
-                        </Button>
+                        <div style={{ display: "flex", gap: "6px" }}>
+                          {vStatus !== "verified" && (
+                            <Button
+                              variant="secondary"
+                              size="sm"
+                              onClick={() => handleVerifyEvidence(existing.id)}
+                              disabled={isVerifying || isSaving}
+                            >
+                              {isVerifying ? "Verifying…" : vStatus === "failed" ? "Retry" : "Verify"}
+                            </Button>
+                          )}
+                          <Button variant="ghost" size="sm" onClick={() => handleRemoveUrl(s.type)} disabled={isSaving || isVerifying}>
+                            Remove
+                          </Button>
+                        </div>
                       </>
                     ) : (
                       <Button variant="secondary" size="sm" onClick={() => handleSaveUrl(s.type)} disabled={isSaving}>

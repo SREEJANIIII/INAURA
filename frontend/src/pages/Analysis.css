@@ -153,6 +153,38 @@
   border-color: var(--line);
 }
 
+.analysis__badge--verified {
+  background: #ecfdf5;
+  color: #059669;
+  border-color: #a7f3d0;
+}
+
+.analysis__badge--failed {
+  background: #fef2f2;
+  color: #dc2626;
+  border-color: #fecaca;
+}
+
+.analysis__badge--unverified {
+  background: #fef9c3;
+  color: #854d0e;
+  border-color: #fef08a;
+}
+
+.analysis__badge--verifying {
+  background: #eff6ff;
+  color: #2563eb;
+  border-color: #bfdbfe;
+}
+
+.analysis__verification-details {
+  font-size: 0.8rem;
+  color: var(--muted);
+  margin-top: 6px;
+  line-height: 1.4;
+  word-break: break-word;
+}
+
 .analysis__card-hint {
   font-size: 0.84rem;
   color: var(--muted-2);
