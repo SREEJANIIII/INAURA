@@ -12,9 +12,12 @@ class Settings(BaseSettings):
     embedding_provider: str | None = None
     embedding_api_key: str | None = None
     embedding_model: str | None = None
+    embedding_dimension: int | None = None
     # Experimental AI review (isolated /ai-review-test feature only)
     google_api_key: str | None = None
     gemini_model: str = "gemini-2.5-flash"
+    # Gemini embeddings (preferred) — uses GOOGLE_API_KEY fallback if EMBEDDING_API_KEY not set
+    gemini_embedding_model: str = "gemini-embedding-001"
 
     class Config:
         env_file = ".env"

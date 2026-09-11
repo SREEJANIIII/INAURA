@@ -96,6 +96,8 @@ Traditional career platforms trust self-declared skills. INAURA does the opposit
 | Backend | FastAPI, Uvicorn[standard], Pydantic, pydantic-settings | `app/main.py`, `HTTPAuthorizationCredentials` |
 | DB/Auth/Storage | Supabase | `supabase` py client, `get_supabase_client()` (service_role) |
 | Evidence | `httpx`, `pypdf`, `python-docx`, `langchain-google-genai` (experimental ai_review_test) | GitHub tree+raw, LeetCode GraphQL, etc. |
+| Embeddings | `httpx` → `generativelanguage.googleapis.com` `gemini-embedding-001` 768-d | `embedding_service` (RETRIEVAL_QUERY/DOCUMENT), no LangChain retriever |
+| Retrieval | Supabase pgvector HNSW `vector(768)` + RPCs `match_industry_*` | `retrieval_service` vector → keyword fallback |
 | Config | `python-dotenv`, `pyjwt` | `core/config.py`, `core/supabase.py` |
 | Tests | `pytest`, `anyio`, `httpx` Mock | `backend/tests/` 19 files, `FakeGitHub` |
 
@@ -134,9 +136,12 @@ INAURA/
     │       └── assessment/ question_bank.py, service.py
     ├── supabase/
     │   ├── 001_create_profiles.sql … 015_github_repo_personalization.sql (see below)
-    │   └── 014_software_engineer_onet_esco.sql
-    ├── tests/              test_github_deep_evidence.py, test_github_profile.py, test_github_false_positive.py (14 fixtures A-M), test_provenance_personalization.py, test_deep_audit.py, …
-    ├── requirements.txt, .env.example, diag.py, live_verify.py
+│   ├── 014_software_engineer_onet_esco.sql
+│   └── 016_gemini_embeddings_768.sql
+├── scripts/
+│   └── reembed_industry_knowledge.py  # Gemini 768-d backfill (batched, --dry-run/--force)
+├── tests/              test_github_deep_evidence.py, test_github_profile.py, test_github_false_positive.py (14 fixtures A-M), test_provenance_personalization.py, test_deep_audit.py, test_embedding_gemini.py, …
+├── requirements.txt, .env.example, diag.py, live_verify.py
     └── venv/
 ```
 
@@ -162,9 +167,15 @@ SUPABASE_JWT_SECRET=<jwt_secret>
 FRONTEND_URL=http://localhost:5173
 # optional
 GITHUB_TOKEN=ghp_xxx
-# optional RAG
-EMBEDDING_PROVIDER=
-EMBEDDING_API_KEY=
+# RAG — Gemini embeddings (768-d) → pgvector → retrieval_service
+# If not set, retrieval falls back to deterministic keyword (app still starts)
+# Get GOOGLE_API_KEY at https://aistudio.google.com/apikey
+EMBEDDING_PROVIDER=gemini
+EMBEDDING_API_KEY=<Google API key — or leave empty to reuse GOOGLE_API_KEY>
+EMBEDDING_MODEL=gemini-embedding-001
+# Optional: GOOGLE_API_KEY also used for AI review (LangChain Gemini LLM)
+GOOGLE_API_KEY=<Google API key>
+GEMINI_MODEL=gemini-2.5-flash
 ```
 
 **`frontend/.env`**:
@@ -199,6 +210,7 @@ Apply in order in Supabase SQL Editor (idempotent `create table if not exists` +
 | `013_evidence_provenance_and_personalization.sql` | `user_skill_overrides` (downward zero only) |
 | `014_software_engineer_onet_esco.sql` | O*NET/ESCO Software Engineer requirements |
 | `015_github_repo_personalization.sql` | `user_github_repo_settings` (`repo_full_name` lower, `is_excluded`, `is_ai_assisted` default false) + trigger + `GRANT authenticated,service_role` |
+| `016_gemini_embeddings_768.sql` | Gemini `gemini-embedding-001` 768-d migration: `vector(768)`, HNSW/IVFFlat re-index, RPCs `match_industry_knowledge_chunks` + `match_industry_requirements` (768), clears stale 1536-d OpenAI vectors → re-embed via `scripts/reembed_industry_knowledge.py` |
 
 Check:
 ```sql
@@ -434,5 +446,12 @@ License: Proprietary – SREEJANIIII/INAURA (educational prototype, heuristic mo
 
 ---
 
-*INAURA `engine_version` shown in `AnalysisResults` header; `evidence_pipeline_version=3`; `benchmark: Industry Intelligence 2026.1 (ACM/IEEE, Stack Overflow, BLS, O*NET/ESCO)`.*
+*INAURA `engine_version` shown in `AnalysisResults` header; `evidence_pipeline_version=3`; `embedding: gemini-embedding-001 768-d (MRL outputDimensionality) → pgvector HNSW` ; `benchmark: Industry Intelligence 2026.1 (ACM/IEEE, Stack Overflow, BLS, O*NET/ESCO)`.*
 
+## Embeddings & RAG
+
+- **Model:** `gemini-embedding-001` (GA 2025-07-14, replaces deprecated `text-embedding-004`). `768-d` via `outputDimensionality=768` (Matryoshka). Default 3072 but 768 is recommended for storage/speed (MTEB 67.99 vs 68.17 at 1536, minimal loss).
+- **Dimension:** `768` (`embedding_service.DIMENSION`). Previously `1536` (`text-embedding-3-small`). Migration `016` alters `industry_requirements.embedding` and `industry_knowledge_chunks.embedding` to `vector(768)` and recreates HNSW indexes + RPCs.
+- **Existing vectors:** Must be regenerated — old 1536-d OpenAI vectors cannot be compared with new 768-d Gemini vectors (different space). `016` NULLs them; run `python scripts/reembed_industry_knowledge.py` (batched, `RETRIEVAL_DOCUMENT`/`RETRIEVAL_QUERY` taskTypes, fallback to keyword if not configured).
+- **Fallback:** If `EMBEDDING_PROVIDER`/`API_KEY` missing or API fails, `retrieval_service` falls back to deterministic keyword/role-requirements (no crash).
+- **Separation:** RAG `Gemini Embeddings → pgvector → retrieval_service` is distinct from AI review `LangChain → ChatGoogleGenerativeAI (gemini-2.5-flash)`.
