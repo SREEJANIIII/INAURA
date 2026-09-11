@@ -1,3 +1,4 @@
+
 from fastapi import HTTPException
 from supabase import Client
 from typing import Optional
