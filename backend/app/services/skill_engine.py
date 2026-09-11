@@ -2,6 +2,7 @@ from typing import List, Dict, Tuple, Optional
 import math
 
 from .evidence_weights import (
+    ASSESSMENT_SOURCE,
     SOURCE_RELIABILITY,
     DEFAULT_RELIABILITY,
     validation_strength as signals_validation_strength,
@@ -30,6 +31,22 @@ CONFIDENCE_W_WEIGHT = 0.55
 CONFIDENCE_D_WEIGHT = 0.45
 CONFIDENCE_W_NORM = 2.5   # Volume saturation: sum of source reliabilities >= 2.5 reaches 1.0
 CONFIDENCE_D_NORM = 3.0   # Diversity saturation: >= 3 distinct source types reaches 1.0
+
+# Unvalidated-evidence prior (shrinkage) — 2026-09-11.
+# While a skill has no direct validation (no INAURA assessment), the weighted
+# average is additionally shrunk toward a neutral "not yet validated" value by
+# adding ONE virtual observation. This is the same weighted-average formula
+# with one extra term, and it self-cancels the moment an assessment lands.
+#
+# It is deliberately ONE-SIDED: the prior may only pull an estimate DOWN, never
+# up, so an under-evidenced skill is never credited with proficiency it has not
+# demonstrated.
+UNVALIDATED_PRIOR_WEIGHT = 0.60   # w0: weight of the virtual observation
+UNVALIDATED_PRIOR_VALUE = 0.35    # p0: value of the virtual observation
+# Sources that count as direct enough to switch the prior off, in addition to
+# INAURA's own assessment. Empty by default: only an assessment validates.
+# Add e.g. {"leetcode", "codeforces", "kaggle"} to exempt performance platforms.
+PRIOR_EXEMPT_SOURCES: frozenset = frozenset()
 
 # Three-term form, used when the caller can supply validation strength
 # (how directly the evidence demonstrates the person's own current ability).
@@ -94,6 +111,49 @@ def proficiency(signals: List[dict]) -> Tuple[float, float, int, float]:
     prof = weighted_sum / total_weight
     avg_sig = raw_signal_sum / len(signals)
     return clamp01(prof), total_weight, len(signals), clamp01(avg_sig)
+
+
+def proficiency_with_prior(signals: List[dict]) -> Tuple[float, float, int, float, bool]:
+    """
+    Proficiency including the unvalidated-evidence prior.
+
+    Identical to `proficiency()` when the skill has direct validation. While it
+    has none, one virtual observation (UNVALIDATED_PRIOR_VALUE weighted by
+    UNVALIDATED_PRIOR_WEIGHT) joins the same weighted average:
+
+        prof = (Σ(vᵢ·rᵢ) + p₀·w₀) / (Σ(rᵢ) + w₀)
+
+    and the result is capped by the unshrunk value, so the prior can only lower
+    an estimate. Rationale: supporting artifact evidence (a repository, a
+    self-described project) shows that someone worked with a technology; until
+    something validates understanding, a high artifact signal should not read as
+    demonstrated mastery. A low signal is left exactly where the evidence puts
+    it — the prior never manufactures proficiency.
+
+    `evidence_weight` is returned unchanged (the real Σ(rᵢ)) so the prior never
+    inflates confidence.
+
+    Returns:
+      (proficiency, evidence_weight, evidence_count, average_unweighted_signal,
+       prior_applied)
+    """
+    raw_prof, total_weight, count, avg_sig = proficiency(signals)
+    if not signals or total_weight <= 0.0:
+        return raw_prof, total_weight, count, avg_sig, False
+
+    sources = {
+        str(s.get("source") or s.get("source_type") or "").strip().lower()
+        for s in signals
+    }
+    validated = ASSESSMENT_SOURCE in sources or bool(sources & PRIOR_EXEMPT_SOURCES)
+    if validated:
+        return raw_prof, total_weight, count, avg_sig, False
+
+    shrunk = (
+        (raw_prof * total_weight) + (UNVALIDATED_PRIOR_VALUE * UNVALIDATED_PRIOR_WEIGHT)
+    ) / (total_weight + UNVALIDATED_PRIOR_WEIGHT)
+    final = min(raw_prof, shrunk)
+    return clamp01(final), total_weight, count, avg_sig, final < raw_prof
 
 
 def confidence(

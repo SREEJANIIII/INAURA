@@ -21,7 +21,6 @@ import {
   getAnalysisState,
   setTargetRole,
   type AnalysisState,
-  type RetrieveResponse,
 } from "../services/industry";
 import { runAnalysis } from "../services/analysis";
 import { getProfile } from "../services/profile";
@@ -59,7 +58,6 @@ export default function Analysis() {
   const [customRole, setCustomRole] = useState<string>("");
   const [showCustom, setShowCustom] = useState(false);
   const [analysisState, setAnalysisState] = useState<AnalysisState | null>(null);
-  const [retrieval, setRetrieval] = useState<RetrieveResponse | null>(null);
   const [preparing, setPreparing] = useState(false);
   const [showConfirm, setShowConfirm] = useState(false);
 
@@ -109,7 +107,6 @@ export default function Analysis() {
         if (rs.includes(first)) setTargetRoleState(first);
       }
       if (prof?.career_interests) setCareerInterests(prof.career_interests);
-      if (st?.last_retrieval) setRetrieval(st.last_retrieval as RetrieveResponse);
 
       // Prefill url inputs
       const next: Record<UrlSource, string> = { github: "", leetcode: "", codeforces: "", kaggle: "", linkedin: "" };
@@ -360,15 +357,10 @@ export default function Analysis() {
       if (!analysisState || analysisState.target_role !== roleToUse) {
         await setTargetRole(roleToUse);
       }
-      // Phase 4C: run deterministic skill engine (not just RAG prepare)
-      const result = await runAnalysis(roleToUse);
-      // Show brief retrieval for continuity if returned, then navigate to results
-      const maybeRetrieval = (result as unknown as { retrieval?: RetrieveResponse }).retrieval;
-      if (maybeRetrieval) setRetrieval(maybeRetrieval);
+      // Run the authoritative deterministic analysis pipeline.
+      await runAnalysis(roleToUse);
       setShowConfirm(true);
-      // Navigate to results after short delay for UX
-      setTimeout(() => navigate("/analysis/results"), 1200);
-      await loadAll();
+      navigate("/analysis/results");
     } catch (e) {
       const msg = e instanceof Error ? e.message : "Failed to prepare analysis";
       if (msg.toLowerCase().includes("profile not found")) {
@@ -859,71 +851,45 @@ export default function Analysis() {
           <p className="analysis__coverage-hint">This is only a count — not a readiness percentage.</p>
         </section>
 
-        {/* Start Analysis — now with RAG */}
+        {/* Start Analysis */}
         <section className="analysis__start">
-          <Button variant="primary" size="lg" onClick={handleStartAnalysis} disabled={preparing}>
-            {preparing ? "Preparing your INAURA analysis..." : "Start INAURA Analysis"}
+          <Button
+            variant="primary"
+            size="lg"
+            onClick={handleStartAnalysis}
+            disabled={preparing}
+          >
+            {preparing ? "Running your INAURA analysis..." : "Start INAURA Analysis"}
           </Button>
-          <p className="analysis__start-hint">Validates profile, target role and at least one evidence source, then retrieves industry context. No proficiency yet.</p>
 
-          {preparing && <div style={{ marginTop: 12, color: "#64748b", fontSize: "0.9rem" }}>Preparing your INAURA analysis...</div>}
+          <p className="analysis__start-hint">
+            INAURA will validate your evidence, analyze your skills against the
+            selected industry requirements, identify gaps, and build your roadmap.
+          </p>
 
-          {showConfirm && retrieval && (
-            <div className="analysis__confirm" role="status">
-              <div style={{ fontSize: 28, marginBottom: 8 }}>✓</div>
-              <h3>Your evidence is ready.</h3>
-              <p>INAURA can now analyze your profile against industry requirements.</p>
-
-              <div className="analysis__retrieval">
-                <div className="analysis__retrieval-head">
-                  <strong>Target Role: {retrieval.role}</strong>
-                  <span>Query: {retrieval.query}</span>
-                </div>
-                <p style={{ fontSize: "0.84rem", color: "#64748b", marginTop: 6 }}>{retrieval.note}</p>
-                <div className="analysis__retrieval-list">
-                  {retrieval.items.map((it) => (
-                    <div key={it.id} className="analysis__retrieval-item">
-                      <div className="analysis__retrieval-title">
-                        <strong>{it.skill}</strong>
-                        <span className="analysis__retrieval-cat">{it.skill_category}</span>
-                      </div>
-                      <div className="analysis__retrieval-meta">
-                        <span>Importance: {it.importance.toFixed(2)}</span>
-                        <span>Demand: {it.demand.toFixed(2)}</span>
-                        <span>Interview: {it.interview_relevance.toFixed(2)}</span>
-                        <span className="analysis__retrieval-sim">Similarity: {it.similarity.toFixed(3)}</span>
-                      </div>
-                      {it.description && <p className="analysis__retrieval-desc">{it.description}</p>}
-                      <div style={{ fontSize: "0.78rem", color: "#64748b" }}>
-                        Source: {it.source}
-                        {it.source_url && (
-                          <>
-                            {" "}
-                            — <a href={it.source_url} target="_blank" rel="noreferrer">{it.source_url}</a>
-                          </>
-                        )}
-                        <span style={{ marginLeft: 8, color: "#94a3b8" }}>v: {it.version}</span>
-                      </div>
-                    </div>
-                  ))}
-                </div>
-              </div>
-
-              <div className="analysis__placeholder">Analysis engine — next phase will calculate gaps & priorities (still disabled)</div>
-              <div style={{ marginTop: 12 }}>
-                <Link to="/dashboard" className="analysis__link">
-                  Back to Dashboard →
-                </Link>
-              </div>
+          {preparing && (
+            <div
+              style={{
+                marginTop: 12,
+                color: "#64748b",
+                fontSize: "0.9rem",
+              }}
+            >
+              Analyzing your evidence and industry requirements...
             </div>
           )}
 
-          {showConfirm && !retrieval && (
+          {showConfirm && (
             <div className="analysis__confirm" role="status">
               <div style={{ fontSize: 28, marginBottom: 8 }}>✓</div>
-              <h3>Your evidence is ready.</h3>
-              <p>INAURA can now analyze your profile against industry requirements.</p>
-              <div className="analysis__placeholder">Analysis engine — coming next phase (RAG + scoring disabled)</div>
+              <h3>Analysis complete.</h3>
+              <p>
+                INAURA has analyzed your evidence against the selected industry
+                requirements.
+              </p>
+              <div className="analysis__placeholder">
+                Opening your skill assessment and roadmap…
+              </div>
             </div>
           )}
         </section>

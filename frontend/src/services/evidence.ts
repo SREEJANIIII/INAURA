@@ -25,6 +25,8 @@ export type Evidence = {
   verification_message?: string | null;
   verified_at?: string | null;
   provider?: string | null;
+  is_excluded?: boolean;
+  is_ai_assisted?: boolean;
   created_at: string;
   updated_at: string;
 };
@@ -41,6 +43,8 @@ export type Project = {
   technologies: string[];
   project_url: string | null;
   github_url: string | null;
+  is_excluded?: boolean;
+  is_ai_assisted?: boolean;
   created_at: string;
   updated_at: string;
 };
@@ -156,6 +160,66 @@ export function createCert(payload: {
 
 export function deleteCert(id: string) {
   return apiFetch<void>(`/evidence/certifications/${id}`, { method: "DELETE" });
+}
+
+export function setEvidenceExcluded(id: string, is_excluded: boolean) {
+  return apiFetch<Evidence>(`/evidence/${id}/exclude`, {
+    method: "POST",
+    body: JSON.stringify({ is_excluded }),
+  });
+}
+
+export function setEvidenceAiAssisted(id: string, is_ai_assisted: boolean) {
+  return apiFetch<Evidence>(`/evidence/${id}/ai-assisted`, {
+    method: "POST",
+    body: JSON.stringify({ is_ai_assisted }),
+  });
+}
+
+export function setProjectExcluded(id: string, is_excluded: boolean) {
+  return apiFetch<Project>(`/evidence/projects/${id}/exclude`, {
+    method: "POST",
+    body: JSON.stringify({ is_excluded }),
+  });
+}
+
+export function setProjectAiAssisted(id: string, is_ai_assisted: boolean) {
+  return apiFetch<Project>(`/evidence/projects/${id}/ai-assisted`, {
+    method: "POST",
+    body: JSON.stringify({ is_ai_assisted }),
+  });
+}
+
+export type GithubRepo = {
+  full_name: string;
+  name: string;
+  url: string | null;
+  html_url: string | null;
+  is_excluded: boolean;
+  is_ai_assisted: boolean;
+  classification?: string;
+  fork: boolean;
+  archived: boolean;
+  pushed_at?: string | null;
+  evidence_id: string;
+};
+
+export function listGithubRepos() {
+  return apiFetch<GithubRepo[]>("/evidence/github-repos");
+}
+
+export function setGithubRepoExcluded(repo_full_name: string, is_excluded: boolean) {
+  return apiFetch<GithubRepo>("/evidence/github-repos/exclude", {
+    method: "POST",
+    body: JSON.stringify({ repo_full_name, is_excluded }),
+  });
+}
+
+export function setGithubRepoAiAssisted(repo_full_name: string, is_ai_assisted: boolean) {
+  return apiFetch<GithubRepo>("/evidence/github-repos/ai-assisted", {
+    method: "POST",
+    body: JSON.stringify({ repo_full_name, is_ai_assisted }),
+  });
 }
 
 // Summary

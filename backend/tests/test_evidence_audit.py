@@ -390,7 +390,7 @@ def test_github_java_meaningful_implementation_produces_java_evidence():
     assert "Java" in skills
     assert skills["Java"].depth == EvidenceDepth.LEVEL_4_SUBSTANTIAL
     assert skills["Java"].signal_strength == pytest.approx(0.85)
-    assert skills["Java"].source_reliability == pytest.approx(0.60)  # GitHub MEDIUM tier
+    assert skills["Java"].source_reliability == pytest.approx(0.40)  # GitHub SUPPORTING tier
     assert "Spring Boot" in skills  # canonical framework signal
 
     # End-to-end through the shared extractor: single GitHub source proficiency
@@ -403,10 +403,19 @@ def test_github_java_meaningful_implementation_produces_java_evidence():
     signals = se.extract_signals(evidence, [], [])
     java_sigs = [s for s in signals if s["canonical_name"] == "Java"]
     assert len(java_sigs) == 1
+    # Raw weighted average of the GitHub signal alone.
     prof, _, cnt, _ = skill_engine.proficiency(java_sigs)
     assert cnt == 1
-    assert prof == pytest.approx(0.85)  # real implementation, still below definitive-test levels
-    assert java_sigs[0]["source_reliability"] == pytest.approx(0.60)  # GitHub MEDIUM tier
+    assert prof == pytest.approx(0.85)
+
+    # What the pipeline reports: while nothing has validated the skill, the
+    # unvalidated-evidence prior shrinks the artifact-only estimate
+    # (0.85*0.40 + 0.35*0.60) / (0.40 + 0.60) = 0.55.
+    shrunk, _, _, _, prior_applied = skill_engine.proficiency_with_prior(java_sigs)
+    assert shrunk == pytest.approx(0.55)
+    assert prior_applied is True
+    assert shrunk < prof
+    assert java_sigs[0]["source_reliability"] == pytest.approx(0.40)  # GitHub SUPPORTING tier
 
 
 def test_github_java_weak_footprint_does_not_overaward():
@@ -505,20 +514,20 @@ def test_github_java_manifest_without_sources_is_weak():
 
 def test_evidence_hierarchy_github_below_performance_sources():
     """
-    GitHub MEDIUM (0.60) < LeetCode/Codeforces/Kaggle HIGH (0.85) < INAURA
-    assessment VERY HIGH (0.95); certifications sit below GitHub.
+    GitHub SUPPORTING (0.40) < LeetCode/Codeforces/Kaggle HIGH (0.85) <
+    INAURA assessment VERY HIGH (0.95).
 
-    2026-09 recalibration: GitHub moved 0.70 -> 0.60 so repository evidence,
-    which shows technology exposure rather than validated personal ability,
-    cannot dominate proficiency on its own. All weights now come from the
-    central evidence_weights module.
+    Recalibration history: GitHub 0.70 -> 0.60 (2026-09) -> 0.40 (2026-09-11).
+    Repository evidence shows technology exposure rather than demonstrated
+    ability, so it is weighted as supporting evidence and cannot carry a skill
+    on its own. All weights come from the central evidence_weights module.
     """
     from app.services.evidence.github import GITHUB_RELIABILITY
     from app.services.evidence.leetcode import LEETCODE_RELIABILITY
     from app.services.evidence.codeforces import CODEFORCES_RELIABILITY
     from app.services.evidence.kaggle import KAGGLE_RELIABILITY
 
-    assert GITHUB_RELIABILITY == pytest.approx(0.60)
+    assert GITHUB_RELIABILITY == pytest.approx(0.40)
     assert LEETCODE_RELIABILITY == pytest.approx(0.85)
     assert CODEFORCES_RELIABILITY == pytest.approx(0.85)
     assert KAGGLE_RELIABILITY == pytest.approx(0.85)
@@ -527,7 +536,9 @@ def test_evidence_hierarchy_github_below_performance_sources():
     assert se.SOURCE_RELIABILITY["leetcode"] > se.SOURCE_RELIABILITY["github"]
     assert se.SOURCE_RELIABILITY["codeforces"] > se.SOURCE_RELIABILITY["github"]
     assert se.SOURCE_RELIABILITY["kaggle"] > se.SOURCE_RELIABILITY["github"]
-    assert se.SOURCE_RELIABILITY["github"] > se.SOURCE_RELIABILITY["certification"]
+    # GitHub is now supporting evidence: it ranks below credentials and
+    # coursework as well as below the performance platforms.
+    assert se.SOURCE_RELIABILITY["github"] < se.SOURCE_RELIABILITY["certification"]
     assert se.SOURCE_RELIABILITY["syllabus"] > se.SOURCE_RELIABILITY["github"]
 
     assert skill_engine.SOURCE_RELIABILITY["github"] == pytest.approx(se.SOURCE_RELIABILITY["github"])
@@ -537,6 +548,7 @@ def test_evidence_hierarchy_github_below_performance_sources():
     assert se.SOURCE_RELIABILITY["assessment"] > se.SOURCE_RELIABILITY["leetcode"]
     assert se.SOURCE_RELIABILITY["assessment"] > se.SOURCE_RELIABILITY["github"]
     assert se.SOURCE_RELIABILITY["project"] < se.SOURCE_RELIABILITY["leetcode"]
+    assert se.SOURCE_RELIABILITY["project"] == pytest.approx(0.40)
 
 
 def test_canonical_skill_normalization_required_set():
@@ -629,12 +641,17 @@ def test_verified_github_java_flows_into_assessment():
     )
     assessments = ars.calculate_assessments(grouped, req_map, None)
     java = next(a for a in assessments if a["canonical_name"] == "Java")
-    assert java["proficiency"] == pytest.approx(0.85)
+    # GitHub-only: the raw 0.85 signal is shrunk to 0.55 by the
+    # unvalidated-evidence prior, so an artifact estimate no longer meets a
+    # 0.75 role requirement on its own.
+    assert java["proficiency"] == pytest.approx(0.55)
+    assert java["unvalidated_prior_applied"] is True
+    assert java["evidence_state"] == "evidence_estimate"
     assert java["evidence_count"] == 1
-    assert java["gap"] == pytest.approx(0.0)
-    # Single GitHub source: moderate proficiency, low confidence (supporting evidence, not proof)
+    assert java["gap"] == pytest.approx(0.20)
+    # Single GitHub source: supporting evidence, not proof — low confidence.
     assert java["confidence"] < 0.50
-    assert java["quadrant"] == "unverified_claim"
+    assert java["quadrant"] == "exploratory"
 
 
 # ===========================================================================
@@ -689,7 +706,7 @@ def test_github_go_repo_with_gin_and_tests():
     assert "Testing" in by_skill  # handler_test.go
     prof, _, _, _ = skill_engine.proficiency([by_skill["Go"]])
     assert prof > 0
-    assert by_skill["Go"]["source_reliability"] == pytest.approx(0.60)  # GitHub MEDIUM tier
+    assert by_skill["Go"]["source_reliability"] == pytest.approx(0.40)  # GitHub SUPPORTING tier
 
 
 def test_github_rust_repo_with_cargo():

@@ -219,7 +219,7 @@ def test_source_reliability_not_equal_signal():
     assert s["source_reliability"] == pytest.approx(se.SOURCE_RELIABILITY["project"])
     assert s["signal_value"] != s["source_reliability"]
     # Also direct check of constants (weights centralized in evidence_weights)
-    assert se.SOURCE_RELIABILITY["project"] == pytest.approx(0.62)
+    assert se.SOURCE_RELIABILITY["project"] == pytest.approx(0.40)
     assert se.SIGNAL_STRENGTH["project_tech_only"] == 0.30
 
 # 7. Multiple evidence items use weighted-average

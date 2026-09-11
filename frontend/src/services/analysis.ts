@@ -62,12 +62,26 @@ export type SkillAssessment = {
   skills?: { canonical_name: string; display_name: string; category: string };
 };
 
+export type EvidenceSource = {
+  source_type: string;
+  source_id: string;
+  source_label: string;
+  strength: number;
+  reliability: number;
+  details: Record<string, unknown>;
+  explanation?: string;
+  is_ai_assisted?: boolean;
+  is_overridden?: boolean;
+};
+
 export type SkillGap = {
   id: string;
   user_id: string;
   analysis_result_id: string;
   skill_id: string;
   target_role: string;
+  canonical_name?: string;
+  skill?: string;
   required_level: number;
   current_proficiency: number;
   confidence: number;
@@ -88,6 +102,21 @@ export type SkillGap = {
   explanation: string;
   created_at: string;
   skills?: { canonical_name: string; display_name: string; category: string };
+  evidence_sources?: EvidenceSource[];
+  evidence_state?: string;
+  evidence_state_label?: string;
+  is_portfolio?: boolean;
+  is_overridden?: boolean;
+  has_assessment?: boolean;
+  assessment_score?: number | null;
+  evidence_count?: number;
+  source_diversity?: number;
+  requirement_source?: string;
+  requirement_source_url?: string;
+  requirement_source_version?: string;
+  requirement_source_reference?: string;
+  requirement_role_relevance?: string;
+  requirement_description?: string;
 };
 
 export function runAnalysis(target_role?: string) {
@@ -146,4 +175,19 @@ export function getSkills() {
 
 export function getGaps() {
   return apiFetch<SkillGap[]>("/analysis/gaps");
+}
+
+export function getSkillOverrides() {
+  return apiFetch<Array<{ skill_name: string; skill_key: string; is_zero_override: boolean; created_at: string }>>("/analysis/skill-overrides");
+}
+
+export function setSkillOverride(skill: string) {
+  return apiFetch<{ skill_name: string; skill_key: string; is_zero_override: boolean }>("/analysis/skill-overrides", {
+    method: "POST",
+    body: JSON.stringify({ skill }),
+  });
+}
+
+export function deleteSkillOverride(skillKey: string) {
+  return apiFetch<void>(`/analysis/skill-overrides/${encodeURIComponent(skillKey)}`, { method: "DELETE" });
 }

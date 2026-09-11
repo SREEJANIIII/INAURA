@@ -599,6 +599,440 @@ RAW_QUESTIONS: List[AssessmentQuestion] = [
         "b",
         "Pinning the specific failure keeps that defect from returning and documents the intended behaviour.",
     ),
+
+    # ------------------------------------------------------------------- Java
+    _mc(
+        "java-001", "Java", "medium", "concept",
+        "What does the `final` keyword mean when applied to a Java class?",
+        [
+            ("a", "The class cannot be subclassed"),
+            ("b", "All its methods are automatically synchronized"),
+            ("c", "It is stored in the constant pool"),
+            ("d", "It can only be instantiated once"),
+        ],
+        "a",
+        "`final` on a class prevents inheritance; `final` on a method prevents overriding, on a field prevents reassignment.",
+    ),
+    _mc(
+        "java-002", "Java", "medium", "debugging",
+        "A `NullPointerException` occurs at `user.getAddress().getCity()` though `user` is not null. Most likely cause?",
+        [
+            ("a", "The JVM failed to load the Address class"),
+            ("b", "`getAddress()` returned null, so dereferencing it fails"),
+            ("c", "The city field is not initialized in the database"),
+            ("d", "The garbage collector cleared the address"),
+        ],
+        "b",
+        "Chained dereferences fail when an intermediate call returns null; guard with null checks or Optional.",
+    ),
+    _mc(
+        "java-003", "Java", "medium", "application",
+        "Which collection gives O(1) average `contains` and no duplicates?",
+        [
+            ("a", "ArrayList"),
+            ("b", "LinkedList"),
+            ("c", "HashSet"),
+            ("d", "TreeMap"),
+        ],
+        "c",
+        "HashSet hashes elements for constant-time membership and enforces uniqueness; TreeMap is ordered and allows duplicates? No, but HashSet fits.",
+    ),
+    _mc(
+        "java-004", "Java", "easy", "concept",
+        "What is the purpose of the `try-with-resources` statement?",
+        [
+            ("a", "It retries the block automatically on failure"),
+            ("b", "It automatically closes resources that implement AutoCloseable"),
+            ("c", "It converts checked exceptions to unchecked"),
+            ("d", "It allocates resources on the heap"),
+        ],
+        "b",
+        "Try-with-resources guarantees `close()` is called on AutoCloseable resources, even when exceptions occur.",
+    ),
+    _mc(
+        "java-005", "Java", "medium", "decision",
+        "You need to share immutable configuration between threads without synchronization overhead. Which approach?",
+        [
+            ("a", "Make the field `volatile` and synchronize every access"),
+            ("b", "Publish an effectively immutable object safely (final field, safe publication)"),
+            ("c", "Store it in a synchronized Map only"),
+            ("d", "Use `ThreadLocal` for each thread"),
+        ],
+        "b",
+        "Safe publication of an immutable object via a final field avoids further synchronization after publication.",
+    ),
+
+    # -------------------------------------------------------------- JavaScript
+    _mc(
+        "js-001", "JavaScript", "medium", "concept",
+        "What is the result of `typeof null` in JavaScript?",
+        [
+            ("a", "\"null\""),
+            ("b", "\"object\""),
+            ("c", "\"undefined\""),
+            ("d", "\"number\""),
+        ],
+        "b",
+        "`typeof null` is \"object\" for historical reasons; use `=== null` to test for null.",
+    ),
+    _mc(
+        "js-002", "JavaScript", "medium", "debugging",
+        "This code logs `undefined`: `let x; console.log(x);` Why?",
+        [
+            ("a", "x is hoisted as `var`"),
+            ("b", "Declared but not assigned variables hold `undefined`"),
+            ("c", "The engine optimizes away the declaration"),
+            ("d", "It is a ReferenceError, not undefined"),
+        ],
+        "b",
+        "`let x;` creates a binding in the TDZ until initialization; before assignment it holds `undefined`.",
+    ),
+    _mc(
+        "js-003", "JavaScript", "medium", "application",
+        "How do you correctly compare two arrays for element equality `[1,2]`?",
+        [
+            ("a", "`a === b`"),
+            ("b", "`a == b`"),
+            ("c", "`JSON.stringify(a) === JSON.stringify(b)` or deep equality utility"),
+            ("d", "`a.toString() == b.toString()` always works for nested"),
+        ],
+        "c",
+        "Array equality is by reference, not value; deep value comparison requires iteration or serialization.",
+    ),
+    _mc(
+        "js-004", "JavaScript", "medium", "concept",
+        "What does `===` check that `==` does not?",
+        [
+            ("a", "It also checks that types are identical without coercion"),
+            ("b", "It checks object identity only"),
+            ("c", "It is faster but otherwise identical"),
+            ("d", "It compares memory addresses"),
+        ],
+        "a",
+        "`===` is strict equality without type coercion; `==` coerces types before comparison.",
+    ),
+    _mc(
+        "js-005", "JavaScript", "medium", "decision",
+        "You must debounce a search input that fires on every keystroke. Best approach?",
+        [
+            ("a", "Call the API on every input event"),
+            ("b", "Use `setTimeout` per keystroke without clearing"),
+            ("c", "Debounce: reset a timer on each keystroke, fire only after idle delay"),
+            ("d", "Use `setInterval` to poll"),
+        ],
+        "c",
+        "Debouncing coalesces rapid events into a single call after the user pauses.",
+    ),
+
+    # ------------------------------------------------------------------- OOP
+    _mc(
+        "oop-001", "OOP", "medium", "concept",
+        "Which principle is primarily illustrated by `interface` in Java/TypeScript?",
+        [
+            ("a", "Encapsulation"),
+            ("b", "Abstraction"),
+            ("c", "Inlining"),
+            ("d", "Hoisting"),
+        ],
+        "b",
+        "Interfaces define a contract without implementation, illustrating abstraction.",
+    ),
+    _mc(
+        "oop-002", "OOP", "medium", "application",
+        "A class `Duck` can substitute for `Bird` without breaking callers, but `Penguin extends Bird { fly() { throw } }` breaks. Which principle is violated?",
+        [
+            ("a", "Single Responsibility"),
+            ("b", "Liskov Substitution"),
+            ("c", "Dependency Inversion"),
+            ("d", "Open/Closed"),
+        ],
+        "b",
+        "Liskov Substitution requires subtypes to be substitutable for their base without altering correctness.",
+    ),
+    _mc(
+        "oop-003", "OOP", "medium", "concept",
+        "What is polymorphism via method overriding?",
+        [
+            ("a", "Same method name with different parameter lists in the same class"),
+            ("b", "A subclass providing its own implementation of a base-class method, selected at runtime"),
+            ("c", "A method that can take any type"),
+            ("d", "A method that is always static"),
+        ],
+        "b",
+        "Overriding enables runtime dispatch: the subclass's implementation is invoked through a base reference.",
+    ),
+    _mc(
+        "oop-004", "OOP", "easy", "concept",
+        "What does encapsulation aim to achieve?",
+        [
+            ("a", "Hide internal state and expose controlled access via methods"),
+            ("b", "Make all fields public for performance"),
+            ("c", "Remove the need for constructors"),
+            ("d", "Allow multiple inheritance"),
+        ],
+        "a",
+        "Encapsulation bundles data with methods and restricts direct external access.",
+    ),
+    _mc(
+        "oop-005", "OOP", "medium", "decision",
+        "You need to add new payment providers without modifying existing checkout code. Which pattern/ principle helps?",
+        [
+            ("a", "Copy-paste the checkout for each provider"),
+            ("b", "Strategy pattern / Open/Closed principle: depend on an abstraction, inject concrete provider"),
+            ("c", "Make checkout a singleton"),
+            ("d", "Use global functions"),
+        ],
+        "b",
+        "Strategy/Open-Closed lets you add new behaviors by adding new classes, not modifying existing ones.",
+    ),
+
+    # ----------------------------------------------------------- System Design
+    _mc(
+        "sd-001", "System Design", "medium", "concept",
+        "What does horizontal scaling mean?",
+        [
+            ("a", "Adding more CPU/RAM to a single server"),
+            ("b", "Adding more servers/instances to handle load"),
+            ("c", "Sharding the database only"),
+            ("d", "Compressing responses"),
+        ],
+        "b",
+        "Horizontal scaling adds nodes; vertical scaling adds resources to one node.",
+    ),
+    _mc(
+        "sd-002", "System Design", "medium", "decision",
+        "Your service sees many repeated reads of the same key with rare writes. Best initial improvement?",
+        [
+            ("a", "Add a cache (e.g., Redis) in front of the datastore"),
+            ("b", "Add more database replicas without caching"),
+            ("c", "Move the datastore to a larger machine only"),
+            ("d", "Remove indexes"),
+        ],
+        "a",
+        "Caching reduces read latency and load for read-heavy, cacheable workloads.",
+    ),
+    _mc(
+        "sd-003", "System Design", "medium", "concept",
+        "What trade-off does the CAP theorem describe?",
+        [
+            ("a", "You can have Consistency, Availability, and Partition tolerance all at once in a distributed system"),
+            ("b", "In the presence of a network partition, you must choose between Consistency and Availability"),
+            ("c", "Cache vs persistence"),
+            ("d", "Latency vs throughput only"),
+        ],
+        "b",
+        "CAP: under partition, a distributed datastore is CP or AP, not both.",
+    ),
+    _mc(
+        "sd-004", "System Design", "medium", "application",
+        "You need exactly-once processing from a queue. Which statement is true?",
+        [
+            ("a", "Exactly-once is trivial with any queue"),
+            ("b", "True exactly-once requires idempotent consumers and/or transactional outbox, not just queue ack"),
+            ("c", "At-most-once is the same as exactly-once"),
+            ("d", "Exactly-once is impossible, so do nothing"),
+        ],
+        "b",
+        "Exactly-once is an end-to-end property requiring idempotence and dedup, not just queue semantics.",
+    ),
+    _mc(
+        "sd-005", "System Design", "easy", "concept",
+        "What is a load balancer's primary role?",
+        [
+            ("a", "Distribute incoming requests across multiple backend instances"),
+            ("b", "Encrypt all traffic"),
+            ("c", "Store database backups"),
+            ("d", "Compile source code"),
+        ],
+        "a",
+        "A load balancer spreads load and provides health checking and failover.",
+    ),
+
+    # ------------------------------------------------------ Operating Systems
+    _mc(
+        "os-001", "Operating Systems", "medium", "concept",
+        "What is a race condition?",
+        [
+            ("a", "A process that always runs faster than others"),
+            ("b", "Behavior depends on the relative timing/order of threads accessing shared state"),
+            ("c", "A deadlock where no thread progresses"),
+            ("d", "A memory leak"),
+        ],
+        "b",
+        "Races arise when unsynchronized accesses to shared mutable state interleave non-deterministically.",
+    ),
+    _mc(
+        "os-002", "Operating Systems", "medium", "concept",
+        "What does `fork()` do on Unix?",
+        [
+            ("a", "Creates a new thread in the same process"),
+            ("b", "Creates a new process as a copy of the caller"),
+            ("c", "Terminates the current process"),
+            ("d", "Allocates shared memory"),
+        ],
+        "b",
+        "fork() duplicates the calling process into a parent and child.",
+    ),
+    _mc(
+        "os-003", "Operating Systems", "medium", "application",
+        "How do you avoid starvation when many threads contend for a lock?",
+        [
+            ("a", "Use a fair lock or queue and avoid holding locks while doing I/O"),
+            ("b", "Spin forever"),
+            ("c", "Use more threads"),
+            ("d", "Disable interrupts"),
+        ],
+        "a",
+        "Fair queuing and short critical sections reduce starvation.",
+    ),
+    _mc(
+        "os-004", "Operating Systems", "easy", "concept",
+        "What is virtual memory?",
+        [
+            ("a", "Memory that is always physically contiguous"),
+            ("b", "An abstraction giving each process its own address space backed by physical RAM/disk"),
+            ("c", "A type of cache"),
+            ("d", "Memory on the GPU"),
+        ],
+        "b",
+        "Virtual memory provides isolation and indirection via page tables.",
+    ),
+    _mc(
+        "os-005", "Operating Systems", "medium", "decision",
+        "A server handles many concurrent I/O-bound connections. Which model fits?",
+        [
+            ("a", "One thread per connection with blocking I/O only"),
+            ("b", "Event-driven non-blocking I/O / async multiplexing"),
+            ("c", "Busy-wait polling"),
+            ("d", "Single-threaded blocking without multiplexing"),
+        ],
+        "b",
+        "Event-driven async I/O scales for many idle connections.",
+    ),
+
+    # ------------------------------------------------------ Computer Networks
+    _mc(
+        "cn-001", "Computer Networks", "medium", "concept",
+        "What is the primary purpose of the TCP three-way handshake?",
+        [
+            ("a", "To encrypt the connection"),
+            ("b", "To establish a reliable connection with agreed sequence numbers"),
+            ("c", "To compress headers"),
+            ("d", "To choose the HTTP method"),
+        ],
+        "b",
+        "SYN, SYN-ACK, ACK synchronize sequence numbers and establish reliability.",
+    ),
+    _mc(
+        "cn-002", "Computer Networks", "medium", "concept",
+        "What does DNS do?",
+        [
+            ("a", "Routes packets between autonomous systems"),
+            ("b", "Translates human-readable domain names to IP addresses"),
+            ("c", "Encrypts HTTP bodies"),
+            ("d", "Manages CPU scheduling"),
+        ],
+        "b",
+        "DNS is the hierarchical naming system for IP resolution.",
+    ),
+    _mc(
+        "cn-003", "Computer Networks", "medium", "application",
+        "A `curl` request hangs before TLS handshake. Which is a likely cause?",
+        [
+            ("a", "The server returned 404"),
+            ("b", "A firewall or DNS failure prevents TCP connection establishment"),
+            ("c", "The JSON payload is invalid"),
+            ("d", "The CSS is missing"),
+        ],
+        "b",
+        "Hanging before TLS suggests TCP/DNS/connectivity, not HTTP layer.",
+    ),
+    _mc(
+        "cn-004", "Computer Networks", "easy", "concept",
+        "What is the difference between HTTP and HTTPS?",
+        [
+            ("a", "HTTPS adds TLS encryption over HTTP"),
+            ("b", "They are identical"),
+            ("c", "HTTP is faster because it encrypts"),
+            ("d", "HTTPS is only for email"),
+        ],
+        "a",
+        "HTTPS is HTTP over TLS, providing confidentiality and integrity.",
+    ),
+    _mc(
+        "cn-005", "Computer Networks", "medium", "decision",
+        "You need low-latency, loss-tolerant streaming (e.g., live video). Which transport?",
+        [
+            ("a", "TCP only"),
+            ("b", "UDP"),
+            ("c", "FTP"),
+            ("d", "SMTP"),
+        ],
+        "b",
+        "UDP is connectionless and loss-tolerant, suitable for real-time streaming where timeliness beats reliability.",
+    ),
+
+    # ------------------------------------------------------------------- DBMS
+    _mc(
+        "dbms-001", "DBMS", "medium", "concept",
+        "What does ACID stand for in database transactions?",
+        [
+            ("a", "Atomicity, Consistency, Isolation, Durability"),
+            ("b", "Availability, Consistency, Integrity, Durability"),
+            ("c", "Atomicity, Concurrency, Indexing, Distribution"),
+            ("d", "Access, Control, Integrity, Durability"),
+        ],
+        "a",
+        "ACID are the four guarantees of a correct transaction.",
+    ),
+    _mc(
+        "dbms-002", "DBMS", "medium", "application",
+        "Two transactions update the same row concurrently and one is lost. Which phenomenon?",
+        [
+            ("a", "Dirty read"),
+            ("b", "Lost update"),
+            ("c", "Phantom read"),
+            ("d", "Deadlock"),
+        ],
+        "b",
+        "Lost update occurs when concurrent writes overwrite without proper isolation/locking.",
+    ),
+    _mc(
+        "dbms-003", "DBMS", "medium", "concept",
+        "What is the purpose of an index?",
+        [
+            ("a", "To duplicate data for backup"),
+            ("b", "To speed up queries by providing a fast lookup structure at the cost of write overhead"),
+            ("c", "To encrypt data"),
+            ("d", "To compress data"),
+        ],
+        "b",
+        "Indexes accelerate reads but slow writes and use extra space.",
+    ),
+    _mc(
+        "dbms-004", "DBMS", "easy", "concept",
+        "Which normal form removes partial dependencies on a composite key?",
+        [
+            ("a", "1NF"),
+            ("b", "2NF"),
+            ("c", "3NF"),
+            ("d", "BCNF"),
+        ],
+        "b",
+        "2NF eliminates partial dependencies; 3NF removes transitive dependencies.",
+    ),
+    _mc(
+        "dbms-005", "DBMS", "medium", "decision",
+        "You need to enforce that every order references an existing customer. Which mechanism?",
+        [
+            ("a", "A foreign key constraint from orders.customer_id to customers.id"),
+            ("b", "A trigger that deletes customers"),
+            ("c", "An index on orders"),
+            ("d", "A view"),
+        ],
+        "a",
+        "Foreign keys enforce referential integrity.",
+    ),
 ]
 
 

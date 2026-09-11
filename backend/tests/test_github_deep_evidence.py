@@ -642,14 +642,17 @@ def test_same_skill_across_many_repositories_stays_bounded():
 # ===========================================================================
 
 def test_github_reliability_ranks_below_performance_based_evidence():
-    # MEDIUM tier after the 2026-09 recalibration (was 0.70).
-    assert GITHUB_RELIABILITY == pytest.approx(0.60)
+    # SUPPORTING tier after the 2026-09-11 recalibration (0.70 -> 0.60 -> 0.40).
+    assert GITHUB_RELIABILITY == pytest.approx(0.40)
     assert se.SOURCE_RELIABILITY["github"] == pytest.approx(GITHUB_RELIABILITY)
     assert se.SOURCE_RELIABILITY["assessment"] > se.SOURCE_RELIABILITY["github"]
     for stronger in ("leetcode", "codeforces", "kaggle", "syllabus", "coursework"):
         assert se.SOURCE_RELIABILITY[stronger] > se.SOURCE_RELIABILITY["github"]
-    for weaker in ("certification", "resume", "linkedin", "self_declared"):
-        assert se.SOURCE_RELIABILITY[weaker] < se.SOURCE_RELIABILITY["github"]
+    # GitHub is supporting evidence: after the 2026-09-11 recalibration only
+    # self-declared claims weigh less. Credentials and self-reported documents
+    # now weigh more than an artifact, by product decision.
+    assert se.SOURCE_RELIABILITY["self_declared"] < se.SOURCE_RELIABILITY["github"]
+    assert se.SOURCE_RELIABILITY["github"] == pytest.approx(0.40)
 
     github_sig = {"skill": "Python", "signal_strength": 0.85, "source": "github",
                   "source_reliability": GITHUB_RELIABILITY}
@@ -899,9 +902,9 @@ def test_scoring_formulas_remain_unchanged():
         EvidenceDepth.LEVEL_4_SUBSTANTIAL: 0.85,
     }
     # Reliability values are recalibrated in evidence_weights (GitHub 0.70 ->
-    # 0.60); the depth->strength map and the weighted-average formula itself
-    # are unchanged.
-    assert GITHUB_RELIABILITY == 0.60
+    # 0.60 -> 0.40); the depth->strength map and the weighted-average formula
+    # itself are unchanged.
+    assert GITHUB_RELIABILITY == 0.40
 
     sigs = [
         {"signal_strength": 0.80, "source_reliability": 0.70},

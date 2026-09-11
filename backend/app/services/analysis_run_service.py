@@ -115,6 +115,265 @@ def _signal_strength(signal: dict) -> float:
         return 0.0
 
 
+def evidence_state(evidence_count: int, has_assessment: bool) -> Tuple[str, str]:
+    """
+    Classify how a skill estimate is supported, so the UI never presents
+    artifact evidence as verified proficiency.
+
+      no_evidence        — nothing submitted for this skill
+      evidence_estimate  — supporting evidence only (GitHub/projects/documents):
+                           the skill may be present, but nothing has validated it
+      validated          — a completed INAURA assessment backs the estimate
+    """
+    if has_assessment:
+        return "validated", "Validated by assessment"
+    if int(evidence_count or 0) <= 0:
+        return "no_evidence", "No evidence"
+    return "evidence_estimate", "Evidence-based estimate"
+
+
+def evidence_state_extended(signals: List[dict], has_assessment: bool) -> Tuple[str, str]:
+    """
+    Extended evidence labeling for provenance UI.
+
+    Labels:
+      No evidence            — no active signals
+      Validated by assessment — assessment present (strongest)
+      Performance evidence    — only HIGH tier (leetcode/codeforces/kaggle/coursework)
+      Mixed evidence          — mix of HIGH + SUPPORTING/MEDIUM
+      Evidence-based estimate — only SUPPORTING/MEDIUM/LOW (e.g., GitHub/project/cert/resume)
+
+    Always returns (state_key, display_label).
+    """
+    if has_assessment:
+        return "validated", "Validated by assessment"
+    if not signals:
+        return "no_evidence", "No evidence"
+    # Determine tiers present
+    from .evidence_weights import RELIABILITY_TIERS
+    high_sources = set(RELIABILITY_TIERS.get("high", []))
+    supporting_medium = set(RELIABILITY_TIERS.get("supporting", []) + RELIABILITY_TIERS.get("medium", []))
+    low_sources = set(RELIABILITY_TIERS.get("low", []))
+
+    src_types = {str(s.get("source") or s.get("source_type") or "").lower() for s in signals}
+    has_high = bool(src_types & high_sources)
+    has_supp_med = bool(src_types & supporting_medium)
+    has_low = bool(src_types & low_sources)
+
+    if has_high and (has_supp_med or has_low):
+        return "mixed_evidence", "Mixed evidence"
+    if has_high:
+        return "performance_evidence", "Performance evidence"
+    # supporting/medium/low only -> evidence-based estimate (covers GitHub, project, cert, resume)
+    return "evidence_estimate", "Evidence-based estimate"
+
+
+def build_evidence_sources(signals: List[dict]) -> List[dict]:
+    """
+    Structured provenance for a skill's signals.
+    Each entry: source_type, source_id, source_label, strength, reliability, details
+    For GitHub, preserves all contributing repositories where available.
+    """
+    sources = []
+    for s in signals:
+        src_type = str(s.get("source") or s.get("source_type") or "").lower()
+        meta = s.get("metadata") or {}
+        label = src_type
+        details: Dict[str, Any] = {}
+        source_url = meta.get("source_url") or s.get("source_url") or ""
+        if src_type == "github":
+            repo = meta.get("repo") or meta.get("full_name") or meta.get("project_name") or ""
+            if not repo and s.get("evidence_id"):
+                repo = f"evidence {str(s.get('evidence_id'))[:8]}"
+            if meta.get("repo_count"):
+                label = f"GitHub \u00b7 {meta.get('repo_count')} repos"
+            elif repo:
+                label = f"GitHub \u00b7 {repo}"
+            else:
+                label = "GitHub"
+            # Preserve all repositories if available
+            details = {k: v for k, v in meta.items() if k in ("project_name", "repo_count", "owned_count", "fork_count", "evidence_depth", "evidence_kinds", "languages", "inspection", "repositories", "owner")}
+            if meta.get("repositories"):
+                details["repositories"] = meta["repositories"]
+            elif meta.get("repo_count"):
+                details["repo_count"] = meta["repo_count"]
+            if source_url:
+                details["source_url"] = source_url
+            # Evidence depth
+            if meta.get("evidence_depth") is not None:
+                details["evidence_depth"] = meta["evidence_depth"]
+            if meta.get("project_name"):
+                details["project"] = meta["project_name"]
+        elif src_type == "project":
+            proj_name = meta.get("project_name") or "Project"
+            label = f"Project \u00b7 {proj_name}"
+            details = {"project_name": proj_name}
+            if meta.get("student_contribution"):
+                details["contribution"] = meta["student_contribution"]
+            if meta.get("evidence_depth") is not None:
+                details["evidence_depth"] = meta["evidence_depth"]
+            if source_url:
+                details["source_url"] = source_url
+        elif src_type in ("leetcode", "codeforces", "kaggle"):
+            label = f"{src_type.capitalize()} \u00b7 performance"
+            details = dict(meta)
+            if source_url:
+                details["source_url"] = source_url
+        elif src_type == "assessment":
+            correct = meta.get("correct_count")
+            total = meta.get("question_count")
+            if correct is not None and total:
+                label = f"INAURA Assessment \u00b7 {correct}/{total}"
+            else:
+                label = "INAURA Assessment"
+            details = {
+                "assessment_attempt_id": meta.get("assessment_attempt_id"),
+                "score": meta.get("assessment_score"),
+                "version": meta.get("assessment_version"),
+                "completed_at": meta.get("completed_at") or meta.get("source_created_at"),
+            }
+            if meta.get("evidence_depth") is not None:
+                details["evidence_depth"] = meta["evidence_depth"]
+        elif src_type in ("certification", "certification_file"):
+            label = f"Certification \u00b7 {meta.get('issuing_org') or ''}".strip(" \u00b7")
+            details = {"completion_year": meta.get("completion_year"), "issuing_org": meta.get("issuing_org")}
+            if source_url:
+                details["source_url"] = source_url
+        elif src_type in ("resume", "linkedin", "self_declared", "syllabus", "coursework"):
+            label = src_type.capitalize() if src_type != "self_declared" else "Self-declared"
+            details = dict(meta)
+            if source_url:
+                details["source_url"] = source_url
+        else:
+            label = src_type.capitalize()
+            details = dict(meta)
+            if source_url:
+                details["source_url"] = source_url
+
+        strength = float(s.get("signal_strength", s.get("signal_value", 0.0)) or 0.0)
+        reliability = float(s.get("source_reliability", 0.5) or 0.5)
+        # Preserve timestamps for override supersede logic
+        created_at = s.get("source_created_at") or meta.get("source_created_at") or meta.get("completed_at") or ""
+        sources.append({
+            "source_type": src_type,
+            "source_id": s.get("evidence_id") or s.get("project_id") or s.get("certification_id") or meta.get("assessment_attempt_id") or "",
+            "source_label": label,
+            "source_url": source_url,
+            "strength": round(strength, 3),
+            "reliability": round(reliability, 3),
+            "evidence_depth": meta.get("evidence_depth") if meta.get("evidence_depth") is not None else s.get("depth"),
+            "details": details,
+            "explanation": s.get("reason") or s.get("explanation", ""),
+            "is_ai_assisted": bool(s.get("is_ai_assisted") or meta.get("is_ai_assisted")),
+            "source_created_at": created_at,
+            "completed_at": meta.get("completed_at") or "",
+        })
+    return sources
+
+
+def load_user_overrides(user_id: str, c: Optional[Client]) -> Dict[str, dict]:
+    """Load user skill overrides keyed by lowercase canonical skill."""
+    if c is None:
+        return {}
+    try:
+        r = c.table("user_skill_overrides").select("*").eq("user_id", user_id).eq("is_zero_override", True).execute()
+        out: Dict[str, dict] = {}
+        for row in (r.data or []):
+            key = str(row.get("skill_key") or row.get("skill_name") or "").lower()
+            if key:
+                out[key] = row
+                # also map by display name lower
+                name_key = str(row.get("skill_name") or "").lower()
+                out[name_key] = row
+        return out
+    except Exception:
+        return {}
+
+
+def _compute_github_diagnostics(evidence: List[dict], signals: List[dict]) -> Dict[str, int]:
+    """
+    Compute diagnostic counts for GitHub repository analysis.
+    Returns dict with repositories_discovered, repositories_attempted,
+    repositories_successfully_analyzed, repositories_with_evidence,
+    repositories_contributing_skills.
+    """
+    discovered = 0
+    attempted = 0
+    successfully_analyzed = 0
+    with_evidence = 0
+    contributing = set()
+
+    # From evidence metadata (profile level)
+    for ev in evidence or []:
+        if (ev.get("evidence_type") or "").lower() != "github":
+            continue
+        meta = ev.get("metadata") or {}
+        # Try multiple possible locations
+        inspection = meta.get("inspection") or meta.get("raw_metadata") or {}
+        # Also check nested inspection inside raw_metadata
+        if not inspection and isinstance(meta.get("raw_metadata"), dict):
+            inspection = meta.get("raw_metadata", {})
+        # For profile, repositories are in inspection
+        repos = inspection.get("repositories") or meta.get("repositories") or []
+        # Also check top-level raw_metadata
+        if not repos and isinstance(inspection, dict):
+            repos = inspection.get("repositories") or []
+        # Count discovered from raw_metadata
+        fetched = inspection.get("repositories_fetched") or meta.get("repositories_fetched") or len(repos) if repos else 0
+        if fetched:
+            discovered += int(fetched)
+        else:
+            # Fallback: count of repos list
+            discovered += len(repos) if isinstance(repos, list) else 0
+
+        # Attempted / successfully analyzed from inspection counts if available
+        inspected = inspection.get("repositories_inspected")
+        failed = inspection.get("repositories_failed", 0)
+        skipped = inspection.get("repositories_skipped", 0)
+        if inspected is not None:
+            attempted += int(inspected) + int(failed or 0) + int(skipped or 0)
+            successfully_analyzed += int(inspected)
+            with_evidence += int(inspection.get("repositories_content_analyzed", 0) or 0)
+        else:
+            # Fallback: count repos with status inspected
+            for r in repos if isinstance(repos, list) else []:
+                if r.get("status") == "inspected":
+                    successfully_analyzed += 1
+                    attempted += 1
+                elif r.get("status") in ("failed", "skipped", "skipped_low_evidence", "skipped_rate_limited"):
+                    attempted += 1
+
+    # Contributing skills: distinct repos that contributed to at least one signal
+    for sig in signals or []:
+        src_type = str(sig.get("source") or sig.get("source_type") or "").lower()
+        if src_type != "github":
+            continue
+        meta = sig.get("metadata") or {}
+        repos = meta.get("repositories") or []
+        if isinstance(repos, list):
+            for r in repos:
+                full = str(r.get("full_name") or r.get("name") or "").lower()
+                if full:
+                    contributing.add(full)
+        else:
+            # Fallback: single repo
+            full = str(meta.get("full_name") or meta.get("project_name") or sig.get("evidence_id") or "").lower()
+            if full:
+                contributing.add(full)
+
+    # If no discovered but signals exist, infer
+    if discovered == 0 and (successfully_analyzed > 0 or contributing):
+        discovered = max(successfully_analyzed, len(contributing))
+
+    return {
+        "repositories_discovered": int(discovered),
+        "repositories_attempted": int(attempted or successfully_analyzed),
+        "repositories_successfully_analyzed": int(successfully_analyzed),
+        "repositories_with_evidence": int(with_evidence or successfully_analyzed),
+        "repositories_contributing_skills": int(len(contributing)),
+    }
+
+
 def _signal_spread(signals: List[dict]) -> float:
     """
     Disagreement between a skill's evidence signals (max - min strength).
@@ -208,6 +467,12 @@ def build_requirements_map(requirements: List[dict], client: Optional[Client] = 
             "description": req.get("description", ""),
             "source": req.get("source", "Industry requirements"),
             "source_url": req.get("source_url", ""),
+            "source_version": req.get("source_version") or req.get("version", ""),
+            "source_reference": req.get("source_reference", ""),
+            "source_occupation": req.get("source_occupation", ""),
+            "mapping_version": req.get("mapping_version", ""),
+            "retrieved_at": req.get("retrieved_at", ""),
+            "role_relevance": req.get("role_relevance", "CORE" if importance >= 0.80 else ("IMPORTANT" if importance >= 0.70 else "RELEVANT")),
             "evidence_context": req.get("evidence_context", ""),
         }
     return req_map
@@ -349,6 +614,7 @@ def calculate_assessments(
     grouped_signals: Dict[str, List[dict]],
     requirements_map: Dict[str, dict],
     client: Optional[Client] = None,
+    overrides: Optional[Dict[str, dict]] = None,
 ) -> List[dict]:
     """
     Calculate skill assessments for all required skills plus any additional evidenced skills.
@@ -361,7 +627,12 @@ def calculate_assessments(
       gap = required_level
       gap_type = 'evidence_gap'
       explanation explicitly notes: 'No evidence found' != 'Student is definitely incapable'.
+    HARD RULE: If there is no active supporting evidence (signals empty and no assessment),
+               current_proficiency = 0, confidence = 0, gap = required_level, state = no_evidence.
+               The industry required value must never be used as current proficiency.
+    Overrides: user zero-override forces effective proficiency to 0 until new assessment.
     """
+    overrides = overrides or {}
     assessments: List[dict] = []
     assessed_keys = set()
 
@@ -370,17 +641,22 @@ def calculate_assessments(
         assessed_keys.add(skill_name.lower())
         assessed_keys.add(normalize_skill(skill_name, client) or skill_name)
 
-        prof, ev_weight, ev_count, _ = engine.proficiency(sigs)
+        # Proficiency includes the unvalidated-evidence prior: while nothing has
+        # directly validated the skill, a high artifact-only estimate is shrunk
+        # toward "not yet validated" (one-sided — it can never raise an estimate).
+        orig_prof, ev_weight, ev_count, _, prior_applied = engine.proficiency_with_prior(sigs)
         diversity = len(set(s.get("source", s.get("source_type", "")) for s in sigs))
         # Confidence now also accounts for how directly the strongest evidence
         # demonstrates the person's own ability (assessment > platform > artifact).
-        conf, _, _, validation = engine.confidence_from_signals(sigs)
+        orig_conf, _, _, validation = engine.confidence_from_signals(sigs)
 
         # Separate the evidence-based estimate from the assessment-validated
         # result so both can be shown and compared.
         assessment_sigs = [s for s in sigs if _signal_source(s) == ASSESSMENT_SOURCE]
         evidence_sigs = [s for s in sigs if _signal_source(s) != ASSESSMENT_SOURCE]
-        evidence_prof, _, evidence_count_only, _ = engine.proficiency(evidence_sigs)
+        # The evidence-only estimate is by definition unvalidated, so it carries
+        # the prior too — this is the number the UI labels "Evidence-based estimate".
+        evidence_prof, _, evidence_count_only, _, _ = engine.proficiency_with_prior(evidence_sigs)
         assessment_score = (
             max(float(s.get("signal_strength", s.get("signal_value", 0.0)) or 0.0) for s in assessment_sigs)
             if assessment_sigs else None
@@ -404,6 +680,13 @@ def calculate_assessments(
             industry_confidence = req.get("industry_confidence", 0.85)
             evidence_context = req.get("evidence_context", "")
             source = req.get("source", "Industry requirements")
+            requirement_source = req.get("source", "")
+            requirement_source_url = req.get("source_url", "")
+            requirement_source_version = req.get("source_version", "")
+            requirement_source_reference = req.get("source_reference", "")
+            requirement_role_relevance = req.get("role_relevance", "")
+            requirement_description = req.get("description", "")
+            is_portfolio = False
         else:
             # Skill demonstrated but not explicitly required in target role
             required_level = 0.50
@@ -414,9 +697,106 @@ def calculate_assessments(
             industry_confidence = 0.85
             evidence_context = "Elective demonstrated competency outside core requirements."
             source = "Demonstrated Evidence"
+            requirement_source = "Demonstrated Evidence"
+            requirement_source_url = ""
+            requirement_source_version = ""
+            requirement_source_reference = ""
+            requirement_role_relevance = "OPTIONAL"
+            requirement_description = ""
+            is_portfolio = True
 
-        gap_val = engine.gap(prof, required_level)
-        gap_type = "evidence_gap" if (ev_count == 0 or conf < 0.20) else "skill_gap"
+        # --- Provenance & evidence state (extended) ---
+        evidence_sources = build_evidence_sources(sigs)
+        state_key, state_label = evidence_state_extended(sigs, bool(assessment_sigs))
+
+        # --- HARD RULE & timestamp-aware override handling ---
+        override_key = (normalize_skill_slug(skill_name, client) or skill_name.lower())
+        override = overrides.get(override_key) or overrides.get(skill_name.lower())
+        is_overridden = False
+        override_dt = None
+        if override:
+            # Parse override creation time
+            try:
+                ot_str = override.get("created_at") or override.get("updated_at") or ""
+                if ot_str:
+                    override_dt = datetime.fromisoformat(str(ot_str).replace("Z", "+00:00"))
+                    if override_dt.tzinfo is None:
+                        override_dt = override_dt.replace(tzinfo=timezone.utc)
+            except Exception:
+                override_dt = None
+            # Determine newest evidence/assessment time for this skill
+            newest_dt = None
+            for s in sigs:
+                meta = s.get("metadata") or {}
+                # Assessment: completed_at, else evidence: source_created_at
+                t_str = meta.get("completed_at") or meta.get("source_created_at") or s.get("source_created_at") or meta.get("source_created_at") or ""
+                if not t_str:
+                    # Fallback to signal's evidence created_at if present else treat as old
+                    t_str = s.get("source_created_at") or ""
+                if t_str:
+                    try:
+                        dt = datetime.fromisoformat(str(t_str).replace("Z", "+00:00"))
+                        if dt.tzinfo is None:
+                            dt = dt.replace(tzinfo=timezone.utc)
+                        if newest_dt is None or dt > newest_dt:
+                            newest_dt = dt
+                    except Exception:
+                        continue
+            # If newest evidence is after override, override is superseded (new evidence)
+            # If newest is None or <= override_dt, override remains active
+            if newest_dt and override_dt and newest_dt > override_dt:
+                is_overridden = False
+            elif override_dt:
+                is_overridden = True
+            else:
+                # No timestamp available -> conservative: treat as overridden
+                is_overridden = True
+
+        if is_overridden:
+            # User explicitly said "I don't know this yet" — force 0 even after prior assessment
+            # Historical assessment and evidence remain but are suppressed for active calculation
+            original_prof = orig_prof
+            original_conf = orig_conf
+            prof = 0.0
+            conf = 0.0
+            ev_weight_effective = 0.0
+            ev_count_effective = 0
+            diversity_effective = 0.0
+            validation_effective = 0.0
+            evidence_state_key = "user_override"
+            evidence_state_label = "User marked as not known"
+            gap_val = engine.gap(prof, required_level)
+            gap_type = "evidence_gap"
+            for src in evidence_sources:
+                src["is_overridden"] = True
+        else:
+            # No active override -> normal hard rule handling
+            if ev_count == 0 and not assessment_sigs:
+                prof = 0.0
+                conf = 0.0
+                gap_val = engine.gap(0.0, required_level)
+                gap_type = "evidence_gap"
+                evidence_state_key = "no_evidence"
+                evidence_state_label = "No evidence"
+                ev_weight_effective = 0.0
+                ev_count_effective = 0
+                diversity_effective = 0.0
+                validation_effective = 0.0
+                original_prof = orig_prof
+                original_conf = orig_conf
+            else:
+                prof = orig_prof
+                conf = orig_conf
+                gap_val = engine.gap(prof, required_level)
+                gap_type = "evidence_gap" if (ev_count == 0 or conf < 0.20) else "skill_gap"
+                evidence_state_key = state_key
+                evidence_state_label = state_label
+                ev_weight_effective = ev_weight
+                ev_count_effective = ev_count
+                diversity_effective = float(diversity)
+                validation_effective = validation
+                original_prof = orig_prof
+                original_conf = orig_conf
 
         if gap_type == "evidence_gap":
             advice = f"Submit a GitHub project repository, coding profile, or certification demonstrating {skill_name}."
@@ -440,9 +820,9 @@ def calculate_assessments(
         explanation = engine.explain_proficiency(
             proficiency_val=prof,
             confidence_val=conf,
-            evidence_count=ev_count,
-            source_diversity=diversity,
-            signals=sigs,
+            evidence_count=ev_count_effective,
+            source_diversity=int(diversity_effective) if isinstance(diversity_effective, (int, float)) else 0,
+            signals=sigs if not (is_overridden and not assessment_sigs) else [],
             skill_name=skill_name,
         )
 
@@ -453,9 +833,9 @@ def calculate_assessments(
             "category": category,
             "proficiency": prof,
             "confidence": conf,
-            "evidence_weight": ev_weight,
-            "source_diversity": float(diversity),
-            "evidence_count": ev_count,
+            "evidence_weight": ev_weight_effective,
+            "source_diversity": float(diversity_effective),
+            "evidence_count": ev_count_effective,
             "explanation": explanation,
             "required_level": required_level,
             "gap": gap_val,
@@ -466,6 +846,12 @@ def calculate_assessments(
             "industry_confidence": industry_confidence,
             "evidence_context": evidence_context,
             "source": source,
+            "requirement_source": requirement_source,
+            "requirement_source_url": requirement_source_url,
+            "requirement_source_version": requirement_source_version,
+            "requirement_source_reference": requirement_source_reference,
+            "requirement_role_relevance": requirement_role_relevance,
+            "requirement_description": requirement_description,
             "priority": priority_score,
             "priority_score": priority_score,
             "legacy_priority": legacy_priority,
@@ -476,7 +862,7 @@ def calculate_assessments(
             "quadrant_title": quadrant_title,
             "quadrant_guidance": quadrant_guidance,
             "signals": sigs,
-            "is_missing_evidence": False,
+            "is_missing_evidence": ev_count_effective == 0 and not bool(assessment_sigs),
             # Assessment layer (evidence estimate vs direct validation)
             "evidence_proficiency": evidence_prof,
             "evidence_signal_count": evidence_count_only,
@@ -484,8 +870,17 @@ def calculate_assessments(
             "has_assessment": bool(assessment_sigs),
             "assessment_attempt_id": assessment_meta.get("assessment_attempt_id"),
             "assessment_version": assessment_meta.get("assessment_version"),
-            "validation_strength": validation,
+            "validation_strength": validation_effective,
             "signal_spread": signal_spread,
+            "evidence_state": evidence_state_key,
+            "evidence_state_label": evidence_state_label,
+            "unvalidated_prior_applied": prior_applied,
+            # Provenance & personalization
+            "evidence_sources": evidence_sources,
+            "is_portfolio": is_portfolio,
+            "is_overridden": is_overridden,
+            "original_proficiency": original_prof,
+            "original_confidence": original_conf,
         })
 
     # 2. Process required skills that have NO evidence (Missing Skills)
@@ -501,6 +896,12 @@ def calculate_assessments(
         industry_confidence = req.get("industry_confidence", 0.85)
         evidence_context = req.get("evidence_context", "")
         source = req.get("source", "Industry requirements")
+        requirement_source = req.get("source", "")
+        requirement_source_url = req.get("source_url", "")
+        requirement_source_version = req.get("source_version", "")
+        requirement_source_reference = req.get("source_reference", "")
+        requirement_role_relevance = req.get("role_relevance", "")
+        requirement_description = req.get("description", "")
 
         prof = 0.0
         conf = 0.0
@@ -531,6 +932,14 @@ def calculate_assessments(
             signals=[],
             skill_name=req_skill,
         )
+
+        # Check override for missing skills (override on zero is redundant but preserve)
+        override_key = (normalize_skill_slug(req_skill, client) or req_skill.lower())
+        override_row = overrides.get(override_key) or overrides.get(req_skill.lower())
+        is_overridden_missing = bool(override_row)
+        # For missing skills, override remains active (no new evidence), so show user_override state if overridden
+        missing_state = "user_override" if is_overridden_missing else "no_evidence"
+        missing_label = "User marked as not known" if is_overridden_missing else "No evidence"
 
         assessments.append({
             "canonical_name": req_skill,
@@ -571,6 +980,20 @@ def calculate_assessments(
             "assessment_version": None,
             "validation_strength": 0.0,
             "signal_spread": 0.0,
+            "evidence_state": missing_state,
+            "evidence_state_label": missing_label,
+            "unvalidated_prior_applied": False,
+            "evidence_sources": [],
+            "is_portfolio": False,
+            "is_overridden": is_overridden_missing,
+            "original_proficiency": 0.0,
+            "original_confidence": 0.0,
+            "requirement_source": requirement_source,
+            "requirement_source_url": requirement_source_url,
+            "requirement_source_version": requirement_source_version,
+            "requirement_source_reference": requirement_source_reference,
+            "requirement_role_relevance": requirement_role_relevance,
+            "requirement_description": requirement_description,
         })
 
     return assessments
@@ -636,6 +1059,12 @@ def calculate_gaps(assessments: List[dict], target_role: str) -> List[dict]:
             "actionable_advice": advice,
             "evidence_context": evidence_context,
             "source": a.get("source", "Industry requirements"),
+            "requirement_source": a.get("requirement_source", a.get("source", "")),
+            "requirement_source_url": a.get("requirement_source_url", a.get("source_url", "")),
+            "requirement_source_version": a.get("requirement_source_version", ""),
+            "requirement_source_reference": a.get("requirement_source_reference", ""),
+            "requirement_role_relevance": a.get("requirement_role_relevance", ""),
+            "requirement_description": a.get("requirement_description", ""),
             "quadrant": a.get("quadrant", "exploratory"),
             "quadrant_title": a.get("quadrant_title", "Exploratory / Unclear"),
             "explanation": gap_explanation,
@@ -644,6 +1073,16 @@ def calculate_gaps(assessments: List[dict], target_role: str) -> List[dict]:
                 "display_name": a.get("display_name", skill),
                 "category": a.get("category", "General"),
             },
+            # Provenance & personalization fields for frontend
+            "evidence_sources": a.get("evidence_sources", []),
+            "evidence_state": a.get("evidence_state", "no_evidence"),
+            "evidence_state_label": a.get("evidence_state_label", "No evidence"),
+            "is_portfolio": bool(a.get("is_portfolio", False)),
+            "is_overridden": bool(a.get("is_overridden", False)),
+            "has_assessment": bool(a.get("has_assessment", False)),
+            "assessment_score": a.get("assessment_score"),
+            "evidence_count": int(a.get("evidence_count", 0)),
+            "source_diversity": float(a.get("source_diversity", 0)),
         })
 
     # Sort gaps by priority descending
@@ -656,10 +1095,21 @@ def calculate_readiness(
     requirements: List[dict],
     gaps: List[dict],
 ) -> dict:
-    """Calculate skill, industry, and evidence components of overall readiness."""
-    skill_comp = engine.aggregate_skill_component(assessments, requirements)
-    industry_comp = engine.aggregate_industry_component(gaps)
-    evidence_comp = engine.aggregate_evidence_component(assessments)
+    """Calculate skill, industry, and evidence components of overall readiness.
+    Portfolio-only skills are excluded from readiness so they cannot inflate
+    target-role readiness. Only target-role assessments (is_portfolio==False)
+    contribute to skill and evidence components.
+    """
+    target_assessments = [a for a in assessments if not a.get("is_portfolio")]
+    # If no target assessments (edge), fall back to all to avoid divide by zero
+    if not target_assessments:
+        target_assessments = assessments
+    target_gaps = [g for g in gaps if not g.get("is_portfolio")]
+    if not target_gaps:
+        target_gaps = gaps
+    skill_comp = engine.aggregate_skill_component(target_assessments, requirements)
+    industry_comp = engine.aggregate_industry_component(target_gaps)
+    evidence_comp = engine.aggregate_evidence_component(target_assessments)
     readiness_score = engine.readiness(skill_comp, industry_comp, evidence_comp)
     explanation = engine.explain_readiness(skill_comp, industry_comp, evidence_comp, readiness_score)
 
@@ -683,6 +1133,7 @@ def persist_analysis(
     c: Optional[Client],
     strengths: Optional[List[dict]] = None,
     topic_gaps: Optional[List[dict]] = None,
+    github_diagnostics: Optional[Dict[str, int]] = None,
 ) -> str:
     """Persist analysis run results and records to Supabase tables."""
     now = datetime.now(timezone.utc).isoformat()
@@ -691,9 +1142,13 @@ def persist_analysis(
     if c is None:
         return analysis_id
 
-    # 1. Deduplicate previous skill signals for this user to avoid signal duplication on re-runs
+    # 1. Deduplicate previous skill signals and assessments for this user to avoid duplication on re-runs
     try:
         c.table(TABLE_SIGNALS).delete().eq("user_id", user_id).execute()
+    except Exception:
+        pass
+    try:
+        c.table(TABLE_ASSESSMENTS).delete().eq("user_id", user_id).execute()
     except Exception:
         pass
 
@@ -721,6 +1176,7 @@ def persist_analysis(
                 "covered": len([g for g in gaps if g.get("priority_category") == "covered"]),
             },
             "topic_gaps_count": len(topic_gaps or []),
+            "github_diagnostics": github_diagnostics or {},
         },
         "created_at": now,
         "updated_at": now,
@@ -784,6 +1240,14 @@ def persist_analysis(
                 "assessment_version": a.get("assessment_version"),
                 "gap_type": a.get("gap_type"),
                 "quadrant": a.get("quadrant"),
+                "evidence_state": a.get("evidence_state"),
+                "evidence_state_label": a.get("evidence_state_label"),
+                "unvalidated_prior_applied": bool(a.get("unvalidated_prior_applied")),
+                "evidence_sources": a.get("evidence_sources", []),
+                "is_portfolio": bool(a.get("is_portfolio")),
+                "is_overridden": bool(a.get("is_overridden")),
+                "original_proficiency": a.get("original_proficiency"),
+                "original_confidence": a.get("original_confidence"),
             },
         }
         try:
@@ -932,10 +1396,30 @@ async def run_analysis(user_id: str, target_role: str) -> dict:
     # 4. Extract raw evidence signals
     raw_signals = extract_skill_signals(evidence, projects, certs)
 
+    # 4a. Apply per-repository personalization (each GitHub repo independent)
+    try:
+        repo_settings = evidence_service.get_github_repo_settings_map(user_id)
+        if repo_settings:
+            raw_signals = evidence_service.adjust_github_signals_for_repo_settings(raw_signals, repo_settings)
+    except Exception:
+        pass
+
     # 4b. Add INAURA assessment evidence (VERY HIGH reliability, direct
     # validation). Missing or unavailable assessments simply contribute
     # nothing — analysis never depends on them.
     raw_signals.extend(load_assessment_signals(user_id))
+
+    # 4c. Diagnostic counts for GitHub pipeline verification
+    try:
+        github_diagnostics = _compute_github_diagnostics(evidence, raw_signals)
+    except Exception:
+        github_diagnostics = {
+            "repositories_discovered": 0,
+            "repositories_attempted": 0,
+            "repositories_successfully_analyzed": 0,
+            "repositories_with_evidence": 0,
+            "repositories_contributing_skills": 0,
+        }
 
     # 5. Normalize signals through canonical taxonomy
     signals = normalize_signals(raw_signals, c)
@@ -946,8 +1430,14 @@ async def run_analysis(user_id: str, target_role: str) -> dict:
     # 7. Map industry requirements to canonical keys
     req_map = build_requirements_map(requirements, c)
 
+    # 7b. Load user overrides (downward personalization)
+    try:
+        overrides = load_user_overrides(user_id, c)
+    except Exception:
+        overrides = {}
+
     # 8. Calculate skill assessments (including missing skills with 0 evidence)
-    assessments = calculate_assessments(grouped_signals, req_map, c)
+    assessments = calculate_assessments(grouped_signals, req_map, c, overrides=overrides)
 
     # 9. Calculate prioritized skill gaps
     gaps = calculate_gaps(assessments, target_role)
@@ -981,6 +1471,7 @@ async def run_analysis(user_id: str, target_role: str) -> dict:
         c=c,
         strengths=strengths,
         topic_gaps=topic_gaps,
+        github_diagnostics=github_diagnostics,
     )
 
     # 14. Return structured, versioned result matching frontend and API expectations
@@ -1032,9 +1523,24 @@ async def run_analysis(user_id: str, target_role: str) -> dict:
                 "has_assessment": bool(a.get("has_assessment")),
                 "validation_strength": a.get("validation_strength", 0.0),
                 "signal_spread": a.get("signal_spread", 0.0),
+                "evidence_state": a.get("evidence_state", "no_evidence"),
+                "evidence_state_label": a.get("evidence_state_label", "No evidence"),
+                "unvalidated_prior_applied": bool(a.get("unvalidated_prior_applied")),
+                # Provenance & personalization
+                "evidence_sources": a.get("evidence_sources", []),
+                "is_portfolio": bool(a.get("is_portfolio", False)),
+                "is_overridden": bool(a.get("is_overridden", False)),
+                "original_proficiency": a.get("original_proficiency", a["proficiency"]),
+                "original_confidence": a.get("original_confidence", a["confidence"]),
             }
             for a in sorted(assessments, key=lambda x: x["priority"], reverse=True)
         ],
         "gaps": sorted(gaps, key=lambda x: x["priority_score"], reverse=True),
+        # Target-role vs portfolio separation (frontend uses these)
+        "target_role_gaps": [g for g in sorted(gaps, key=lambda x: x["priority_score"], reverse=True) if not g.get("is_portfolio")],
+        "portfolio_gaps": [g for g in sorted(gaps, key=lambda x: x["priority_score"], reverse=True) if g.get("is_portfolio")],
+        "target_role_assessments": [a for a in sorted(assessments, key=lambda x: x["priority"], reverse=True) if not a.get("is_portfolio")],
+        "portfolio_assessments": [a for a in sorted(assessments, key=lambda x: x["priority"], reverse=True) if a.get("is_portfolio")],
+        "github_diagnostics": github_diagnostics,
         "created_at": now_iso,
     }

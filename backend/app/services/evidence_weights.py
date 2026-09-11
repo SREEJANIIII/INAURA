@@ -17,26 +17,37 @@ Reliability hierarchy (prototype heuristic, not validated psychometrics):
   VERY HIGH  assessment                             0.95
   HIGH       leetcode / codeforces / kaggle         0.85
              syllabus / coursework                  0.80
-  MEDIUM     project                                0.62
-             github                                 0.60
-             certification / certification_file     0.55
+  MEDIUM     certification / certification_file     0.55
              project_doc                            0.55
+  SUPPORTING project                                0.40
+             github                                 0.40
   LOW        resume                                 0.50
              linkedin                               0.40
              self_declared                          0.30
 
-Calibration note (2026-09 recalibration):
-  * `github` moved 0.70 -> 0.60 and `project` moved 0.90 -> 0.62. Repository
-    and self-described project evidence proves technology *exposure*; with
-    AI-assisted development it does not reliably prove personal proficiency,
-    so it must sit in the MEDIUM band below performance-based platforms and
-    verified coursework. Previously `project` (0.90) outranked every other
-    source, which let self-declared project entries dominate proficiency.
-  * `project_doc` moved 0.75 -> 0.55: documentation about a project is weaker
-    than the project artifacts themselves.
-  * `assessment` (0.95) is new: a graded INAURA skill assessment is the only
-    source that directly probes the person rather than an artifact.
-  * All other values are unchanged from the previous calibration.
+Calibration history:
+
+  2026-09 (initial recalibration)
+  * `github` 0.70 -> 0.60, `project` 0.90 -> 0.62, `project_doc` 0.75 -> 0.55.
+  * `assessment` 0.95 introduced as the only source that probes the person.
+
+  2026-09-11 (GitHub supporting-evidence recalibration)
+  * `github` 0.60 -> 0.40 and `project` 0.62 -> 0.40, by product decision.
+    Repository and self-described project artifacts answer "I found evidence
+    that this person worked with this skill" — with AI-assisted development
+    they do not show demonstrated understanding. They are therefore weighted
+    as SUPPORTING evidence and can no longer carry a skill on their own.
+  * GitHub reliability is FIXED at 0.40. Completing an assessment never
+    raises it: the assessment enters aggregation as its own separate signal
+    (see `ASSESSMENT_SOURCE`), so the final estimate improves without
+    pretending the repository became more trustworthy.
+
+  Known consequence of the 2026-09-11 values: `github`/`project` (0.40) now
+  sit numerically at or below `resume` (0.50) and `certification` (0.55) and
+  level with `linkedin` (0.40). Tier *labels* still reflect the product
+  hierarchy (artifact evidence is supporting, not self-reported), but if the
+  numeric ordering "artifact > self-reported" matters, the LOW tier has to be
+  lowered rather than GitHub raised.
 """
 
 from typing import Dict, Iterable, List, Optional
@@ -54,12 +65,14 @@ SOURCE_RELIABILITY: Dict[str, float] = {
     "kaggle": 0.85,
     "syllabus": 0.80,
     "coursework": 0.80,
-    # MEDIUM — artifact evidence and credentials
-    "project": 0.62,
-    "github": 0.60,
+    # MEDIUM — credentials and project documentation
     "certification": 0.55,
     "certification_file": 0.55,
     "project_doc": 0.55,
+    # SUPPORTING — artifact evidence: shows exposure, not demonstrated ability.
+    # Fixed at 0.40; never raised by a completed assessment.
+    "project": 0.40,
+    "github": 0.40,
     # LOW — self-reported
     "resume": 0.50,
     "linkedin": 0.40,
@@ -69,14 +82,17 @@ SOURCE_RELIABILITY: Dict[str, float] = {
 DEFAULT_RELIABILITY = 0.50
 
 # Named tiers, used for reporting and for tier-level assertions.
+# `supporting` holds artifact evidence: it discovers skills and contributes to
+# the estimate, but by product decision it cannot establish proficiency alone.
 RELIABILITY_TIERS: Dict[str, List[str]] = {
     "very_high": ["assessment"],
     "high": ["leetcode", "codeforces", "kaggle", "syllabus", "coursework"],
-    "medium": ["project", "github", "certification", "certification_file", "project_doc"],
+    "medium": ["certification", "certification_file", "project_doc"],
+    "supporting": ["project", "github"],
     "low": ["resume", "linkedin", "self_declared"],
 }
 
-TIER_ORDER: List[str] = ["low", "medium", "high", "very_high"]
+TIER_ORDER: List[str] = ["low", "supporting", "medium", "high", "very_high"]
 
 # How directly a source demonstrates the person's own current ability.
 # Confidence-model input only — never used as a proficiency or a weight.

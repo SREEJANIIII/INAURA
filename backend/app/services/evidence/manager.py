@@ -2,6 +2,7 @@ from typing import List, Dict, Optional, Any, Set
 from datetime import datetime, timezone
 
 from .base import EvidenceProvider, VerificationResult, ExtractedSignal, VerificationStatus
+from ..evidence_weights import reliability as source_reliability
 from .github import GitHubProvider, parse_github_url
 from .leetcode import LeetCodeProvider
 from .codeforces import CodeforcesProvider
@@ -113,13 +114,22 @@ class EvidenceManager:
             if v_status in (VerificationStatus.VERIFIED, VerificationStatus.PARTIALLY_VERIFIED):
                 if is_cache_valid(verified_at):
                     cached_signals = meta.get("verified_signals") or []
+                    # Source reliability is re-derived from the central weight
+                    # config, never read back from the cached copy: a stored
+                    # signal must not keep a pre-recalibration weight alive.
+                    cached_provider = (
+                        evidence.get("provider")
+                        or meta.get("provider")
+                        or (evidence.get("evidence_type") or "")
+                    )
+                    cached_reliability = source_reliability(cached_provider)
                     signals_objs = [
                         ExtractedSignal(
                             skill=s.get("skill") or s.get("canonical_name", ""),
                             signal_strength=float(s.get("signal_strength", s.get("signal_value", 0.5))),
                             depth=int(s.get("depth", 2)),
                             reason=s.get("reason") or s.get("explanation", ""),
-                            source_reliability=float(s.get("source_reliability", 0.85)),
+                            source_reliability=cached_reliability,
                             metadata=s.get("metadata") or {},
                         )
                         for s in cached_signals

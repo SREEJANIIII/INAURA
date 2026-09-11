@@ -1,6 +1,15 @@
-from fastapi import APIRouter, Depends, HTTPException, UploadFile, File, Form
+from fastapi import APIRouter, Depends, HTTPException, UploadFile, File, Form, Body
+from pydantic import BaseModel
 from typing import Optional
 import json
+
+class GithubRepoExcludeRequest(BaseModel):
+    repo_full_name: str
+    is_excluded: bool
+
+class GithubRepoAiRequest(BaseModel):
+    repo_full_name: str
+    is_ai_assisted: bool
 from ....schemas.evidence import (
     EvidenceCreate,
     EvidenceUpdate,
@@ -14,6 +23,119 @@ from ....services import evidence_service
 from ....core.security import get_current_user, CurrentUser
 
 router = APIRouter(prefix="/evidence", tags=["evidence"])
+
+# ---------------------------------------------------------------------------
+# Per-repository GitHub personalization (each repo independent)
+# MUST be before dynamic /{evidence_id} routes — otherwise
+# /github-repos/exclude is captured as evidence_id="github-repos" and
+# raises 500 "Failed to fetch evidence" (invalid UUID).
+# ---------------------------------------------------------------------------
+@router.get("/github-repos")
+async def list_github_repos(current_user: CurrentUser = Depends(get_current_user)):
+    """
+    List all discovered GitHub repositories for the current user with their personalization state.
+    Each repo has independent included/excluded and AI-assisted flags. Defaults: included, not AI.
+    Safe: skips malformed repository entries; never fails whole request for one bad repo.
+    """
+    evidence = evidence_service.list_evidence(current_user.id)
+    repo_settings = evidence_service.get_github_repo_settings_map(current_user.id)
+    repos_out = []
+    for ev in evidence:
+        try:
+            if (ev.get("evidence_type") or "").lower() != "github":
+                continue
+            meta = ev.get("metadata") or {}
+            if not isinstance(meta, dict):
+                meta = {}
+            raw = meta.get("inspection") or meta.get("raw_metadata") or {}
+            if not isinstance(raw, dict):
+                raw = {}
+            # Try multiple possible locations for repositories list
+            repos = raw.get("repositories") or meta.get("repositories") or []
+            if not isinstance(repos, list):
+                repos = []
+            # Fallback: if evidence is single repo, synthesize
+            if not repos and ev.get("source_url"):
+                try:
+                    from ...services.evidence.github import parse_github_url
+                    owner, repo, is_profile = parse_github_url(ev.get("source_url") or "")
+                    if repo and not is_profile:
+                        repos = [{"name": repo, "full_name": f"{owner}/{repo}", "url": ev.get("source_url"), "html_url": ev.get("source_url")}]
+                except Exception:
+                    repos = []
+            for r in repos or []:
+                try:
+                    if not isinstance(r, dict):
+                        continue
+                    full = str(r.get("full_name") or r.get("name") or "").strip().lower()
+                    if not full:
+                        continue
+                    settings = repo_settings.get(full, {}) if isinstance(repo_settings, dict) else {}
+                    # Safe defaults: is_excluded=false, is_ai_assisted=false when no settings row
+                    is_excluded = bool(settings.get("is_excluded", False)) if isinstance(settings, dict) else False
+                    is_ai_assisted = bool(settings.get("is_ai_assisted", False)) if isinstance(settings, dict) else False
+                    repos_out.append({
+                        "full_name": r.get("full_name") or r.get("name"),
+                        "name": r.get("name"),
+                        "url": r.get("url") or r.get("html_url"),
+                        "html_url": r.get("html_url") or r.get("url"),
+                        "is_excluded": is_excluded,
+                        "is_ai_assisted": is_ai_assisted,
+                        "classification": r.get("classification"),
+                        "fork": bool(r.get("fork")) if r.get("fork") is not None else False,
+                        "archived": bool(r.get("archived")) if r.get("archived") is not None else False,
+                        "pushed_at": r.get("pushed_at"),
+                        "evidence_id": ev.get("id"),
+                    })
+                except Exception:
+                    continue
+        except Exception:
+            continue
+    # Deduplicate by full_name (keep first)
+    seen = {}
+    for r in repos_out:
+        try:
+            key = str(r.get("full_name") or "").lower()
+            if key and key not in seen:
+                seen[key] = r
+        except Exception:
+            continue
+    return list(seen.values())
+
+
+@router.post("/github-repos/exclude")
+async def set_github_repo_excluded(
+    payload: GithubRepoExcludeRequest,
+    current_user: CurrentUser = Depends(get_current_user),
+):
+    result = evidence_service.set_github_repo_excluded(current_user.id, payload.repo_full_name, payload.is_excluded)
+    try:
+        from ...services import analysis_service as _as
+        from ...services.analysis_run_service import run_analysis
+        state = _as.get_state(current_user.id)
+        if state and state.get("target_role"):
+            await run_analysis(current_user.id, state["target_role"])
+    except Exception:
+        pass
+    return result
+
+
+@router.post("/github-repos/ai-assisted")
+async def set_github_repo_ai_assisted(
+    payload: GithubRepoAiRequest,
+    current_user: CurrentUser = Depends(get_current_user),
+):
+    result = evidence_service.set_github_repo_ai_assisted(current_user.id, payload.repo_full_name, payload.is_ai_assisted)
+    try:
+        from ...services import analysis_service as _as
+        from ...services.analysis_run_service import run_analysis
+        state = _as.get_state(current_user.id)
+        if state and state.get("target_role"):
+            await run_analysis(current_user.id, state["target_role"])
+    except Exception:
+        pass
+    return result
+
 
 # Generic evidence
 @router.get("", response_model=list[EvidenceResponse])
@@ -140,6 +262,106 @@ async def delete_cert(
 ):
     evidence_service.delete_cert(current_user.id, cert_id)
     return None
+
+
+# Evidence personalization: exclusion & AI-assisted flag
+@router.post("/{evidence_id}/exclude")
+async def set_evidence_excluded(
+    evidence_id: str,
+    is_excluded: bool = Body(..., embed=True),
+    current_user: CurrentUser = Depends(get_current_user),
+):
+    """
+    Exclude or include an evidence item from scoring.
+    Preserves raw evidence, only toggles active scoring contribution.
+    """
+    result = evidence_service.set_evidence_excluded(current_user.id, evidence_id, is_excluded)
+    # Recalculate affected skills/readiness/roadmap via existing engine
+    try:
+        from ...services import analysis_service as _as
+        from ...services.analysis_run_service import run_analysis
+        state = _as.get_state(current_user.id)
+        if state and state.get("target_role"):
+            await run_analysis(current_user.id, state["target_role"])
+    except Exception:
+        pass
+    return result
+
+
+@router.post("/{evidence_id}/ai-assisted")
+async def set_evidence_ai_assisted(
+    evidence_id: str,
+    is_ai_assisted: bool = Body(..., embed=True),
+    current_user: CurrentUser = Depends(get_current_user),
+):
+    """
+    Mark evidence as AI-assisted: retained but scoring contribution reduced via reliability.
+    """
+    result = evidence_service.set_evidence_ai_assisted(current_user.id, evidence_id, is_ai_assisted)
+    try:
+        from ...services import analysis_service as _as
+        from ...services.analysis_run_service import run_analysis
+        state = _as.get_state(current_user.id)
+        if state and state.get("target_role"):
+            await run_analysis(current_user.id, state["target_role"])
+    except Exception:
+        pass
+    return result
+
+
+@router.post("/projects/{project_id}/exclude")
+async def set_project_excluded(
+    project_id: str,
+    is_excluded: bool = Body(..., embed=True),
+    current_user: CurrentUser = Depends(get_current_user),
+):
+    result = evidence_service.set_project_excluded(current_user.id, project_id, is_excluded)
+    try:
+        from ...services import analysis_service as _as
+        from ...services.analysis_run_service import run_analysis
+        state = _as.get_state(current_user.id)
+        if state and state.get("target_role"):
+            await run_analysis(current_user.id, state["target_role"])
+    except Exception:
+        pass
+    return result
+
+
+@router.post("/projects/{project_id}/ai-assisted")
+async def set_project_ai_assisted(
+    project_id: str,
+    is_ai_assisted: bool = Body(..., embed=True),
+    current_user: CurrentUser = Depends(get_current_user),
+):
+    result = evidence_service.set_project_ai_assisted(current_user.id, project_id, is_ai_assisted)
+    try:
+        from ...services import analysis_service as _as
+        from ...services.analysis_run_service import run_analysis
+        state = _as.get_state(current_user.id)
+        if state and state.get("target_role"):
+            await run_analysis(current_user.id, state["target_role"])
+    except Exception:
+        pass
+    return result
+
+
+@router.post("/certifications/{cert_id}/exclude")
+async def set_cert_excluded(
+    cert_id: str,
+    is_excluded: bool = Body(..., embed=True),
+    current_user: CurrentUser = Depends(get_current_user),
+):
+    result = evidence_service.set_cert_excluded(current_user.id, cert_id, is_excluded)
+    try:
+        from ...services import analysis_service as _as
+        from ...services.analysis_run_service import run_analysis
+        state = _as.get_state(current_user.id)
+        if state and state.get("target_role"):
+            await run_analysis(current_user.id, state["target_role"])
+    except Exception:
+        pass
+    return result
+
 
 
 # Summary — convenience for frontend

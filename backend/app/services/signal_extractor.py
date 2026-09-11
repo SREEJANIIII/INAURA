@@ -47,6 +47,8 @@ def _make_signal(
     project_id: Optional[str] = None,
     certification_id: Optional[str] = None,
     metadata: Optional[dict] = None,
+    is_ai_assisted: bool = False,
+    source_created_at: Optional[str] = None,
 ) -> dict:
     """
     Construct a structured Skill Signal conforming to:
@@ -55,6 +57,14 @@ def _make_signal(
     """
     bounded_val = max(0.0, min(1.0, float(signal_value)))
     reliability_val = _reliability(source_type)
+    # AI-assisted evidence: retain but reduce contribution via reliability
+    if is_ai_assisted:
+        reliability_val = max(0.05, reliability_val * 0.5)
+    meta = dict(metadata or {})
+    if is_ai_assisted:
+        meta["is_ai_assisted"] = True
+    if source_created_at:
+        meta["source_created_at"] = source_created_at
     return {
         # Core conceptual signal model
         "skill": canonical,
@@ -70,7 +80,9 @@ def _make_signal(
         "explanation": explanation,
         "project_id": project_id,
         "certification_id": certification_id,
-        "metadata": metadata or {},
+        "metadata": meta,
+        "is_ai_assisted": is_ai_assisted,
+        "source_created_at": source_created_at,
     }
 
 
@@ -125,8 +137,12 @@ def extract_signals(
     github_provider = GitHubProvider()
 
     for ev in evidence:
+        # Excluded evidence: preserved but never contributes to scoring
+        if ev.get("is_excluded") or (ev.get("metadata") or {}).get("is_excluded"):
+            continue
         et = (ev.get("evidence_type") or "").lower()
         src_url = ev.get("source_url") or ""
+        is_ai = bool(ev.get("is_ai_assisted") or (ev.get("metadata") or {}).get("is_ai_assisted"))
 
         # Deduplication check across all platform profiles and repositories
         dedup_key = get_evidence_dedup_key(ev)
@@ -165,6 +181,8 @@ def extract_signals(
                             explanation=sig.reason,
                             evidence_id=ev.get("id"),
                             metadata=sig.metadata,
+                            is_ai_assisted=is_ai,
+                            source_created_at=ev.get("created_at") or (ev.get("metadata") or {}).get("created_at"),
                         )
                     )
                 continue
@@ -189,6 +207,8 @@ def extract_signals(
                             explanation=sig.get("reason", sig.get("explanation", "")),
                             evidence_id=ev.get("id"),
                             metadata=sig.get("metadata"),
+                            is_ai_assisted=is_ai,
+                            source_created_at=ev.get("created_at") or meta.get("created_at"),
                         )
                     )
                 continue
@@ -221,6 +241,8 @@ def extract_signals(
                                 explanation=f"Skill '{c}' self-reported in {et} skills section",
                                 evidence_id=ev.get("id"),
                                 metadata={"self_reported": True, "section": "skills"},
+                                is_ai_assisted=is_ai,
+                                source_created_at=ev.get("created_at"),
                             )
                         )
 
@@ -292,29 +314,19 @@ def extract_signals(
                             explanation=expl,
                             evidence_id=ev.get("id"),
                             metadata={"self_reported": True, "has_action_verbs": is_action},
+                            is_ai_assisted=is_ai,
+                            source_created_at=ev.get("created_at"),
                         )
                     )
-            elif not explicit_skills:
-                # Fallback to filename tokenization only if no document content available
-                title = ev.get("title") or ev.get("file_path") or ""
-                for word in title.replace("_", " ").replace("-", " ").replace(".", " ").split():
-                    if len(word) < 2:
-                        continue
-                    canonical = normalize_skill(word, client)
-                    if canonical:
-                        signals.append(
-                            _make_signal(
-                                canonical=canonical,
-                                source_type=et,
-                                signal_value=SIGNAL_STRENGTH["file_name_mention"],
-                                explanation=f"Skill '{canonical}' inferred from file name '{title}' (unparsed document)",
-                                evidence_id=ev.get("id"),
-                            )
-                        )
+            # Removed generic filename fallback: inferring skills from file name alone
+            # produced 30-40% proficiency without substantive evidence. No evidence
+            # must never become a positive proficiency score.
 
     # 2. Projects Evidence (with cross-source deduplication)
     seen_project_keys: Set[str] = set()
     for proj in projects:
+        if proj.get("is_excluded") or (proj.get("metadata") or {}).get("is_excluded"):
+            continue
         name = (proj.get("name") or "").strip()
         proj_key = name.lower()
         if proj_key in seen_project_keys:
@@ -394,6 +406,7 @@ def extract_signals(
             meta_payload = {"project_name": name}
             if student_contrib:
                 meta_payload["student_contribution"] = student_contrib
+            is_proj_ai = bool(proj.get("is_ai_assisted") or (proj.get("metadata") or {}).get("is_ai_assisted"))
 
             signals.append(
                 _make_signal(
@@ -403,6 +416,8 @@ def extract_signals(
                     explanation=expl,
                     project_id=proj.get("id"),
                     metadata=meta_payload,
+                    is_ai_assisted=is_proj_ai,
+                    source_created_at=proj.get("created_at"),
                 )
             )
 
@@ -420,6 +435,7 @@ def extract_signals(
             meta_payload = {"project_name": name}
             if student_contrib:
                 meta_payload["student_contribution"] = student_contrib
+            is_proj_ai = bool(proj.get("is_ai_assisted") or (proj.get("metadata") or {}).get("is_ai_assisted"))
 
             signals.append(
                 _make_signal(
@@ -429,6 +445,8 @@ def extract_signals(
                     explanation=f"Skill '{canonical}' mentioned in project '{name}' description",
                     project_id=proj.get("id"),
                     metadata=meta_payload,
+                    is_ai_assisted=is_proj_ai,
+                    source_created_at=proj.get("created_at"),
                 )
             )
 
@@ -450,6 +468,8 @@ def extract_signals(
     current_year = datetime.now(timezone.utc).year
 
     for cert in certifications:
+        if cert.get("is_excluded") or (cert.get("metadata") or {}).get("is_excluded"):
+            continue
         name = cert.get("name") or ""
         org = (cert.get("issuing_org") or "").strip()
         org_lower = org.lower()
@@ -494,6 +514,7 @@ def extract_signals(
                     explanation=expl,
                     certification_id=cert.get("id"),
                     metadata={"completion_year": comp_year, "is_outdated": is_outdated, "issuing_org": org},
+                    source_created_at=cert.get("created_at"),
                 )
             )
 

@@ -101,11 +101,10 @@ def test_many_github_repositories_still_cannot_reach_high_confidence():
 
 def test_github_remains_a_meaningful_supporting_source():
     """Recalibration must not make GitHub worthless."""
-    assert weights.SOURCE_RELIABILITY["github"] == pytest.approx(0.60)
-    assert weights.tier_of("github") == "medium"
-    assert weights.SOURCE_RELIABILITY["github"] > weights.SOURCE_RELIABILITY["certification"]
-    assert weights.SOURCE_RELIABILITY["github"] > weights.SOURCE_RELIABILITY["resume"]
-    assert weights.SOURCE_RELIABILITY["github"] > weights.SOURCE_RELIABILITY["linkedin"]
+    assert weights.SOURCE_RELIABILITY["github"] == pytest.approx(0.40)
+    assert weights.tier_of("github") == "supporting"
+    assert weights.SOURCE_RELIABILITY["github"] > weights.SOURCE_RELIABILITY["self_declared"]
+    assert weights.SOURCE_RELIABILITY["github"] == weights.SOURCE_RELIABILITY["project"]
 
     # GitHub alone still produces real proficiency and non-zero confidence.
     prof, weight, count, _ = skill_engine.proficiency([_github_signal("Python", 0.75)])
@@ -119,12 +118,14 @@ def test_github_remains_a_meaningful_supporting_source():
 def test_evidence_hierarchy_tiers_are_ordered():
     r = weights.SOURCE_RELIABILITY
     assert r["assessment"] > r["leetcode"] == r["codeforces"] == r["kaggle"] > r["syllabus"]
-    assert r["syllabus"] > r["project"] >= r["github"] > r["certification"]
-    assert r["certification"] >= r["resume"] > r["linkedin"] > r["self_declared"]
+    assert r["syllabus"] > r["certification"] >= r["resume"]
+    assert r["resume"] > r["project"] == r["github"] == r["linkedin"] > r["self_declared"]
 
     assert weights.tier_of("assessment") == "very_high"
     assert weights.tier_of("leetcode") == "high"
-    assert weights.tier_of("github") == "medium"
+    assert weights.tier_of("certification") == "medium"
+    assert weights.tier_of("github") == "supporting"
+    assert weights.tier_of("project") == "supporting"
     assert weights.tier_of("linkedin") == "low"
 
     # Central config is the single source of truth for every consumer.
@@ -339,10 +340,12 @@ def test_analysis_works_without_any_assessment():
     assessments, gaps, readiness = _run_pipeline([_github_signal("Python", 0.75)])
 
     python = assessments["Python"]
-    assert python["proficiency"] == pytest.approx(0.75)
+    # GitHub-only: shrunk by the unvalidated-evidence prior (0.75 -> 0.51).
+    assert python["proficiency"] == pytest.approx(0.51)
+    assert python["unvalidated_prior_applied"] is True
     assert python["has_assessment"] is False
     assert python["assessment_score"] is None
-    assert python["evidence_proficiency"] == pytest.approx(0.75)
+    assert python["evidence_proficiency"] == pytest.approx(0.51)
     assert python["confidence"] > 0.0
     assert 0.0 <= readiness["readiness_score"] <= 1.0
     assert "Python" in gaps
