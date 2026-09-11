@@ -92,5 +92,5 @@ Vite dev proxy also forwards `/api` to `http://localhost:8000` for local dev wit
 
 - [x] Phase 0 — Skeleton fixed (main.py, requirements, git, README, title)
 - [x] Phase 1 — Frontend ↔ Backend connection (api service, CORS, proxy, Home shell)
-- [ ] Phase 2 — Scoring engine (next)
-- [ ] RAG / Recommendation / Roadmap / Auth / DB — deferred
+- [x] Phase 2 — Scoring engine (next)
+- [x] RAG / Recommendation / Roadmap / Auth / DB — deferred
