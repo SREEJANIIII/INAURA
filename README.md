@@ -1,96 +1,77 @@
 # INAURA
-**Bridging skills to industry.**
+### Bridging Skills to Industry
 
-Student career-readiness platform — React/Vite frontend + FastAPI backend.
+INAURA is a student career-readiness platform that analyzes a user's existing
+evidence, compares demonstrated skills against industry-grounded role
+requirements, identifies skill gaps, and generates a personalized learning
+roadmap.
 
-## Architecture (Target)
+The platform is designed around one core principle:
 
-```
-React/Vite frontend
+> **Evidence should drive career-readiness decisions, not self-declared skills alone.**
+
+INAURA combines multiple evidence sources such as GitHub, competitive
+programming platforms, projects, coursework, certifications, and direct skill
+assessments.
+
+---
+
+## ✨ Core Features
+
+### 🔍 Evidence-Based Skill Analysis
+
+INAURA collects evidence from multiple sources and converts it into
+structured skill signals.
+
+Supported evidence sources include:
+
+- GitHub
+- LeetCode
+- Codeforces
+- Kaggle
+- Projects
+- Coursework / syllabus
+- Certifications
+- Resume
+- LinkedIn
+- Self-declared information
+
+Evidence is evaluated using source reliability, evidence depth, and signal
+strength rather than treating every source equally.
+
+---
+
+### 🐙 Deep GitHub Repository Analysis
+
+INAURA does not rely only on GitHub's displayed language statistics.
+
+For accessible repositories, INAURA can inspect:
+
+- Repository metadata
+- Repository structure
+- README / documentation
+- Source files
+- Imports and usages
+- Dependency manifests
+- Build configuration
+- Framework configuration
+- Tests
+- Docker / container configuration
+- CI/CD configuration
+- Deployment / infrastructure artifacts
+
+Repositories are processed individually and evidence is preserved at
+repository level.
+
+The system also distinguishes between:
+
+```text
+Documentation evidence
         ↓
-FastAPI REST API (/api/v1)
+Configuration / dependency evidence
         ↓
-Data / Analysis Services
+Source usage
         ↓
-RAG + Industry Knowledge (future)
+Implementation evidence
         ↓
-Skill Scoring Engine (deterministic, future)
-        ↓
-Career Recommendation (future)
-        ↓
-Personalized Roadmap (future)
-        ↓
-Progress Tracking (future)
-```
-
-## Project Structure
-
-```
-Inaura/
-├── frontend/          # React + Vite + TypeScript
-│   ├── src/
-│   │   ├── components/
-│   │   ├── pages/
-│   │   ├── services/  # api.ts, healthService etc.
-│   │   └── ...
-│   └── vite.config.ts # proxy /api -> FastAPI
-└── backend/           # FastAPI + Python
-    ├── app/
-    │   ├── main.py    # entrypoint
-    │   └── api/
-    └── requirements.txt
-```
-
-## Prerequisites
-
-- Node.js >= 18, npm >= 9
-- Python >= 3.10, pip
-
-## Running Locally
-
-### Backend (FastAPI)
-
-```bash
-cd backend
-python -m venv venv
-# Windows PowerShell
-.\venv\Scripts\Activate.ps1
-# or cmd: venv\Scripts\activate.bat
-pip install -r requirements.txt
-uvicorn app.main:app --reload --port 8000
-```
-
-Health check: http://localhost:8000/api/v1/health
-Docs: http://localhost:8000/docs
-
-### Frontend (Vite)
-
-```bash
-cd frontend
-npm install
-npm run dev
-```
-
-App: http://localhost:5173
-Configure backend URL via env:
-
-```bash
-# frontend/.env
-VITE_API_URL=http://localhost:8000/api/v1
-```
-
-Vite dev proxy also forwards `/api` to `http://localhost:8000` for local dev without CORS.
-
-## Verification (Phase 0/1)
-
-1. Backend health: `curl http://localhost:8000/api/v1/health`
-2. Frontend: Home page has "Check Backend Connection" button — should show `ok` when backend is running.
-3. Frontend build: `npm run build`
-4. Backend check: `python -m py_compile app/main.py` or `pytest` when tests exist.
-
-## Current Phase
-
-- [x] Phase 0 — Skeleton fixed (main.py, requirements, git, README, title)
-- [x] Phase 1 — Frontend ↔ Backend connection (api service, CORS, proxy, Home shell)
-- [x] Phase 2 — Scoring engine (next)
-- [x] RAG / Recommendation / Roadmap / Auth / DB — deferred
+Substantial implementation
