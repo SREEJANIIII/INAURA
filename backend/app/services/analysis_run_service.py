@@ -295,7 +295,7 @@ def _compute_github_diagnostics(evidence: List[dict], signals: List[dict]) -> Di
     Compute diagnostic counts for GitHub repository analysis.
     Returns dict with repositories_discovered, repositories_attempted,
     repositories_successfully_analyzed, repositories_with_evidence,
-    repositories_contributing_skills.
+    repositories_contributing_skills, plus github_candidates_* if available.
     """
     discovered = 0
     attempted = 0
@@ -343,6 +343,31 @@ def _compute_github_diagnostics(evidence: List[dict], signals: List[dict]) -> Di
                 elif r.get("status") in ("failed", "skipped", "skipped_low_evidence", "skipped_rate_limited"):
                     attempted += 1
 
+    # Aggregate candidate diagnostics from inspection if present (new validation gate)
+    candidates_detected = 0
+    candidates_accepted = 0
+    candidates_rejected = 0
+    for ev in evidence or []:
+        if (ev.get("evidence_type") or "").lower() != "github":
+            continue
+        meta = ev.get("metadata") or {}
+        insp = meta.get("inspection") or meta.get("raw_metadata") or {}
+        if isinstance(insp, dict):
+            if "github_candidates_detected" in insp:
+                candidates_detected += int(insp.get("github_candidates_detected") or 0)
+                candidates_accepted += int(insp.get("github_candidates_accepted") or 0)
+                candidates_rejected += int(insp.get("github_candidates_rejected") or 0)
+    # Fallback: if no provider diagnostics yet (old pipeline), compute from signals via validation gate
+    if candidates_detected == 0 and signals:
+        # Use validator to estimate: total distinct github skills before filtering would be signals + rejected doc-only
+        # For old evidence, we can approximate by counting doc-only would-be rejected
+        from .evidence.github_validation import validate_aggregated_signal
+        # Reconstruct distinct candidates as accepted + would-be rejected doc-only
+        # For now, if no diagnostics, set candidates_detected = len github signals before filtering (unknown)
+        # Keep as accepted count for backward compat
+        candidates_detected = len([s for s in signals if str(s.get("source") or s.get("source_type") or "").lower() == "github"]) + candidates_rejected
+        candidates_accepted = len([s for s in signals if str(s.get("source") or s.get("source_type") or "").lower() == "github"])
+
     # Contributing skills: distinct repos that contributed to at least one signal
     for sig in signals or []:
         src_type = str(sig.get("source") or sig.get("source_type") or "").lower()
@@ -365,13 +390,20 @@ def _compute_github_diagnostics(evidence: List[dict], signals: List[dict]) -> Di
     if discovered == 0 and (successfully_analyzed > 0 or contributing):
         discovered = max(successfully_analyzed, len(contributing))
 
-    return {
+    out = {
         "repositories_discovered": int(discovered),
         "repositories_attempted": int(attempted or successfully_analyzed),
         "repositories_successfully_analyzed": int(successfully_analyzed),
         "repositories_with_evidence": int(with_evidence or successfully_analyzed),
         "repositories_contributing_skills": int(len(contributing)),
     }
+    if candidates_detected:
+        out.update({
+            "github_candidates_detected": int(candidates_detected),
+            "github_candidates_accepted": int(candidates_accepted),
+            "github_candidates_rejected": int(candidates_rejected),
+        })
+    return out
 
 
 def _signal_spread(signals: List[dict]) -> float:

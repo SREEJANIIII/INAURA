@@ -14,7 +14,10 @@ from ..skill_taxonomy import (
     normalize_skill,
     normalize_skill_slug,
     extract_known_skills_from_text,
+    get_canonical_skill,
 )
+from .github_validation import validate_aggregated_signal as _validate_aggregated
+from .github_validation import validate_repo_signal as _validate_repo_signal
 
 logger = logging.getLogger(__name__)
 
@@ -1745,16 +1748,21 @@ class GitHubProvider(EvidenceProvider):
                 metadata["archived"] = True
                 metadata["historical_only"] = True
 
-            aggregated.append(
-                ExtractedSignal(
-                    skill=skill,
-                    signal_strength=final_strength,
-                    depth=final_depth,
-                    reason=reason,
-                    source_reliability=GITHUB_RELIABILITY,
-                    metadata=metadata,
-                )
+            # Generic evidence validation gate: reject weak/incidental candidates
+            tmp_signal = ExtractedSignal(
+                skill=skill,
+                signal_strength=final_strength,
+                depth=final_depth,
+                reason=reason,
+                source_reliability=GITHUB_RELIABILITY,
+                metadata=metadata,
             )
+            ok, _reason = _validate_aggregated(tmp_signal, metadata)
+            if not ok:
+                # Keep rejected for diagnostics but do not emit as final skill
+                # Store reason in a side channel via metadata? Not needed for final signals
+                continue
+            aggregated.append(tmp_signal)
 
         # Sort by depth and signal_strength descending
         aggregated.sort(key=lambda s: (s.depth, s.signal_strength), reverse=True)
@@ -1878,9 +1886,20 @@ class GitHubProvider(EvidenceProvider):
                     )
                 all_warnings.extend(inspect_warnings)
 
-                # Aggregate signals across repositories
+                # Aggregate signals across repositories with generic validation gate
+                # Compute candidates before filtering for diagnostics
+                from collections import defaultdict as _dd
+                _by_skill_raw: Dict[str, List] = _dd(list)
+                for _sig, _repo in raw_signals:
+                    _canon = normalize_skill(_sig.skill) or _sig.skill
+                    _by_skill_raw.setdefault(_canon, []).append((_sig, _repo))
+                candidates_detected = len(_by_skill_raw)
                 signals = self._aggregate_profile_signals(owner, raw_signals, verified_at)
-                logger.debug(f"GitHub profile @{owner}: aggregation complete ({len(signals)} skills extracted)")
+                candidates_accepted = len(signals)
+                candidates_rejected = max(0, candidates_detected - candidates_accepted)
+                # Breakdown for diagnostics
+                weak_doc = sum(1 for s in signals if (s.metadata.get("evidence_kinds") == ["documentation"]))  # should be 0 after filter
+                logger.debug(f"GitHub profile @{owner}: aggregation {candidates_detected} candidates -> {candidates_accepted} accepted, {candidates_rejected} rejected")
 
                 # Compile statistics
                 repos_fetched = len(all_repos)
@@ -1911,6 +1930,9 @@ class GitHubProvider(EvidenceProvider):
                     ),
                     "content_fetches_used": content_budget.used,
                     "content_budget": content_budget.total,
+                    "github_candidates_detected": candidates_detected,
+                    "github_candidates_accepted": candidates_accepted,
+                    "github_candidates_rejected": candidates_rejected,
                     "repositories": inspected_repos,
                     # Backward compatibility
                     "owner": owner,
@@ -2116,7 +2138,7 @@ class GitHubProvider(EvidenceProvider):
                 "Docker",
                 depth,
                 f"Repository '{repo_name}' contains verified container configuration: {', '.join(details)}.",
-                {"files": details},
+                {"files": details, "evidence_kind": "configuration"},
             )
 
         # 2. CI/CD & GitHub Actions Detection
@@ -2126,12 +2148,13 @@ class GitHubProvider(EvidenceProvider):
                 "GitHub Actions",
                 depth,
                 f"Repository '{repo_name}' contains automated CI/CD workflow definitions (.github/workflows).",
-                {"has_workflows": has_workflows},
+                {"has_workflows": has_workflows, "evidence_kind": "configuration"},
             )
             _add_signal(
                 "CI/CD",
                 depth,
                 f"Repository '{repo_name}' configures automated integration/deployment pipelines.",
+                {"evidence_kind": "configuration"},
             )
 
         # 3. JavaScript / React / Next.js / Express / Node.js Detection
@@ -2145,7 +2168,7 @@ class GitHubProvider(EvidenceProvider):
                     "React",
                     depth,
                     f"Repository '{repo_name}' contains React dependencies in package.json and project implementation.",
-                    {"package_json": True},
+                    {"package_json": True, "evidence_kind": "dependency_manifest"},
                 )
 
             # Next.js
@@ -2154,6 +2177,7 @@ class GitHubProvider(EvidenceProvider):
                     "Next.js",
                     EvidenceDepth.LEVEL_3_IMPLEMENTATION,
                     f"Repository '{repo_name}' contains Next.js framework dependencies.",
+                    {"evidence_kind": "dependency_manifest"},
                 )
 
             # Express
@@ -2162,6 +2186,7 @@ class GitHubProvider(EvidenceProvider):
                     "Express",
                     EvidenceDepth.LEVEL_3_IMPLEMENTATION,
                     f"Repository '{repo_name}' contains Express server framework dependencies.",
+                    {"evidence_kind": "dependency_manifest"},
                 )
 
             # Node.js
@@ -2170,6 +2195,7 @@ class GitHubProvider(EvidenceProvider):
                     "Node.js",
                     EvidenceDepth.LEVEL_3_IMPLEMENTATION,
                     f"Repository '{repo_name}' contains Node.js runtime package manifest.",
+                    {"evidence_kind": "dependency_manifest"},
                 )
 
         # TypeScript Detection (independent of package.json)
@@ -2178,6 +2204,7 @@ class GitHubProvider(EvidenceProvider):
                 "TypeScript",
                 EvidenceDepth.LEVEL_3_IMPLEMENTATION,
                 f"Repository '{repo_name}' contains TypeScript configuration and code.",
+                {"evidence_kind": "dependency_manifest"},
             )
 
         # 4. Python & Python Ecosystem Detection
@@ -2191,6 +2218,7 @@ class GitHubProvider(EvidenceProvider):
                 "Python",
                 depth,
                 f"Repository '{repo_name}' implements Python software (verified languages/manifests).",
+                {"evidence_kind": "implementation"},
             )
 
             # Python Frameworks & Data Science
@@ -2199,6 +2227,7 @@ class GitHubProvider(EvidenceProvider):
                     "REST APIs",
                     EvidenceDepth.LEVEL_3_IMPLEMENTATION,
                     f"Repository '{repo_name}' implements REST API services with Python web frameworks.",
+                    {"evidence_kind": "dependency_manifest"},
                 )
 
             if any("pandas" in d for d in py_deps):
@@ -2206,12 +2235,14 @@ class GitHubProvider(EvidenceProvider):
                     "Pandas",
                     EvidenceDepth.LEVEL_2_CONFIG,
                     f"Repository '{repo_name}' includes Pandas data analysis dependencies.",
+                    {"evidence_kind": "dependency_manifest"},
                 )
             if any("numpy" in d for d in py_deps):
                 _add_signal(
                     "NumPy",
                     EvidenceDepth.LEVEL_2_CONFIG,
                     f"Repository '{repo_name}' includes NumPy numerical computing dependencies.",
+                    {"evidence_kind": "dependency_manifest"},
                 )
 
             if any(d in py_deps for d in ("scikit-learn", "sklearn", "torch", "tensorflow")):
@@ -2219,6 +2250,7 @@ class GitHubProvider(EvidenceProvider):
                     "Machine Learning",
                     EvidenceDepth.LEVEL_3_IMPLEMENTATION,
                     f"Repository '{repo_name}' specifies machine learning framework dependencies.",
+                    {"evidence_kind": "dependency_manifest"},
                 )
 
         # 5. Java / JVM Detection (tiered by implementation evidence).
@@ -2293,6 +2325,7 @@ class GitHubProvider(EvidenceProvider):
                     "java_bytes": int(java_bytes),
                     "has_build_manifest": has_build_manifest,
                     "build_system": inspection.get("build_system"),
+                    "evidence_kind": "implementation" if java_depth >= EvidenceDepth.LEVEL_3_IMPLEMENTATION else "dependency_manifest",
                 },
             )
             if has_spring:
@@ -2300,7 +2333,7 @@ class GitHubProvider(EvidenceProvider):
                     "Spring Boot",
                     EvidenceDepth.LEVEL_3_IMPLEMENTATION,
                     f"Repository '{repo_name}' declares Spring framework dependencies in its Java build manifest.",
-                    {"framework": "spring_boot"},
+                    {"framework": "spring_boot", "evidence_kind": "dependency_manifest"},
                 )
 
         # 5b. General ecosystem language detection (every other canonical
@@ -2368,7 +2401,7 @@ class GitHubProvider(EvidenceProvider):
                 _skill,
                 _depth,
                 f"Repository '{repo_name}' {_detail}.",
-                {"source_file_count": _files, "language_bytes": _bytes, "has_build_manifest": _manifest},
+                {"source_file_count": _files, "language_bytes": _bytes, "has_build_manifest": _manifest, "evidence_kind": "implementation" if _depth >= EvidenceDepth.LEVEL_3_IMPLEMENTATION else "dependency_manifest"},
             )
 
         # 5c. Cross-ecosystem web frameworks -> canonical REST APIs skill.
@@ -2378,7 +2411,7 @@ class GitHubProvider(EvidenceProvider):
                 "REST APIs",
                 EvidenceDepth.LEVEL_3_IMPLEMENTATION,
                 f"Repository '{repo_name}' implements REST API services ({', '.join(rest_hits[:5])}).",
-                {"frameworks": rest_hits[:5]},
+                {"frameworks": rest_hits[:5], "evidence_kind": "dependency_manifest"},
             )
 
         # 5d. Styling dependencies -> canonical CSS skill.
@@ -2388,7 +2421,7 @@ class GitHubProvider(EvidenceProvider):
                 "CSS",
                 EvidenceDepth.LEVEL_2_CONFIG,
                 f"Repository '{repo_name}' declares styling dependencies ({', '.join(css_hits[:5])}).",
-                {"dependencies": css_hits[:5]},
+                {"dependencies": css_hits[:5], "evidence_kind": "dependency_manifest"},
             )
 
         # 5e. Kubernetes manifests -> canonical Kubernetes skill (config-level).
@@ -2397,7 +2430,7 @@ class GitHubProvider(EvidenceProvider):
                 "Kubernetes",
                 EvidenceDepth.LEVEL_2_CONFIG,
                 f"Repository '{repo_name}' contains Kubernetes deployment manifests ({k8s_manifest_count} file(s)).",
-                {"manifest_count": k8s_manifest_count},
+                {"manifest_count": k8s_manifest_count, "evidence_kind": "configuration"},
             )
 
         # 5f. Non-GitHub CI configs (Jenkins/GitLab/Travis/Circle/Azure) -> CI/CD.
@@ -2406,6 +2439,7 @@ class GitHubProvider(EvidenceProvider):
                 "CI/CD",
                 EvidenceDepth.LEVEL_2_CONFIG,
                 f"Repository '{repo_name}' configures continuous integration pipelines.",
+                {"evidence_kind": "configuration"},
             )
 
         # 6. Database Dependencies & ORMs
@@ -2414,24 +2448,28 @@ class GitHubProvider(EvidenceProvider):
                 "PostgreSQL",
                 EvidenceDepth.LEVEL_2_CONFIG,
                 f"Repository '{repo_name}' contains explicit PostgreSQL database adapter dependencies.",
+                {"evidence_kind": "dependency_manifest"},
             )
         if any(d in all_deps for d in ("mongodb", "mongoose", "pymongo")):
             _add_signal(
                 "MongoDB",
                 EvidenceDepth.LEVEL_2_CONFIG,
                 f"Repository '{repo_name}' contains MongoDB driver dependencies.",
+                {"evidence_kind": "dependency_manifest"},
             )
         if any(d in all_deps for d in ("mysql", "mysql2", "pymysql", "mysqldb", "mysql-connector")):
             _add_signal(
                 "MySQL",
                 EvidenceDepth.LEVEL_2_CONFIG,
                 f"Repository '{repo_name}' contains explicit MySQL database adapter dependencies.",
+                {"evidence_kind": "dependency_manifest"},
             )
         if any(d in all_deps for d in ("redis", "ioredis")):
             _add_signal(
                 "Redis",
                 EvidenceDepth.LEVEL_2_CONFIG,
                 f"Repository '{repo_name}' includes Redis client dependencies.",
+                {"evidence_kind": "dependency_manifest"},
             )
 
         # Database Design (ORMs and migration engines) -> canonical DBMS skill
@@ -2441,6 +2479,7 @@ class GitHubProvider(EvidenceProvider):
                 "DBMS",
                 EvidenceDepth.LEVEL_3_IMPLEMENTATION,
                 f"Repository '{repo_name}' implements structured database ORM/schema migration models.",
+                {"evidence_kind": "implementation"},
             )
 
         # 7. Authentication & Security -> canonical Application Security skill
@@ -2450,6 +2489,7 @@ class GitHubProvider(EvidenceProvider):
                 "Application Security",
                 EvidenceDepth.LEVEL_3_IMPLEMENTATION,
                 f"Repository '{repo_name}' configures secure authentication/authorization libraries.",
+                {"evidence_kind": "dependency_manifest"},
             )
 
         # 8. Full-Stack / Architecture Structure
@@ -2460,7 +2500,7 @@ class GitHubProvider(EvidenceProvider):
                 "Software Architecture",
                 EvidenceDepth.LEVEL_3_IMPLEMENTATION,
                 f"Repository '{repo_name}' implements decoupled full-stack architecture (frontend + backend modules).",
-                {"full_stack_monorepo": True},
+                {"full_stack_monorepo": True, "evidence_kind": "implementation"},
             )
 
         # 9. Testing Suite
@@ -2469,6 +2509,7 @@ class GitHubProvider(EvidenceProvider):
                 "Testing",
                 EvidenceDepth.LEVEL_3_IMPLEMENTATION,
                 f"Repository '{repo_name}' contains automated test suite configurations/files.",
+                {"evidence_kind": "tests"},
             )
 
         # 10. Git Skill
@@ -2477,6 +2518,7 @@ class GitHubProvider(EvidenceProvider):
                 "Git",
                 EvidenceDepth.LEVEL_3_IMPLEMENTATION,
                 f"Verified public repository '{repo_name}' hosted on GitHub with commit history.",
+                {"evidence_kind": "implementation"},
             )
 
         # 11. Declared dependencies -> canonical skills (taxonomy driven).
@@ -2562,6 +2604,31 @@ class GitHubProvider(EvidenceProvider):
                 },
                 only_if_absent=True,
             )
+
+        # Generic evidence-validation gate: candidate -> validated
+        # Weak/incidental evidence is downgraded to weak candidate, not final skill
+        accepted_map: Dict[str, ExtractedSignal] = {}
+        rejected_candidates: List[Dict[str, Any]] = []
+        for canonical, sig in signal_map.items():
+            kind = str(sig.metadata.get("evidence_kind") or "")
+            ok, reason = _validate_repo_signal(canonical, sig.depth, kind, inspection)
+            if not ok:
+                rejected_candidates.append({
+                    "skill": canonical,
+                    "depth": sig.depth,
+                    "evidence_kind": kind,
+                    "reason": reason,
+                    "signal_strength": sig.signal_strength,
+                })
+                continue
+            accepted_map[canonical] = sig
+        signal_map = accepted_map
+        # Keep rejected for diagnostics/provenance
+        if rejected_candidates:
+            inspection["rejected_candidates"] = rejected_candidates
+            inspection["rejected_count"] = len(rejected_candidates)
+        inspection["candidates_detected"] = len(signal_map) + len(rejected_candidates)
+        inspection["candidates_accepted"] = len(signal_map)
 
         # Attach corroborating evidence provenance without changing strength.
         signals: List[ExtractedSignal] = []

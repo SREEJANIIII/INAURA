@@ -7,7 +7,8 @@ from datetime import datetime, timezone
 # stored `verified_signals` stale. The analysis pipeline re-verifies evidence
 # recorded under an older version so live runs never serve outdated signals.
 # 2: deep GitHub repository-content evidence (full pagination + content stage).
-EVIDENCE_PIPELINE_VERSION = 2
+# 3: generic evidence-validation gate (reject documentation-only & incidental)
+EVIDENCE_PIPELINE_VERSION = 3
 
 
 class VerificationStatus:
