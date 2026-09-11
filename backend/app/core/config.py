@@ -12,6 +12,9 @@ class Settings(BaseSettings):
     embedding_provider: str | None = None
     embedding_api_key: str | None = None
     embedding_model: str | None = None
+    # Experimental AI review (isolated /ai-review-test feature only)
+    google_api_key: str | None = None
+    gemini_model: str = "gemini-2.5-flash"
 
     class Config:
         env_file = ".env"
@@ -21,8 +24,8 @@ class Settings(BaseSettings):
 
     def model_post_init(self, __context):  # type: ignore
         # Treat placeholder values from .env.example as not set
-        placeholders = {"your-anon-key", "your-service-role-key", "your-jwt-secret", "YOUR_JWT_SECRET", "your-project.supabase.co", "your-embedding-key"}
-        for field in ["supabase_url", "supabase_anon_key", "supabase_service_role_key", "supabase_jwt_secret", "embedding_api_key"]:
+        placeholders = {"your-anon-key", "your-service-role-key", "your-jwt-secret", "YOUR_JWT_SECRET", "your-project.supabase.co", "your-embedding-key", "your-google-api-key"}
+        for field in ["supabase_url", "supabase_anon_key", "supabase_service_role_key", "supabase_jwt_secret", "embedding_api_key", "google_api_key"]:
             val = getattr(self, field)
             if val and any(ph in val for ph in placeholders):
                 setattr(self, field, None)
