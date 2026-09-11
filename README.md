@@ -277,50 +277,41 @@ black-box percentages.
 
 ## Architecture
 
-                         USER
-                          │
-                          ▼
-                 Evidence Collection
-                          │
-        ┌─────────────────┼──────────────────┐
-        ▼                 ▼                  ▼
-      GitHub          Performance        Other Evidence
-   Repositories       Platforms        Projects/Course/etc.
-        │                 │                  │
-        ▼                 ▼                  ▼
- Deep Repository      Performance       Evidence Providers
-    Analysis            Signals
-        │                 │                  │
-        └─────────────────┼──────────────────┘
-                          ▼
-                  Evidence Validation
-                          │
-                          ▼
-                  Canonical Skills
-                          │
-              ┌───────────┴───────────┐
-              ▼                       ▼
-       Industry Requirements      Candidate Evidence
-              │                       │
-              └───────────┬───────────┘
-                          ▼
-                    Skill Engine
-                          │
-               ┌──────────┼──────────┐
-               ▼          ▼          ▼
-          Proficiency  Confidence    Gap
-               │          │          │
-               └──────────┼──────────┘
-                          ▼
-                 Career Readiness
-                          │
-                          ▼
-                      Roadmap
-                          ▲
-                          │
-                   Skill Assessment
-                          │
-                          └──── feedback loop
+                       ## Project Structure
+
+```text
+INAURA/
+├── frontend/
+│   ├── src/
+│   │   ├── components/
+│   │   │   ├── assessment/
+│   │   │   └── ui/
+│   │   ├── pages/
+│   │   ├── services/
+│   │   └── ...
+│   ├── vite.config.ts
+│   └── package.json
+│
+├── backend/
+│   ├── app/
+│   │   ├── api/
+│   │   │   └── v1/
+│   │   ├── services/
+│   │   │   ├── assessment/
+│   │   │   ├── evidence/
+│   │   │   ├── skill_engine.py
+│   │   │   ├── signal_extractor.py
+│   │   │   ├── industry_service.py
+│   │   │   ├── analysis_run_service.py
+│   │   │   └── ...
+│   │   └── main.py
+│   │
+│   ├── supabase/
+│   ├── tests/
+│   └── requirements.txt
+│
+└── README.md
+```
 
 ---
 
