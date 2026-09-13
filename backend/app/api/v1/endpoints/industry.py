@@ -84,6 +84,8 @@ async def retrieve_requirements(
             "description": r.get("description"),
             "version": r.get("version", "2026.1"),
             "similarity": float(r.get("similarity", 0.0)),
+            "evidence_strength": r.get("evidence_strength"),
+            "supporting_chunks": r.get("supporting_chunks"),
         }
         for r in result["items"]
     ]

@@ -894,6 +894,9 @@ export default function AnalysisResults() {
             <Button variant="secondary" size="md" onClick={() => (window.location.href = "/analysis")}>
               Back to Evidence
             </Button>
+            <Button variant="secondary" size="md" onClick={() => (window.location.href = "/analysis/capabilities")}>
+              Skill Capability Map →
+            </Button>
             <Button variant="primary" size="md" onClick={() => (window.location.href = "/roadmap")}>
               View Personalized Roadmap →
             </Button>

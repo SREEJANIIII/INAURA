@@ -1,6 +1,7 @@
 import math
+import re
 import time
-from typing import List, Optional, Dict, Any
+from typing import List, Optional, Dict, Any, Tuple
 from fastapi import HTTPException
 from supabase import Client
 from ..core.supabase import get_supabase_client
@@ -1651,6 +1652,9 @@ def _normalize_requirement_row(row: dict) -> dict:
         "mapping_version": mapping_version,
         "role_relevance": role_relevance,
         "source_quality": round(max(0.0, min(1.0, source_quality)), 3),
+        "evidence_strength": classify_requirement_evidence(
+            1, source_quality, industry_confidence
+        ),
         "evidence_context": evidence_context,
         "published_at": published_at,
         "retrieved_at": retrieved_at_val,
@@ -1660,6 +1664,217 @@ def _normalize_requirement_row(row: dict) -> dict:
     }
 
 
+# ---------------------------------------------------------------------------
+# Phase 7: industry requirement trustworthiness.
+#
+# Every requirement carries provenance (source, quality, dates, context) and
+# an evidence-strength tier so analysis results can explain WHY a skill is
+# required. Nothing here changes student scoring formulas.
+# ---------------------------------------------------------------------------
+
+# Evidence-strength tiers for industry requirements.
+EVIDENCE_STRONG = "strong"
+EVIDENCE_MODERATE = "moderate"
+EVIDENCE_WEAK = "weak"
+EVIDENCE_INSUFFICIENT = "insufficient"
+
+# Sources at or above this quality count as solid benchmark evidence.
+SOLID_SOURCE_QUALITY = 0.70
+STRONG_SOURCE_QUALITY = 0.85
+# Corroborated-confidence bar for "strong". Note the compounding formula
+# grants two 0.90-quality sources ~0.70 confidence (1-(1-0.45)^2), so the bar
+# sits just below that: two solid independent sources agreeing IS strong
+# corroboration, while a lone source stays moderate however confident.
+STRONG_CONFIDENCE = 0.65
+
+# Source strings that indicate placeholder/fabricated provenance.
+_UNTRUSTED_SOURCE_MARKERS = frozenset({
+    "", "unknown", "n/a", "none", "test", "placeholder", "lorem ipsum",
+    "tbd", "todo", "example", "sample data",
+})
+
+
+def classify_requirement_evidence(
+    distinct_sources: Any,
+    max_quality: Any,
+    industry_confidence: Any,
+) -> str:
+    """
+    Deterministic evidence-strength tier for one requirement:
+      insufficient - no distinct sources at all.
+      weak         - best source below usable quality (< 0.70).
+      strong       - corroborated by 2+ distinct sources with solid quality
+                     (>= 0.85) and confidence (>= 0.80).
+      moderate     - everything else with at least one usable source
+                     (e.g. a single solid benchmark).
+    """
+    try:
+        n_sources = int(distinct_sources)
+    except (TypeError, ValueError):
+        n_sources = 0
+    try:
+        quality = float(max_quality)
+    except (TypeError, ValueError):
+        quality = 0.0
+    try:
+        confidence = float(industry_confidence)
+    except (TypeError, ValueError):
+        confidence = 0.0
+    if n_sources <= 0:
+        return EVIDENCE_INSUFFICIENT
+    if quality < SOLID_SOURCE_QUALITY:
+        return EVIDENCE_WEAK
+    if n_sources >= 2 and quality >= STRONG_SOURCE_QUALITY and confidence >= STRONG_CONFIDENCE:
+        return EVIDENCE_STRONG
+    return EVIDENCE_MODERATE
+
+
+def validate_requirement_provenance(req: Dict[str, Any]) -> List[str]:
+    """
+    Deterministic provenance audit for one requirement row. Returns a list of
+    stable issue codes (empty means the provenance is complete). Never raises.
+    Codes: missing_skill, non_canonical_skill, missing_source,
+    untrusted_source, missing_source_quality, quality_out_of_bounds,
+    missing_published_at, missing_retrieved_at, missing_evidence_context.
+    """
+    issues: List[str] = []
+    try:
+        skill = str((req or {}).get("skill", "") or "")
+    except Exception:
+        skill = ""
+    if not skill.strip():
+        issues.append("missing_skill")
+    elif normalize_skill(skill) != skill:
+        issues.append("non_canonical_skill")
+    try:
+        source = str((req or {}).get("source", "") or "")
+    except Exception:
+        source = ""
+    if len(source.strip()) < 5:
+        issues.append("missing_source")
+    elif source.strip().lower() in _UNTRUSTED_SOURCE_MARKERS:
+        issues.append("untrusted_source")
+    quality = (req or {}).get("source_quality", None)
+    if quality is None or (isinstance(quality, str) and not quality.strip()):
+        issues.append("missing_source_quality")
+    else:
+        try:
+            q = float(quality)
+            if not 0.0 <= q <= 1.0:
+                issues.append("quality_out_of_bounds")
+        except (TypeError, ValueError):
+            issues.append("missing_source_quality")
+    if not str((req or {}).get("published_at", "") or "").strip():
+        issues.append("missing_published_at")
+    if not str((req or {}).get("retrieved_at", "") or "").strip():
+        issues.append("missing_retrieved_at")
+    if len(str((req or {}).get("evidence_context", "") or "")) < 10:
+        issues.append("missing_evidence_context")
+    return issues
+
+
+def _normalize_source_key(source: Any) -> str:
+    """Canonical key for duplicate-source detection (case/space tolerant)."""
+    return re.sub(r"\s+", " ", str(source or "").strip().lower())
+
+
+def _dedupe_same_source_rows(items: List[dict]) -> Tuple[List[dict], int]:
+    """
+    Collapse duplicate rows from the SAME source for one (role, skill) so a
+    repeated source cannot stack influence in quality-weighted aggregation.
+    Keeps the strongest statement per source by (required_level, importance,
+    source_quality), first occurrence winning ties. Deterministic.
+    Returns (deduped_rows_in_first_occurrence_order, collapsed_count).
+    """
+    best_by_source: Dict[str, dict] = {}
+    first_seen: Dict[str, int] = {}
+    for position, item in enumerate(items):
+        key = _normalize_source_key(item.get("source", ""))
+        candidate_rank = (
+            float(item.get("required_level", 0.0) or 0.0),
+            float(item.get("importance", 0.0) or 0.0),
+            float(item.get("source_quality", 0.0) or 0.0),
+        )
+        current = best_by_source.get(key)
+        if current is None:
+            best_by_source[key] = item
+            first_seen[key] = position
+            continue
+        current_rank = (
+            float(current.get("required_level", 0.0) or 0.0),
+            float(current.get("importance", 0.0) or 0.0),
+            float(current.get("source_quality", 0.0) or 0.0),
+        )
+        if candidate_rank > current_rank:
+            best_by_source[key] = item
+    ordered_keys = sorted(best_by_source.keys(), key=lambda k: first_seen[k])
+    deduped = [best_by_source[k] for k in ordered_keys]
+    return deduped, len(items) - len(deduped)
+
+
+def _supporting_source_entries(items: List[dict], limit: int = 8) -> List[dict]:
+    """Distinct supporting sources, strongest quality first (deterministic)."""
+    seen: Dict[str, dict] = {}
+    for item in items or []:
+        key = _normalize_source_key(item.get("source", ""))
+        if not key:
+            continue
+        try:
+            quality = round(max(0.0, min(1.0, float(item.get("source_quality", 0.0) or 0.0))), 3)
+        except (TypeError, ValueError):
+            quality = 0.0
+        entry = {
+            "source": str(item.get("source", "")),
+            "source_url": item.get("source_url"),
+            "source_quality": quality,
+        }
+        current = seen.get(key)
+        if current is None or quality > float(current.get("source_quality", 0.0) or 0.0):
+            seen[key] = entry
+    ordered = sorted(seen.values(), key=lambda e: (-float(e.get("source_quality", 0.0) or 0.0), str(e.get("source", ""))))
+    return ordered[:max(1, int(limit))]
+
+
+def supporting_chunk_refs(role: str, skill: str, limit: int = 3) -> List[dict]:
+    """
+    References to benchmark knowledge chunks that mention this skill for this
+    role (chunk id, role, topic, source, url). Reference-only: chunk bodies
+    are never copied into requirements. Empty when nothing mentions the
+    skill — absence is honest, never backfilled.
+    """
+    try:
+        # Local import: retrieval_service imports industry_service at module
+        # load, so a top-level import here would be circular.
+        from .retrieval_service import PROTOTYPE_KNOWLEDGE_CHUNKS
+
+        canonical = normalize_skill(str(skill or "")) or str(skill or "")
+        refs: List[dict] = []
+        for chunk in PROTOTYPE_KNOWLEDGE_CHUNKS or []:
+            try:
+                if str(chunk.get("role", "")).strip().lower() != str(role or "").strip().lower():
+                    continue
+                mentioned = chunk.get("skills_mentioned") or []
+                if isinstance(mentioned, str):
+                    mentioned = [mentioned]
+                names = {normalize_skill(str(name)) or str(name) for name in mentioned}
+                if canonical not in names:
+                    continue
+                refs.append({
+                    "chunk_id": chunk.get("id"),
+                    "role": chunk.get("role"),
+                    "topic": chunk.get("topic"),
+                    "source": chunk.get("source"),
+                    "source_url": chunk.get("source_url"),
+                })
+                if len(refs) >= max(1, int(limit)):
+                    break
+            except Exception:
+                continue
+        return refs
+    except Exception:
+        return []
+
+
 def aggregate_requirements(req_rows: List[dict]) -> List[dict]:
     """
     Multi-source requirement aggregation formula for the same canonical skill within a role:
@@ -1667,6 +1882,11 @@ def aggregate_requirements(req_rows: List[dict]) -> List[dict]:
       importance = sum(importance_i * quality_i) / sum(quality_i)
       industry_confidence = min(0.98, max(0.40, 1.0 - product(1.0 - 0.5 * quality_i)))
       demand = min(1.0, (distinct_sources / 4.0) * 0.6 + max(demand_i) * 0.4)
+
+    Phase 7 additions (additive, formula untouched): same-source duplicate
+    rows collapse first so one source cannot stack influence; every result
+    carries evidence_strength, supporting_sources, supporting_chunks, and
+    duplicate_sources_collapsed for explainability.
     """
     by_role_skill: Dict[tuple, List[dict]] = {}
     for r in req_rows:
@@ -1676,33 +1896,42 @@ def aggregate_requirements(req_rows: List[dict]) -> List[dict]:
 
     aggregated: List[dict] = []
     for (role_lower, skill_name), items in by_role_skill.items():
-        if len(items) == 1:
-            aggregated.append(items[0])
+        deduped, collapsed = _dedupe_same_source_rows(items)
+        if len(deduped) == 1:
+            single = dict(deduped[0])
+            single["duplicate_sources_collapsed"] = collapsed
+            single["supporting_sources"] = _supporting_source_entries(deduped)
+            single["supporting_chunks"] = supporting_chunk_refs(
+                single.get("role", ""), single.get("skill", "")
+            )
+            # evidence_strength already set by normalization (single source).
+            aggregated.append(single)
             continue
 
-        total_quality = sum(it["source_quality"] for it in items)
+        total_quality = sum(it["source_quality"] for it in deduped)
         if total_quality <= 0:
-            total_quality = float(len(items))
+            total_quality = float(len(deduped))
 
         # Weighted required_level and importance
-        agg_level = sum(it["required_level"] * it["source_quality"] for it in items) / total_quality
-        agg_imp = sum(it["importance"] * it["source_quality"] for it in items) / total_quality
+        agg_level = sum(it["required_level"] * it["source_quality"] for it in deduped) / total_quality
+        agg_imp = sum(it["importance"] * it["source_quality"] for it in deduped) / total_quality
 
         # Distinct sources & demand
-        sources = list({it["source"] for it in items if it.get("source")})
-        max_demand = max(it["demand"] for it in items)
+        sources = list({it["source"] for it in deduped if it.get("source")})
+        max_demand = max(it["demand"] for it in deduped)
         agg_demand = min(1.0, (len(sources) / 4.0) * 0.6 + max_demand * 0.4)
 
         # Max interview relevance
-        agg_interview = max(it["interview_relevance"] for it in items)
+        agg_interview = max(it["interview_relevance"] for it in deduped)
 
         # Confidence compounding
         uncovered = 1.0
-        for it in items:
+        for it in deduped:
             uncovered *= (1.0 - 0.5 * it["source_quality"])
         agg_conf = min(0.98, max(0.40, 1.0 - uncovered))
 
-        primary = items[0]
+        primary = deduped[0]
+        max_quality = round(max(it["source_quality"] for it in deduped), 3)
         aggregated.append({
             **primary,
             "required_level": round(agg_level, 3),
@@ -1711,7 +1940,11 @@ def aggregate_requirements(req_rows: List[dict]) -> List[dict]:
             "interview_relevance": round(agg_interview, 3),
             "industry_confidence": round(agg_conf, 3),
             "source": f"Aggregated ({len(sources)} sources: {', '.join(sources[:2])})",
-            "source_quality": round(max(it["source_quality"] for it in items), 3),
+            "source_quality": max_quality,
+            "evidence_strength": classify_requirement_evidence(len(sources), max_quality, round(agg_conf, 3)),
+            "duplicate_sources_collapsed": collapsed,
+            "supporting_sources": _supporting_source_entries(deduped),
+            "supporting_chunks": supporting_chunk_refs(primary.get("role", ""), skill_name),
         })
 
     # Sort aggregated by importance descending

@@ -25,6 +25,20 @@ class IndustryRequirementResponse(BaseModel):
     retrieved_at: Optional[str] = None
     created_at: Optional[datetime] = None
     updated_at: Optional[datetime] = None
+    # Phase 7: requirement trustworthiness (all optional for compatibility
+    # with rows persisted before these fields existed).
+    evidence_strength: Optional[str] = Field(
+        default=None,
+        description="Trust tier: strong, moderate, weak, or insufficient",
+    )
+    supporting_chunks: Optional[List[dict]] = Field(
+        default=None,
+        description="References (chunk id, role, topic, source, url) to benchmark chunks mentioning this skill",
+    )
+    duplicate_sources_collapsed: Optional[int] = Field(
+        default=None,
+        description="Same-source duplicate rows collapsed during aggregation",
+    )
 
     class Config:
         from_attributes = True
@@ -112,6 +126,14 @@ class RetrieveItem(BaseModel):
     description: Optional[str] = None
     version: str = "2026.1"
     similarity: float = Field(..., description="Retrieval relevance 0-1, not proficiency")
+    evidence_strength: Optional[str] = Field(
+        default=None,
+        description="Trust tier: strong, moderate, weak, or insufficient",
+    )
+    supporting_chunks: Optional[List[dict]] = Field(
+        default=None,
+        description="References (chunk id, role, topic, source, url) to benchmark chunks mentioning this skill",
+    )
 
 
 class RetrieveResponse(BaseModel):

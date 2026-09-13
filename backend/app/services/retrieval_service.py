@@ -1,7 +1,8 @@
-from typing import List, Optional, Dict, Any, Set
+from typing import List, Optional, Dict, Any, Set, Tuple
 from fastapi import HTTPException
 from supabase import Client
 import math
+import re
 
 from ..core.supabase import get_supabase_client
 from ..core.config import get_settings
@@ -12,6 +13,63 @@ from .industry_roles import canonicalize_role_name
 
 TABLE_REQUIREMENTS = "industry_requirements"
 TABLE_CHUNKS = "industry_knowledge_chunks"
+
+# ---------------------------------------------------------------------------
+# Phase 6: multi-signal deterministic ranking (fusion-v1).
+#
+# Relevant industry evidence is selected with more than one signal:
+#   similarity         - semantic cosine similarity (pgvector) or deterministic
+#                        keyword-overlap proxy when vectors are unavailable.
+#   role_relevance     - canonical role match blended with the row's
+#                        role_relevance tier (CORE / IMPORTANT / RELEVANT).
+#   skill_relevance    - canonical skill/topic mention in the query.
+#   source_quality     - source_quality field; low-quality sources can never
+#                        dominate on similarity alone (explicit cap below).
+#   importance_demand  - importance / demand signal from the benchmark row.
+#   recency (freshness)- small multiplicative factor from published_at
+#                        (neutral when unknown). Bounded so it can never
+#                        dominate the ranking.
+#
+# Explicit fusion formula (deterministic, no LLM anywhere in retrieval):
+#   fused = (0.40*similarity + 0.20*role_relevance + 0.15*skill_relevance
+#            + 0.15*source_quality + 0.10*importance_demand) * freshness
+#   if source_quality < 0.50: fused = min(fused, 0.49)   # quality gate
+# Ties resolve by (fused desc, importance desc, skill asc): total order.
+# ---------------------------------------------------------------------------
+RANKING_VERSION = "fusion-v1"
+
+FUSION_WEIGHTS = {
+    "similarity": 0.40,
+    "role_relevance": 0.20,
+    "skill_relevance": 0.15,
+    "source_quality": 0.15,
+    "importance_demand": 0.10,
+}
+
+# Sources below this quality can never outrank solid sources on similarity.
+MIN_QUALITY_FOR_RANK = 0.50
+QUALITY_CAPPED_FUSED_MAX = 0.49
+
+ROLE_TIER_SCORES = {
+    "CORE": 1.0,
+    "IMPORTANT": 0.75,
+    "RELEVANT": 0.5,
+}
+DEFAULT_TIER_SCORE = 0.5
+
+# Freshness multiplier bounds: recency nudges, never dominates.
+FRESHNESS_MAX = 1.0
+FRESHNESS_MIN = 0.95
+FRESHNESS_FULL_YEARS = 2.0
+FRESHNESS_FLOOR_YEARS = 8.0
+
+# Deterministic stopwords for keyword signals (shared by similarity,
+# skill-relevance, and role-token matching below).
+_RANK_STOP_WORDS = frozenset({
+    "role", "roles", "requirements", "requirement", "required", "requiring",
+    "skills", "skill", "for", "the", "in", "of", "to", "a", "an", "is",
+    "with", "on", "as", "and", "or", "what", "which", "that", "are",
+})
 
 # Curated knowledge chunks for offline / fallback RAG
 PROTOTYPE_KNOWLEDGE_CHUNKS: List[dict] = [
@@ -78,6 +136,306 @@ PROTOTYPE_KNOWLEDGE_CHUNKS: List[dict] = [
 ]
 
 
+def _content_tokens(text: Any) -> List[str]:
+    """Deterministic lowercase word tokens with stopwords removed."""
+    words = re.findall(r"[a-z0-9+#]+", str(text or "").lower())
+    return [w for w in words if w not in _RANK_STOP_WORDS and len(w) > 1]
+
+
+def _text_similarity(query: str, item_text: str) -> float:
+    """
+    Deterministic keyword-overlap proxy for semantic similarity, used when
+    no vector score exists: fraction of distinct query tokens found as
+    substrings in the item text. Returns 0.0 for empty queries.
+    """
+    q_tokens = set(_content_tokens(query))
+    if not q_tokens:
+        return 0.0
+    hay = str(item_text or "").lower()
+    hits = sum(1 for w in q_tokens if w in hay)
+    return round(hits / len(q_tokens), 3)
+
+
+def _role_match_score(role: str, item_role: Any) -> float:
+    """1.0 for exact canonical role match, else role-name token overlap."""
+    if not role:
+        return 0.0
+    if str(item_role or "").strip().lower() == str(role).strip().lower():
+        return 1.0
+    role_tokens = set(_content_tokens(role))
+    if not role_tokens:
+        return 0.0
+    hay = str(item_role or "").lower()
+    return round(sum(1 for w in role_tokens if w in hay) / len(role_tokens), 3)
+
+
+def _relevance_tier_score(role_relevance: Any) -> float:
+    """Map the row's role_relevance tier (CORE/IMPORTANT/RELEVANT) to [0,1]."""
+    return ROLE_TIER_SCORES.get(str(role_relevance or "").strip().upper(), DEFAULT_TIER_SCORE)
+
+
+def _role_relevance_signal(role: str, item: Dict[str, Any]) -> float:
+    """Blend canonical role match (0.6) with relevance tier (0.4)."""
+    return round(
+        0.6 * _role_match_score(role, item.get("role"))
+        + 0.4 * _relevance_tier_score(item.get("role_relevance")),
+        3,
+    )
+
+
+def _skill_relevance_signal(query: str, skill: Any) -> float:
+    """
+    Fraction of the canonical skill's tokens mentioned in the query.
+    Uses taxonomy-normalized skill names so aliases resolve identically.
+    """
+    canonical = normalize_skill(str(skill or "")) or str(skill or "")
+    skill_tokens = set(_content_tokens(canonical))
+    if not skill_tokens:
+        return 0.0
+    q_tokens = set(_content_tokens(query))
+    if not q_tokens:
+        return 0.0
+    return round(len(skill_tokens & q_tokens) / len(skill_tokens), 3)
+
+
+def _quality_signal(item: Dict[str, Any]) -> float:
+    """Source quality clamped to [0,1]; missing quality is neutral 0.5."""
+    try:
+        q = float(item.get("source_quality", 0.5))
+    except (TypeError, ValueError):
+        q = 0.5
+    return max(0.0, min(1.0, q))
+
+
+def _importance_demand_signal(item: Dict[str, Any]) -> float:
+    """Benchmark weight signal: 0.6*importance + 0.4*demand."""
+    try:
+        imp = float(item.get("importance", 0.5))
+    except (TypeError, ValueError):
+        imp = 0.5
+    try:
+        dem = float(item.get("demand", 0.5))
+    except (TypeError, ValueError):
+        dem = 0.5
+    return round(max(0.0, min(1.0, 0.6 * imp + 0.4 * dem)), 3)
+
+
+def _parse_retrieval_date(value: Any) -> Optional[Any]:
+    """Parse published_at/retrieved_at defensively; None when unknown."""
+    if not value:
+        return None
+    try:
+        from datetime import datetime as _dt
+
+        text = str(value).strip().replace("Z", "+00:00")
+        parsed = _dt.fromisoformat(text)
+        if parsed.tzinfo is None:
+            parsed = parsed.replace(tzinfo=_dt.now().astimezone().tzinfo)
+        return parsed
+    except Exception:
+        return None
+
+
+def _freshness_factor(
+    published_at: Any,
+    retrieved_at: Any = None,
+    now: Any = None,
+) -> float:
+    """
+    Small recency multiplier in [0.95, 1.0]: full weight within 2 years,
+    linear decay to a 0.95 floor at 8+ years, neutral 1.0 when unknown.
+    `now` is injectable so tests stay deterministic.
+    """
+    try:
+        from datetime import datetime as _dt, timezone as _tz
+
+        ref = _parse_retrieval_date(published_at) or _parse_retrieval_date(retrieved_at)
+        if ref is None:
+            return FRESHNESS_MAX
+        current = now or _dt.now(_tz.utc)
+        try:
+            age_days = (current - ref).days
+        except Exception:
+            return FRESHNESS_MAX
+        if age_days < 0:
+            return FRESHNESS_MAX
+        age_years = age_days / 365.25
+        if age_years <= FRESHNESS_FULL_YEARS:
+            return FRESHNESS_MAX
+        if age_years >= FRESHNESS_FLOOR_YEARS:
+            return FRESHNESS_MIN
+        span = FRESHNESS_FLOOR_YEARS - FRESHNESS_FULL_YEARS
+        decayed = FRESHNESS_MAX - (FRESHNESS_MAX - FRESHNESS_MIN) * (
+            (age_years - FRESHNESS_FULL_YEARS) / span
+        )
+        return round(max(FRESHNESS_MIN, min(FRESHNESS_MAX, decayed)), 3)
+    except Exception:
+        return FRESHNESS_MAX
+
+
+def _fuse_signals(
+    item: Dict[str, Any],
+    role: str,
+    query: str,
+    similarity: float,
+    now: Any = None,
+) -> Tuple[float, Dict[str, Any]]:
+    """
+    Explicit deterministic fusion. Returns (fused_score, ranking_detail).
+    ranking_detail records every component so any ordering is explainable.
+    """
+    try:
+        sim = max(0.0, min(1.0, float(similarity)))
+    except (TypeError, ValueError):
+        sim = 0.0
+    role_rel = _role_relevance_signal(role, item)
+    skill_rel = _skill_relevance_signal(query, item.get("skill", ""))
+    quality = _quality_signal(item)
+    impdem = _importance_demand_signal(item)
+    freshness = _freshness_factor(item.get("published_at"), item.get("retrieved_at"), now)
+
+    fused = (
+        FUSION_WEIGHTS["similarity"] * sim
+        + FUSION_WEIGHTS["role_relevance"] * role_rel
+        + FUSION_WEIGHTS["skill_relevance"] * skill_rel
+        + FUSION_WEIGHTS["source_quality"] * quality
+        + FUSION_WEIGHTS["importance_demand"] * impdem
+    )
+    quality_capped = False
+    if quality < MIN_QUALITY_FOR_RANK and fused > QUALITY_CAPPED_FUSED_MAX:
+        # Low-quality sources can never dominate on similarity alone.
+        fused = QUALITY_CAPPED_FUSED_MAX
+        quality_capped = True
+    fused = round(max(0.0, min(1.0, fused)) * freshness, 3)
+    detail = {
+        "similarity": round(sim, 3),
+        "role_relevance": role_rel,
+        "skill_relevance": skill_rel,
+        "source_quality": quality,
+        "importance_demand": impdem,
+        "freshness": freshness,
+        "fused_score": fused,
+        "quality_capped": quality_capped,
+        "weights_version": RANKING_VERSION,
+    }
+    return fused, detail
+
+
+def _catalog_index_for_role(role: str) -> Dict[Any, dict]:
+    """Index catalog rows by (role.lower, skill-key) for metadata enrichment."""
+    index: Dict[Any, dict] = {}
+    try:
+        for row in industry_service.list_by_role(role):
+            canon = normalize_skill(str(row.get("skill", ""))) or str(row.get("skill", ""))
+            index[(str(row.get("role", "")).lower(), canon.lower())] = row
+            index[(str(row.get("role", "")).lower(), str(row.get("skill", "")).lower())] = row
+    except Exception:
+        pass
+    return index
+
+
+def _enrich_with_catalog(item: dict, catalog_index: Dict[Any, dict]) -> dict:
+    """
+    Fill source-metadata gaps on vector-path rows from the canonical catalog
+    (source_quality, published_at, retrieved_at, evidence_context,
+    role_relevance, dimensions). RPC values always win when present.
+    """
+    enriched = dict(item)
+    try:
+        canon = normalize_skill(str(item.get("skill", ""))) or str(item.get("skill", ""))
+        row = catalog_index.get((str(item.get("role", "")).lower(), canon.lower()))
+        if not row:
+            return enriched
+        for key in (
+            "required_level", "importance", "demand", "interview_relevance",
+            "industry_confidence", "source", "source_url", "source_quality",
+            "evidence_context", "published_at", "retrieved_at", "description",
+            "role_relevance", "source_version", "source_reference",
+            "source_occupation", "mapping_version", "skill_category", "version",
+        ):
+            if enriched.get(key) in (None, "") and row.get(key) not in (None, ""):
+                enriched[key] = row.get(key)
+    except Exception:
+        pass
+    return enriched
+
+
+def _rank_items(
+    items: List[dict],
+    role: str,
+    query: str,
+    top_k: int,
+    similarities: Optional[Dict[int, float]] = None,
+    now: Any = None,
+) -> Tuple[List[dict], int]:
+    """
+    Fuse, quality-gate, deduplicate, and deterministically order candidates.
+    `similarities` optionally maps item index -> semantic similarity
+    (vector cosine); otherwise the keyword-overlap proxy is used.
+    Returns (ranked_items, duplicates_removed). Each item gains `similarity`
+    (raw semantic component), `fused_score`, and an explainable `ranking`
+    breakdown. Canonical skill extraction is enforced on every item.
+    """
+    scored: List["tuple[float, float, str, dict]"] = []
+    for idx, raw in enumerate(items or []):
+        item = dict(raw)
+        if similarities is not None and idx in similarities:
+            sim = similarities[idx]
+        else:
+            sim = _text_similarity(
+                query,
+                f"{item.get('skill', '')} {item.get('description', '')} "
+                f"{item.get('evidence_context', '')} {item.get('skill_category', '')} "
+                f"{item.get('topic', '')}",
+            )
+        canonical_skill = normalize_skill(str(item.get("skill", ""))) or str(item.get("skill", ""))
+        item["skill"] = canonical_skill
+        fused, detail = _fuse_signals(item, role, query, sim, now)
+        item["similarity"] = detail["similarity"]
+        item["fused_score"] = fused
+        item["ranking"] = detail
+        try:
+            tiebreak_imp = float(item.get("importance", 0.5))
+        except (TypeError, ValueError):
+            tiebreak_imp = 0.5
+        scored.append((fused, tiebreak_imp, canonical_skill, item))
+
+    # Deduplicate by (role, canonical skill): keep the strongest fused item.
+    # Same evidence counted once, never stacked.
+    best_by_key: Dict[Any, "tuple[float, float, str, dict]"] = {}
+    for entry in scored:
+        fused, imp, skill, item = entry
+        key = (str(item.get("role", role)).lower(), skill.lower())
+        prev = best_by_key.get(key)
+        if prev is None or (fused, imp, skill) > (prev[0], prev[1], prev[2]):
+            best_by_key[key] = entry
+    duplicates_removed = len(scored) - len(best_by_key)
+
+    ordered = sorted(
+        best_by_key.values(), key=lambda e: (-e[0], -e[1], e[2])
+    )
+    try:
+        limit = max(1, int(top_k))
+    except (TypeError, ValueError):
+        limit = 10
+    return [entry[3] for entry in ordered[:limit]], duplicates_removed
+
+
+def _chunk_matches_role(chunk: dict, role: str) -> bool:
+    """
+    Role-relevance gate for knowledge chunks (shared rule): exact role match
+    or at least one meaningful role-title token in the chunk text. Vector
+    chunks must pass it too, so unrelated roles can never synthesize
+    requirements from similarity alone.
+    """
+    role_tokens = [w for w in str(role or "").lower().split() if w not in _RANK_STOP_WORDS and len(w) > 1]
+    text = f"{chunk.get('role', '')} {chunk.get('topic', '')} {chunk.get('content', '')}".lower()
+    ch_role = str(chunk.get("role", "")).lower()
+    cleaned = str(role or "").strip().lower()
+    exact = bool(ch_role) and (ch_role in cleaned or cleaned in ch_role)
+    return bool(exact or sum(1 for w in role_tokens if w in text) > 0)
+
+
 def _client() -> Optional[Client]:
     return get_supabase_client()
 
@@ -133,10 +491,14 @@ async def _vector_search(role: str, query: str, top_k: int) -> Optional[List[dic
             normalized = []
             for item in rpc_res.data:
                 canon = normalize_skill(item.get("skill", "")) or item.get("skill", "")
+                try:
+                    sim = round(float(item.get("similarity", 0.8)), 3)
+                except (TypeError, ValueError):
+                    sim = 0.8
                 normalized.append({
                     **item,
                     "skill": canon,
-                    "similarity": round(float(item.get("similarity", 0.8)), 3),
+                    "similarity": max(0.0, min(1.0, sim)),
                 })
             return normalized
         return None
@@ -144,26 +506,80 @@ async def _vector_search(role: str, query: str, top_k: int) -> Optional[List[dic
         return None
 
 
+def _attach_requirement_evidence(item: dict, role: str) -> dict:
+    """
+    Attach requirement trustworthiness metadata to one retrieval item:
+    evidence_strength tier plus supporting knowledge-chunk references that
+    mention the skill. Chunk bodies are never copied, references only.
+    Missing data degrades to honest defaults; nothing is fabricated.
+    """
+    try:
+        skill = str(item.get("skill", "") or "")
+        if "evidence_strength" not in item or not item.get("evidence_strength"):
+            try:
+                quality = float(item.get("source_quality", 0.5))
+            except (TypeError, ValueError):
+                quality = 0.5
+            try:
+                confidence = float(item.get("industry_confidence", 0.85))
+            except (TypeError, ValueError):
+                confidence = 0.85
+            item["evidence_strength"] = industry_service.classify_requirement_evidence(
+                1, quality, confidence
+            )
+        if "supporting_chunks" not in item:
+            try:
+                item["supporting_chunks"] = industry_service.supporting_chunk_refs(
+                    role, skill
+                )
+            except Exception:
+                item["supporting_chunks"] = []
+    except Exception:
+        pass
+    return item
+
+
 async def retrieve(role: str, query: Optional[str] = None, top_k: int = 10) -> dict:
     """
     Retrieve relevant industry requirements for a target role and query.
-    Always returns normalized canonical skills and preserves all 5 industry dimensions.
+    Always returns normalized canonical skills and preserves all 5 industry
+    dimensions plus full source metadata (source, source_url, source_quality,
+    published_at, retrieved_at, similarity, role/topic).
+
+    Both paths rank with the same explicit fusion formula (see FUSION_WEIGHTS):
+    vector cosine similarity when pgvector is available, the deterministic
+    keyword-overlap proxy otherwise. Low-quality sources are capped so they
+    can never dominate on similarity alone; duplicates collapse to one item.
     """
     canonical_role = canonicalize_role_name(role) or role.strip()
     q = (query or f"skills required for {canonical_role}").strip()
 
-    # 1. Vector search path
+    # 1. Vector search path (pgvector kept; fusion + gating applied on top).
+    # Source metadata gaps are filled from the canonical catalog (RPC values
+    # win), so every vector-path item carries the same provenance contract.
     vec_results = await _vector_search(canonical_role, q, top_k)
     if vec_results:
+        catalog_index = _catalog_index_for_role(canonical_role)
+        vec_results = [_enrich_with_catalog(dict(it), catalog_index) for it in vec_results]
+        for it in vec_results:
+            _attach_requirement_evidence(it, canonical_role)
+        similarities = {i: max(0.0, min(1.0, float(it.get("similarity", 0.8)))) for i, it in enumerate(vec_results)}
+        ranked, duplicates_removed = _rank_items(vec_results, canonical_role, q, top_k, similarities)
+        for it in ranked:
+            # Retrieval relevance: the fused multi-signal score.
+            it["similarity"] = it.pop("fused_score", it.get("similarity", 0.0))
         return {
             "role": canonical_role,
             "query": q,
-            "count": len(vec_results),
-            "items": vec_results,
-            "note": "retrieved via vector search (pgvector)",
+            "count": len(ranked),
+            "items": ranked,
+            "ranking": RANKING_VERSION,
+            "duplicates_removed": duplicates_removed,
+            "note": "retrieved via vector search (pgvector) with multi-signal fusion ranking",
         }
 
-    # 2. Deterministic keyword and role requirements path
+    # 2. Deterministic fallback path (embeddings/RPC unavailable): same
+    # fusion ranking over catalog rows, keyword-overlap as the similarity.
     try:
         items = industry_service.list_by_role(canonical_role)
         if not items:
@@ -174,42 +590,24 @@ async def retrieve(role: str, query: Optional[str] = None, top_k: int = 10) -> d
                     "query": q,
                     "count": 0,
                     "items": [],
+                    "ranking": RANKING_VERSION,
+                    "duplicates_removed": 0,
                     "note": "no industry requirements found for target role",
                 }
 
-        # If custom free-text query provided, compute keyword relevance score
-        if q and q.lower() != f"skills required for {canonical_role}".lower():
-            q_words = set(q.lower().split())
-            scored = []
-            for it in items:
-                text = f"{it.get('skill','')} {it.get('description','')} {it.get('evidence_context','')} {it.get('skill_category','')}".lower()
-                overlap = len([w for w in q_words if w in text]) / max(1, len(q_words))
-                combined = 0.7 * overlap + 0.3 * float(it.get("importance", 0.5))
-                scored.append((combined, it))
-            scored.sort(key=lambda x: x[0], reverse=True)
-            items = [it for _, it in scored]
-        else:
-            items = sorted(items, key=lambda x: float(x.get("importance", 0.5)), reverse=True)
-
-        top = items[:top_k]
-        result_items = []
-        for it in top:
-            canonical_skill = normalize_skill(it.get("skill", "")) or it.get("skill", "")
-            imp = float(it.get("importance", 0.5))
-            dem = float(it.get("demand", 0.5))
-            sim = max(0.0, min(1.0, imp * 0.8 + dem * 0.2))
-            result_items.append({
-                **it,
-                "skill": canonical_skill,
-                "similarity": round(sim, 3),
-            })
+        ranked, duplicates_removed = _rank_items(items, canonical_role, q, top_k)
+        for it in ranked:
+            _attach_requirement_evidence(it, canonical_role)
+            it["similarity"] = it.pop("fused_score", it.get("similarity", 0.0))
 
         return {
             "role": canonical_role,
             "query": q,
-            "count": len(result_items),
-            "items": result_items,
-            "note": "INAURA Industry Knowledge Catalog — authentic benchmarks with source attribution; retrieved via deterministic fallback",
+            "count": len(ranked),
+            "items": ranked,
+            "ranking": RANKING_VERSION,
+            "duplicates_removed": duplicates_removed,
+            "note": "INAURA Industry Knowledge Catalog — authentic benchmarks with source attribution; retrieved via deterministic fallback with multi-signal fusion ranking",
         }
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Retrieval failed: {str(e)[:200]}")
@@ -247,7 +645,9 @@ async def synthesize_custom_role(custom_role: str, query: Optional[str] = None) 
     matched_chunks: List[dict] = []
     vec_chunks = await _vector_search_chunks(q, top_k=5)
     if vec_chunks:
-        matched_chunks.extend(vec_chunks)
+        # Role-relevance gate applies to vector chunks too: similarity alone
+        # must never pull unrelated roles into a custom synthesis.
+        matched_chunks.extend([ch for ch in vec_chunks if _chunk_matches_role(ch, cleaned_role)])
 
     if not matched_chunks:
         # Fallback to prototype knowledge chunks
@@ -313,6 +713,30 @@ async def synthesize_custom_role(custom_role: str, query: Optional[str] = None) 
         # Bounded honest confidence reflecting synthesis
         ind_conf = round(0.60 + 0.05 * min(2, len(matched_chunks)), 2)
 
+        # Supporting chunks that actually mention this skill (references
+        # only: chunk id, role, topic, source, url -- never chunk bodies).
+        skill_chunk_refs: List[dict] = []
+        try:
+            for ch in matched_chunks:
+                mentioned = ch.get("skills_mentioned") or []
+                if isinstance(mentioned, str):
+                    mentioned = [mentioned]
+                names = set()
+                for name in mentioned:
+                    canon = normalize_skill(str(name)) or str(name)
+                    names.add(canon)
+                    names.add(str(name))
+                if skill_name in names or skill_def.id in {str(n).lower() for n in mentioned}:
+                    skill_chunk_refs.append({
+                        "chunk_id": ch.get("id"),
+                        "role": ch.get("role"),
+                        "topic": ch.get("topic"),
+                        "source": ch.get("source"),
+                        "source_url": ch.get("source_url"),
+                    })
+        except Exception:
+            skill_chunk_refs = []
+
         synthesized_reqs.append({
             "id": f"syn-{normalize_skill_slug(skill_name)}",
             "role": cleaned_role,
@@ -327,9 +751,13 @@ async def synthesize_custom_role(custom_role: str, query: Optional[str] = None) 
             "source": primary_source,
             "source_url": primary_url,
             "source_quality": 0.70,
+            "evidence_strength": industry_service.classify_requirement_evidence(
+                len(chunk_sources), 0.70, ind_conf
+            ),
             "evidence_context": f"Synthesized from {len(matched_chunks)} industry benchmark knowledge chunks mentioning {skill_name}.",
             "published_at": "2024-05-01",
             "retrieved_at": "2026-01-01T00:00:00Z",
+            "supporting_chunks": skill_chunk_refs[:5],
             "description": skill_def.description,
             "version": "2026.1-rag-synth",
             "metadata": {"is_synthesized": True, "chunk_count": len(matched_chunks)},

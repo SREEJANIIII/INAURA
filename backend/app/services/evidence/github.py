@@ -18,6 +18,12 @@ from ..skill_taxonomy import (
 )
 from .github_validation import validate_aggregated_signal as _validate_aggregated
 from .github_validation import validate_repo_signal as _validate_repo_signal
+from .engineering_practices import (
+    aggregate_practices as _aggregate_practices,
+    analyze_engineering_practices as _analyze_practices,
+    detect_error_handling as _detect_error_handling,
+    merge_error_counts as _merge_error_counts,
+)
 from .usage_status import (
     API_USAGE_PATTERNS as _PHASE3_API_PATTERNS,
     STRING_SENSITIVE_PATTERN_IDS as _PHASE3_STRING_SENSITIVE_IDS,
@@ -1455,6 +1461,10 @@ class GitHubProvider(EvidenceProvider):
             import_file_map: Dict[str, List[str]] = {}
             usage_pattern_counts: Dict[str, Dict[str, int]] = {}
             usage_pattern_files: Dict[str, Set[str]] = {}
+            # Phase 10: error-handling constructs per sampled source file
+            # (separate practices dimension; never mixed into skill signals).
+            error_indicator_counts: Dict[str, int] = {}
+            error_indicator_files: Dict[str, List[str]] = {}
             for path in select_source_files(source_candidates, MAX_SOURCE_FILES_PER_REPO):
                 text = await _fetch_content(path, MAX_SOURCE_TEXT_CHARS)
                 if not text:
@@ -1473,6 +1483,14 @@ class GitHubProvider(EvidenceProvider):
                     merge_pattern_counts(usage_pattern_counts, file_hits)
                     for skill in file_hits:
                         usage_pattern_files.setdefault(skill, set()).add(path)
+                try:
+                    err_hits = _detect_error_handling(text)
+                except Exception:
+                    err_hits = {}
+                if err_hits:
+                    _merge_error_counts(
+                        error_indicator_counts, error_indicator_files, err_hits, path
+                    )
 
             # 9c. Configuration / infrastructure files.
             sampled_config_files: List[str] = []
@@ -1530,6 +1548,8 @@ class GitHubProvider(EvidenceProvider):
                 "import_file_map": {k: list(v) for k, v in import_file_map.items()},
                 "usage_patterns": {k: dict(v) for k, v in usage_pattern_counts.items()},
                 "usage_files": {k: sorted(v) for k, v in usage_pattern_files.items()},
+                "error_indicators": dict(error_indicator_counts),
+                "error_files": {k: sorted(v) for k, v in error_indicator_files.items()},
                 "files_analyzed": ([readme_path] if readme_path and readme_text else [])
                 + list(sampled_source_files)
                 + list(sampled_config_files),
@@ -2336,6 +2356,22 @@ class GitHubProvider(EvidenceProvider):
                     "public_repos": public_repos_count,
                     "repos": [r["name"] for r in inspected_repos if r.get("name")],
                 }
+
+                # Phase 10: profile-level practices union across inspected
+                # repositories (best observed score per dimension). Skill
+                # signals above are unaffected.
+                try:
+                    _practice_items = [
+                        (str(r.get("full_name") or r.get("name") or "repository"),
+                         (r.get("inspection") or {}).get("engineering_practices"))
+                        for r in inspected_repos
+                        if r.get("status") == "inspected"
+                        and isinstance((r.get("inspection") or {}).get("engineering_practices"), dict)
+                    ]
+                    if _practice_items:
+                        raw_metadata["engineering_practices"] = _aggregate_practices(_practice_items)
+                except Exception:
+                    pass
 
                 detected_names = [s.skill for s in signals]
                 skills_preview = f" Detected {len(signals)} technical skill(s): {', '.join(detected_names[:5])}." if signals else " No technical skills detected."
@@ -3797,6 +3833,15 @@ class GitHubProvider(EvidenceProvider):
             }
             inspection["repository_importance"] = _repo_importance.get("label", "high")
             inspection["repository_importance_reason"] = _repo_importance.get("reason", "")
+        except Exception:
+            pass
+
+        # Phase 10: engineering-practice analysis. A SEPARATE dimension kept
+        # on the inspection payload only -- signals, strengths, proficiency,
+        # and readiness above are fully computed before this runs and are
+        # never modified by it.
+        try:
+            inspection["engineering_practices"] = _analyze_practices(inspection)
         except Exception:
             pass
 

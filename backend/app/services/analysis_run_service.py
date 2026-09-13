@@ -644,6 +644,10 @@ def build_requirements_map(requirements: List[dict], client: Optional[Client] = 
         interview = float(req.get("interview_relevance", 0.5))
         industry_confidence = float(req.get("industry_confidence", 0.85))
 
+        try:
+            _req_quality = float(req.get("source_quality", 0.85))
+        except (TypeError, ValueError):
+            _req_quality = 0.85
         req_map[canonical] = {
             "skill": canonical,
             "category": req.get("skill_category", "General"),
@@ -653,6 +657,9 @@ def build_requirements_map(requirements: List[dict], client: Optional[Client] = 
             "interview": interview,
             "interview_relevance": interview,
             "industry_confidence": industry_confidence,
+            "source_quality": max(0.0, min(1.0, _req_quality)),
+            "evidence_strength": str(req.get("evidence_strength", "") or ""),
+            "published_at": str(req.get("published_at", "") or ""),
             "description": req.get("description", ""),
             "source": req.get("source", "Industry requirements"),
             "source_url": req.get("source_url", ""),
@@ -875,6 +882,12 @@ def calculate_assessments(
             requirement_source_reference = req.get("source_reference", "")
             requirement_role_relevance = req.get("role_relevance", "")
             requirement_description = req.get("description", "")
+            try:
+                requirement_source_quality = float(req.get("source_quality", 0.85))
+            except (TypeError, ValueError):
+                requirement_source_quality = 0.85
+            requirement_evidence_strength = str(req.get("evidence_strength", "") or "")
+            requirement_published_at = str(req.get("published_at", "") or "")
             is_portfolio = False
         else:
             # Skill demonstrated but not explicitly required in target role
@@ -892,6 +905,9 @@ def calculate_assessments(
             requirement_source_reference = ""
             requirement_role_relevance = "OPTIONAL"
             requirement_description = ""
+            requirement_source_quality = ""
+            requirement_evidence_strength = ""
+            requirement_published_at = ""
             is_portfolio = True
 
         # --- Provenance & evidence state (extended) ---
@@ -1041,6 +1057,9 @@ def calculate_assessments(
             "requirement_source_reference": requirement_source_reference,
             "requirement_role_relevance": requirement_role_relevance,
             "requirement_description": requirement_description,
+            "requirement_source_quality": requirement_source_quality,
+            "requirement_evidence_strength": requirement_evidence_strength,
+            "requirement_published_at": requirement_published_at,
             "priority": priority_score,
             "priority_score": priority_score,
             "legacy_priority": legacy_priority,
@@ -1091,6 +1110,12 @@ def calculate_assessments(
         requirement_source_reference = req.get("source_reference", "")
         requirement_role_relevance = req.get("role_relevance", "")
         requirement_description = req.get("description", "")
+        try:
+            requirement_source_quality = float(req.get("source_quality", 0.85))
+        except (TypeError, ValueError):
+            requirement_source_quality = 0.85
+        requirement_evidence_strength = str(req.get("evidence_strength", "") or "")
+        requirement_published_at = str(req.get("published_at", "") or "")
 
         prof = 0.0
         conf = 0.0
@@ -1183,6 +1208,9 @@ def calculate_assessments(
             "requirement_source_reference": requirement_source_reference,
             "requirement_role_relevance": requirement_role_relevance,
             "requirement_description": requirement_description,
+            "requirement_source_quality": requirement_source_quality,
+            "requirement_evidence_strength": requirement_evidence_strength,
+            "requirement_published_at": requirement_published_at,
         })
 
     return assessments
@@ -1254,6 +1282,9 @@ def calculate_gaps(assessments: List[dict], target_role: str) -> List[dict]:
             "requirement_source_reference": a.get("requirement_source_reference", ""),
             "requirement_role_relevance": a.get("requirement_role_relevance", ""),
             "requirement_description": a.get("requirement_description", ""),
+            "requirement_source_quality": a.get("requirement_source_quality", ""),
+            "requirement_evidence_strength": a.get("requirement_evidence_strength", ""),
+            "requirement_published_at": a.get("requirement_published_at", ""),
             "quadrant": a.get("quadrant", "exploratory"),
             "quadrant_title": a.get("quadrant_title", "Exploratory / Unclear"),
             "explanation": gap_explanation,

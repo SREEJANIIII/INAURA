@@ -7,6 +7,7 @@ import ProfileSetup from "./pages/ProfileSetup";
 import Dashboard from "./pages/Dashboard";
 import Analysis from "./pages/Analysis";
 import AnalysisResults from "./pages/AnalysisResults";
+import CapabilityMap from "./pages/CapabilityMap";
 import Roadmap from "./pages/Roadmap";
 import AIReviewTest from "./pages/AIReviewTest";
 import { ProtectedRoute, GuestOnly } from "./components/auth/ProtectedRoute";
@@ -66,6 +67,14 @@ export default function App() {
         element={
           <ProtectedRoute>
             <AnalysisResults />
+          </ProtectedRoute>
+        }
+      />
+      <Route
+        path="/analysis/capabilities"
+        element={
+          <ProtectedRoute>
+            <CapabilityMap />
           </ProtectedRoute>
         }
       />

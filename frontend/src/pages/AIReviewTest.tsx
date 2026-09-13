@@ -1,10 +1,191 @@
 import { useState } from "react";
 import { Link } from "react-router-dom";
-import { runAiReview, type AIReviewResult } from "../services/aiReview";
+import {
+  runAiReview,
+  type AIComparison,
+  type AIReviewResult,
+} from "../services/aiReview";
 import Button from "../components/ui/Button";
 import "./AIReviewTest.css";
 
-type Review = Record<string, any>;
+const CATEGORY_LABELS: Record<string, string> = {
+  agreement: "Agreement",
+  partial_agreement: "Partial",
+  disagreement: "Disagreement",
+  gemini_only: "AI only",
+  engine_only: "Engine only",
+};
+
+function fmtPct(value: unknown): string {
+  return typeof value === "number" && Number.isFinite(value)
+    ? `${Math.round(value)}%`
+    : "—";
+}
+
+function ComparisonSection({ comparison }: { comparison: AIComparison }) {
+  const rows = Array.isArray(comparison.rows) ? comparison.rows : [];
+  return (
+    <>
+      <Section title="INAURA vs Gemini">
+        <p className="airev-compare-note">
+          Deterministic engine estimates on the left, Gemini interpretation on
+          the right. Neither side overwrites the other, and Gemini is never
+          treated as ground truth.
+        </p>
+        {rows.length === 0 ? (
+          <p className="airev-empty">
+            No overlapping skills to compare — one side returned no skill data.
+          </p>
+        ) : (
+          <table className="airev-table">
+            <thead>
+              <tr>
+                <th>Skill</th>
+                <th>INAURA</th>
+                <th>Gemini</th>
+                <th>Comparison</th>
+              </tr>
+            </thead>
+            <tbody>
+              {rows.map((row, i) => (
+                <tr key={i}>
+                  <td>{row.skill}</td>
+                  <td>
+                    {row.deterministic === null
+                      ? "—"
+                      : row.deterministic.evidence_count === 0 &&
+                          row.deterministic.direction === "gap"
+                        ? "Evidence gap"
+                        : fmtPct(row.deterministic.level_pct)}
+                  </td>
+                  <td>
+                    {row.gemini === null
+                      ? "—"
+                      : row.gemini.verdict ||
+                        fmtPct(row.gemini.level_pct)}
+                  </td>
+                  <td>
+                    <span
+                      className={`airev-sev airev-sev--${row.category.replace(/_/g, "-")}`}
+                    >
+                      {CATEGORY_LABELS[row.category] ?? row.category}
+                    </span>
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        )}
+      </Section>
+
+      {comparison.agreements.length > 0 && (
+        <Section title="Agreements">
+          <ul>
+            {comparison.agreements.map((skill, i) => (
+              <li key={i}>
+                Both systems identify the same outcome for <strong>{skill}</strong>.
+              </li>
+            ))}
+          </ul>
+        </Section>
+      )}
+
+      {comparison.differences.length > 0 && (
+        <Section title="Differences">
+          <div className="airev-cards">
+            {comparison.differences.map((d, i) => (
+              <div key={i} className="airev-card">
+                <h3>
+                  {d.skill}{" "}
+                  <span
+                    className={`airev-sev airev-sev--${d.category.replace(/_/g, "-")}`}
+                  >
+                    {CATEGORY_LABELS[d.category] ?? d.category}
+                  </span>
+                </h3>
+                <p>{d.detail}</p>
+              </div>
+            ))}
+          </div>
+        </Section>
+      )}
+
+      {comparison.ai_only_insights.length > 0 && (
+        <Section title="AI-only insights">
+          <ul>
+            {comparison.ai_only_insights.map((insight, i) => (
+              <li key={i}>
+                [{insight.kind}] {insight.text}
+              </li>
+            ))}
+          </ul>
+          <p className="airev-compare-note">
+            Suggestions not represented in deterministic analysis — review
+            before acting on them.
+          </p>
+        </Section>
+      )}
+
+      {comparison.engine_only_insights.length > 0 && (
+        <Section title="Engine-only insights">
+          <ul>
+            {comparison.engine_only_insights.map((insight, i) => (
+              <li key={i}>
+                <strong>{insight.skill}</strong> — {insight.reason}
+                {typeof insight.gap_pct === "number"
+                  ? ` (gap ${Math.round(insight.gap_pct)}%)`
+                  : ""}
+              </li>
+            ))}
+          </ul>
+          <p className="airev-compare-note">
+            Evidence-driven findings Gemini did not mention.
+          </p>
+        </Section>
+      )}
+
+      {comparison.warnings.length > 0 && (
+        <Section title="Comparison warnings">
+          <ul>
+            {comparison.warnings.map((warning, i) => (
+              <li key={i}>
+                <strong>{warning.skill}:</strong> {warning.detail}
+              </li>
+            ))}
+          </ul>
+        </Section>
+      )}
+    </>
+  );
+}
+
+type Review = Record<string, unknown>;
+
+function isRec(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function field(obj: unknown, key: string): unknown {
+  return isRec(obj) ? obj[key] : undefined;
+}
+
+function txt(value: unknown): string | null {
+  return typeof value === "string" && value ? value : null;
+}
+
+function fmt(value: unknown): string {
+  if (typeof value === "number" && Number.isFinite(value)) return String(value);
+  if (typeof value === "string") return value;
+  return "—";
+}
+
+function nonEmptyRec(value: unknown): value is Record<string, unknown> {
+  return isRec(value) && Object.keys(value).length > 0;
+}
+
+function asList(value: unknown): unknown[] {
+  return Array.isArray(value) ? value : [];
+}
 
 function num(v: unknown): number | null {
   return typeof v === "number" && Number.isFinite(v) ? v : null;
@@ -29,6 +210,49 @@ function Section({ title, children }: { title: string; children: React.ReactNode
   );
 }
 
+function StringList({ items }: { items: unknown }) {
+  const list = asList(items);
+  if (list.length === 0) return null;
+  return (
+    <ul>
+      {list.map((s: unknown, i: number) => (
+        <li key={i}>{String(s)}</li>
+      ))}
+    </ul>
+  );
+}
+
+function GapCards({ items, fallbackWord }: { items: unknown; fallbackWord: string }) {
+  const list = asList(items);
+  if (list.length === 0) return null;
+  return (
+    <div className="airev-cards">
+      {list.map((g: unknown, i: number) => {
+        const severity = txt(field(g, "severity"));
+        return (
+          <div key={i} className="airev-card">
+            <h3>
+              {txt(field(g, "skill")) ?? `${fallbackWord} ${i + 1}`}{" "}
+              {severity && <span className="airev-sev">{severity}</span>}
+            </h3>
+            {txt(field(g, "explanation")) && <p>{txt(field(g, "explanation"))}</p>}
+            {txt(field(g, "evidence")) && (
+              <p>
+                <strong>Evidence:</strong> {txt(field(g, "evidence"))}
+              </p>
+            )}
+            {txt(field(g, "recommended_action")) && (
+              <p>
+                <strong>Action:</strong> {txt(field(g, "recommended_action"))}
+              </p>
+            )}
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
 export default function AIReviewTest() {
   const [result, setResult] = useState<AIReviewResult | null>(null);
   const [running, setRunning] = useState(false);
@@ -49,8 +273,19 @@ export default function AIReviewTest() {
   };
 
   const review: Review = (result?.review || {}) as Review;
-  const ratings: Review = (review.ratings || {}) as Review;
+  const ratings: Review = (isRec(review.ratings) ? review.ratings : {}) as Review;
   const usage = result?.meta.usage;
+  const executiveSummary = txt(review.executive_summary);
+  const reasoning = txt(ratings.reasoning);
+
+  const sourceSections: Array<{ label: string; body: unknown }> = [
+    { label: "GitHub", body: review.github_review },
+    { label: "LeetCode", body: review.leetcode_review },
+    { label: "Projects", body: review.project_review ?? review.projects_review },
+    { label: "Resume", body: review.resume_review },
+    { label: "Profile", body: review.profile_review },
+    { label: "Resume + Profile", body: review.resume_profile_review },
+  ];
 
   return (
     <div className="airev">
@@ -60,9 +295,9 @@ export default function AIReviewTest() {
           <div className="airev-badge">EXPERIMENTAL — ONE LLM CALL</div>
           <h1 className="airev-title">AI Career Intelligence</h1>
           <p className="airev-subtitle">
-            Experimental one-call review: all INAURA data is combined into a single
-            context and analyzed by Gemini in exactly one LLM invocation. This is not
-            an official INAURA score.
+            Experimental AI Review — does not affect INAURA&apos;s official score.
+            All INAURA data is combined into a single context and analyzed by
+            Gemini in exactly one LLM invocation.
           </p>
           <Button variant="secondary" size="sm" onClick={handleRun} disabled={running}>
             {running ? "Running AI review…" : result ? "Re-run AI Career Review" : "Run AI Career Review"}
@@ -97,44 +332,78 @@ export default function AIReviewTest() {
                 <Score value={ratings.evidence_strength} label="Evidence strength" />
                 <Score value={ratings.interview_readiness} label="Interview readiness" />
               </div>
-              {ratings.reasoning && <p className="airev-reasoning">{ratings.reasoning}</p>}
+              {reasoning && <p className="airev-reasoning">{reasoning}</p>}
             </section>
 
-            {review.executive_summary && (
-              <Section title="Executive summary"><p>{review.executive_summary}</p></Section>
+            {executiveSummary && (
+              <Section title="Executive summary"><p>{executiveSummary}</p></Section>
             )}
 
-            {Array.isArray(review.strengths) && review.strengths.length > 0 && (
+            {result.comparison && <ComparisonSection comparison={result.comparison} />}
+
+            {asList(review.strengths).length > 0 && (
               <Section title="Strengths">
-                <ul>{review.strengths.map((s: any, i: number) => <li key={i}>{String(s)}</li>)}</ul>
+                <StringList items={review.strengths} />
               </Section>
             )}
 
-            {Array.isArray(review.critical_gaps) && review.critical_gaps.length > 0 && (
+            {asList(review.weaknesses).length > 0 && (
+              <Section title="Weaknesses">
+                <StringList items={review.weaknesses} />
+              </Section>
+            )}
+
+            {asList(review.critical_gaps).length > 0 && (
               <Section title="Critical skill gaps">
+                <GapCards items={review.critical_gaps} fallbackWord="Gap" />
+              </Section>
+            )}
+
+            {asList(review.skill_reviews).length > 0 && (
+              <Section title="Skill reviews">
                 <div className="airev-cards">
-                  {review.critical_gaps.map((g: any, i: number) => (
-                    <div key={i} className="airev-card">
-                      <h3>{g.skill || `Gap ${i + 1}`} {g.severity && <span className="airev-sev">{g.severity}</span>}</h3>
-                      {g.explanation && <p>{g.explanation}</p>}
-                      {g.evidence && <p><strong>Evidence:</strong> {g.evidence}</p>}
-                      {g.recommended_action && <p><strong>Action:</strong> {g.recommended_action}</p>}
-                    </div>
-                  ))}
+                  {asList(review.skill_reviews).map((r: unknown, i: number) => {
+                    const verdict = txt(field(r, "verdict"));
+                    return (
+                      <div key={i} className="airev-card">
+                        <h3>
+                          {txt(field(r, "skill")) ?? `Skill ${i + 1}`}{" "}
+                          {verdict && <span className="airev-sev">{verdict}</span>}
+                        </h3>
+                        <p>
+                          <strong>Demonstrated:</strong> {fmt(field(r, "demonstrated_level"))}
+                          {" · "}<strong>Required:</strong> {fmt(field(r, "required_level"))}
+                        </p>
+                        {txt(field(r, "explanation")) && <p>{txt(field(r, "explanation"))}</p>}
+                      </div>
+                    );
+                  })}
                 </div>
               </Section>
             )}
 
-            {Array.isArray(review.industry_alignment) && review.industry_alignment.length > 0 && (
+            {asList(review.evidence_gaps).length > 0 && (
+              <Section title="Evidence gaps">
+                <GapCards items={review.evidence_gaps} fallbackWord="Gap" />
+              </Section>
+            )}
+
+            {asList(review.coverage_gaps).length > 0 && (
+              <Section title="Coverage gaps">
+                <GapCards items={review.coverage_gaps} fallbackWord="Gap" />
+              </Section>
+            )}
+
+            {asList(review.industry_alignment).length > 0 && (
               <Section title="Industry alignment">
                 <table className="airev-table">
                   <thead><tr><th>Skill</th><th>Student</th><th>Industry need</th></tr></thead>
                   <tbody>
-                    {review.industry_alignment.map((r: any, i: number) => (
+                    {asList(review.industry_alignment).map((r: unknown, i: number) => (
                       <tr key={i}>
-                        <td>{r.skill || r.canonical_name || "—"}</td>
-                        <td>{r.student ?? r.demonstrated ?? r.level ?? "—"}</td>
-                        <td>{r.industry_need ?? r.required ?? r.demand ?? "—"}</td>
+                        <td>{txt(field(r, "skill")) ?? txt(field(r, "canonical_name")) ?? "—"}</td>
+                        <td>{fmt(field(r, "student") ?? field(r, "demonstrated") ?? field(r, "level"))}</td>
+                        <td>{fmt(field(r, "industry_need") ?? field(r, "required") ?? field(r, "demand"))}</td>
                       </tr>
                     ))}
                   </tbody>
@@ -142,23 +411,16 @@ export default function AIReviewTest() {
               </Section>
             )}
 
-            {review.dsa_review && Object.keys(review.dsa_review).length > 0 && (
+            {nonEmptyRec(review.dsa_review) && (
               <Section title="DSA review">
                 <pre className="airev-pre">{JSON.stringify(review.dsa_review, null, 2)}</pre>
               </Section>
             )}
 
-            {(review.github_review || review.leetcode_review || review.projects_review ||
-              review.resume_review || review.profile_review) && (
+            {sourceSections.some(({ body }) => nonEmptyRec(body)) && (
               <Section title="Source reviews">
-                {[
-                  ["GitHub", review.github_review],
-                  ["LeetCode", review.leetcode_review],
-                  ["Projects", review.projects_review],
-                  ["Resume", review.resume_review],
-                  ["Profile", review.profile_review],
-                ].map(([label, body]: any) => (
-                  body && Object.keys(body).length > 0 && (
+                {sourceSections.map(({ label, body }) => (
+                  nonEmptyRec(body) && (
                     <details key={label} className="airev-details">
                       <summary>{label}</summary>
                       <pre className="airev-pre">{JSON.stringify(body, null, 2)}</pre>
@@ -168,36 +430,47 @@ export default function AIReviewTest() {
               </Section>
             )}
 
-            {Array.isArray(review.priority_actions) && review.priority_actions.length > 0 && (
+            {asList(review.priority_actions).length > 0 && (
               <Section title="Priority actions">
-                <ol>{review.priority_actions.map((a: any, i: number) => <li key={i}>{String(a)}</li>)}</ol>
+                <ol>{asList(review.priority_actions).map((a: unknown, i: number) => <li key={i}>{String(a)}</li>)}</ol>
               </Section>
             )}
 
-            {Array.isArray(review.recommendations) && review.recommendations.length > 0 && (
+            {asList(review.recommendations).length > 0 && (
               <Section title="Recommendations">
                 <div className="airev-cards">
-                  {review.recommendations.map((r: any, i: number) => (
+                  {asList(review.recommendations).map((r: unknown, i: number) => (
                     <div key={i} className="airev-card">
-                      <h3>{r.what || `Recommendation ${i + 1}`} {r.priority && <span className="airev-sev">{r.priority}</span>}</h3>
-                      {r.why && <p><strong>Why:</strong> {r.why}</p>}
-                      {r.expected_impact && <p><strong>Impact:</strong> {r.expected_impact}</p>}
-                      {r.suggested_action && <p><strong>Action:</strong> {r.suggested_action}</p>}
+                      <h3>
+                        {txt(field(r, "what")) ?? `Recommendation ${i + 1}`}{" "}
+                        {txt(field(r, "priority")) && (
+                          <span className="airev-sev">{txt(field(r, "priority"))}</span>
+                        )}
+                      </h3>
+                      {txt(field(r, "why")) && (
+                        <p><strong>Why:</strong> {txt(field(r, "why"))}</p>
+                      )}
+                      {txt(field(r, "expected_impact")) && (
+                        <p><strong>Impact:</strong> {txt(field(r, "expected_impact"))}</p>
+                      )}
+                      {txt(field(r, "suggested_action")) && (
+                        <p><strong>Action:</strong> {txt(field(r, "suggested_action"))}</p>
+                      )}
                     </div>
                   ))}
                 </div>
               </Section>
             )}
 
-            {Array.isArray(review.roadmap_improvements) && review.roadmap_improvements.length > 0 && (
+            {asList(review.roadmap_improvements).length > 0 && (
               <Section title="Roadmap improvements">
-                <ul>{review.roadmap_improvements.map((r: any, i: number) => <li key={i}>{String(r)}</li>)}</ul>
+                <StringList items={review.roadmap_improvements} />
               </Section>
             )}
 
-            {Array.isArray(review.warnings) && review.warnings.length > 0 && (
+            {asList(review.warnings).length > 0 && (
               <Section title="Warnings">
-                <ul>{review.warnings.map((w: any, i: number) => <li key={i}>{String(w)}</li>)}</ul>
+                <StringList items={review.warnings} />
               </Section>
             )}
 
