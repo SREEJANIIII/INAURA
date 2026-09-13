@@ -97,7 +97,6 @@ export default function Dashboard() {
           <div className="dash__card-head">
             <h2 style={{ fontSize: "1.05rem", fontWeight: 700, margin: 0 }}>Next step</h2>
             <span style={{ fontSize: "0.74rem", letterSpacing: "0.08em", textTransform: "uppercase", fontWeight: 700, color: "#64748b" }}>
-              Phase 4
             </span>
           </div>
           <p style={{ color: "#475569", fontSize: "0.96rem", lineHeight: 1.6, marginTop: 8 }}>

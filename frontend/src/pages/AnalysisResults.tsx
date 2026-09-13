@@ -839,8 +839,8 @@ export default function AnalysisResults() {
 
         {portfolioGaps.length > 0 && (
           <section className="results__section" style={{ background: "#f8fafc" }}>
-            <h2>Other Detected Portfolio Skills</h2>
-            <p>Skills discovered in your evidence but not required for {analysis.target_role}. They do not affect your target-role readiness score, but are shown for completeness.</p>
+            <h2>Secondary Skills</h2>
+            {/* <p>Skills discovered in your evidence but not required for {analysis.target_role}. They do not affect your target-role readiness score, but are shown for completeness.</p> */}
             <div className="results__table-wrap">
               <table className="results__table">
                 <thead>
@@ -849,7 +849,7 @@ export default function AnalysisResults() {
                     <th>Current</th>
                     <th>Confidence</th>
                     <th>Evidence</th>
-                    <th>Note</th>
+                    {/* <th>Note</th> */}
                   </tr>
                 </thead>
                 <tbody>
@@ -861,7 +861,7 @@ export default function AnalysisResults() {
                         <td>{Math.round(g.current_proficiency*100)}%</td>
                         <td>{Math.round(g.confidence*100)}%</td>
                         <td>{renderEvidenceCell(g)}</td>
-                        <td style={{ fontSize: "0.82rem", color: "#64748b" }}>Not required for this role — does not inflate readiness.</td>
+                        {/* <td style={{ fontSize: "0.82rem", color: "#64748b" }}>Not required for this role — does not inflate readiness.</td> */}
                       </tr>
                     );
                   })}
