@@ -18,6 +18,30 @@ from ..skill_taxonomy import (
 )
 from .github_validation import validate_aggregated_signal as _validate_aggregated
 from .github_validation import validate_repo_signal as _validate_repo_signal
+from .usage_status import (
+    API_USAGE_PATTERNS as _PHASE3_API_PATTERNS,
+    STRING_SENSITIVE_PATTERN_IDS as _PHASE3_STRING_SENSITIVE_IDS,
+    MENTIONED as _US_MENTIONED,
+    DECLARED as _US_DECLARED,
+    IMPORTED as _US_IMPORTED,
+    USED as _US_USED,
+    SUBSTANTIAL as _US_SUBSTANTIAL,
+    STATUS_ORDER as _STATUS_ORDER,
+    classify_usage_status as _classify_usage_status,
+    strip_string_literals as _strip_string_literals,
+)
+from .file_importance import (
+    classify_file_importance as _classify_file_importance,
+    assess_repository_importance as _assess_repo_importance,
+    importance_weight as _importance_weight,
+    max_supported_depth as _max_depth_for_tier,
+    label as _importance_label,
+    IGNORE as _FI_IGNORE,
+    LOW as _FI_LOW,
+    MEDIUM as _FI_MEDIUM,
+    HIGH as _FI_HIGH,
+    VERY_HIGH as _FI_VERY_HIGH,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -63,7 +87,14 @@ SKIP_PATH_MARKERS = (
     "__pycache__/", "site-packages/", "venv/", ".venv/", "env/", "migrations/",
     "generated/", "gen/", ".git/", "docs/_build/", "public/vendor/",
 )
-SKIP_FILE_MARKERS = (".min.js", ".min.css", ".bundle.js", ".lock", ".map", "-lock.json")
+# Lockfiles, minified bundles and sourcemaps carry no authorship evidence and
+# must never inflate implementation counts (pnpm/yarn/npm, pip, cargo, etc.).
+SKIP_FILE_MARKERS = (
+    ".min.js", ".min.css", ".bundle.js",
+    ".lock", ".map", "-lock.json", "-lock.yaml", "-lock.yml",
+    "pnpm-lock.yaml", "package-lock.json", "yarn.lock",
+    ".pyc", ".pyo", ".o", ".obj", ".exe", ".dll", ".so", ".bin",
+)
 
 # Paths that usually hold the repository's real implementation.
 PRIORITY_PATH_MARKERS = (
@@ -116,6 +147,252 @@ IMPORT_PATTERNS = (
 # Minimum token length considered for canonical mapping. Guards against
 # two-letter taxonomy aliases ('ml', 'np', 'ts', 'js') matching noise.
 MIN_TOKEN_LEN = 3
+
+# ---------------------------------------------------------------------------
+# Repository-level implementation inspection.
+#
+# INAURA performs repository-level code and artifact inspection to extract
+# evidence of demonstrated technical skills. It does not claim to understand
+# every line of code: it looks for layered, corroborating artifacts —
+# documentation mentions, dependency declarations, imports, framework-specific
+# API usage, and substantial multi-file implementation — and grades evidence
+# depth accordingly (EvidenceDepth L1 < L2 < L3 < L4).
+# ---------------------------------------------------------------------------
+
+_COMMENT_BLOCK_PATTERNS = (
+    re.compile(r"/\*.*?\*/", re.S),          # C-style /* ... */
+    re.compile(r"<!--.*?-->", re.S),         # HTML/XML <!-- ... -->
+    re.compile(r'"""[\s\S]*?"""', re.S),     # Python triple-double docstrings
+    re.compile(r"'''[\s\S]*?'''", re.S),     # Python triple-single docstrings
+)
+
+
+def _strip_code_comments(text: str) -> str:
+    """
+    Remove comments/docstrings from source text before import/usage scanning.
+
+    A technology mentioned only inside comments must not count as
+    implementation evidence (e.g. ``# import pandas`` or ``// import React``).
+    This is a heuristic inspection aid, not a full parser: string literals
+    that look like comments may be stripped conservatively, which is
+    acceptable because imports/usage require corroboration elsewhere.
+    """
+    if not text:
+        return ""
+    stripped = str(text)
+    for pat in _COMMENT_BLOCK_PATTERNS:
+        stripped = pat.sub("\n", stripped)
+    lines: List[str] = []
+    for line in stripped.splitlines():
+        s = line.strip()
+        # Full-line comments in common languages
+        if s.startswith(("#", "//", "--", "*", "<!--")):
+            lines.append("")
+            continue
+        # Inline trailing comments: cut at // or # preceded by whitespace,
+        # and at -- for SQL/Lua style. Keep it conservative to avoid
+        # breaking URLs (https://) or anchors (# in CSS).
+        cut = len(line)
+        m = re.search(r"\s//(?!/)", line)
+        if m:
+            cut = min(cut, m.start())
+        m2 = re.search(r"\s#[^\n]*$", line)
+        # Only treat # as comment outside of common non-code contexts:
+        # require the line to look like code (contains = ( : ; { } or import).
+        if m2 and re.search(r"[=(:;{}]|^\s*(import|from|use|using|require|gem|include)\b", line):
+            cut = min(cut, m2.start())
+        lines.append(line[:cut] if cut < len(line) else line)
+    return "\n".join(lines)
+
+
+# Canonical skill -> [(pattern_id, regex)] for framework-specific API usage.
+# Each pattern signals *actual implementation* (hooks, components, routes,
+# handlers, queries), not a mere keyword mention. Matching is performed on
+# comment-stripped source text.
+FRAMEWORK_USAGE_PATTERNS: Dict[str, List[Tuple[str, str]]] = {
+    "React": [
+        ("hook_useState", r"\buseState\s*\("),
+        ("hook_useEffect", r"\buseEffect\s*\("),
+        ("hook_generic", r"\buse(?:Context|Reducer|Memo|Callback|Ref|Id|Transition|DeferredValue|ImperativeHandle|LayoutEffect|SyncExternalStore)\s*\("),
+        ("component_class", r"\bextends\s+(?:React\.)?(?:Component|PureComponent)\b"),
+        ("component_func", r"\bfunction\s+[A-Z]\w*\s*\("),
+        ("jsx_component", r"<[A-Z]\w*[\s/>]"),
+        ("react_api", r"\bReact\s*\.\s*(?:createElement|Fragment|StrictMode|Suspense|lazy|memo|forwardRef|createContext|useState|useEffect)\b"),
+        ("react_dom", r"\b(?:ReactDOM|createRoot|hydrateRoot)\s*\.?\s*\(?"),
+        ("jsx_attr", r"\bclassName\s*="),
+        ("state_mgmt", r"\b(?:Redux|createStore|configureStore|useSelector|useDispatch|Recoil|Zustand|MobX|Context\.Provider)\b"),
+        ("router", r"\b(?:BrowserRouter|HashRouter|Routes|Route|Link|useNavigate|useParams|useLocation)\b"),
+    ],
+    "Next.js": [
+        ("next_import", r"""from\s+['"]next(?:/[\w-]+)?['"]"""),
+        ("data_fetch", r"\b(?:getServerSideProps|getStaticProps|getStaticPaths|generateStaticParams|generateMetadata)\b"),
+        ("next_api", r"\b(?:NextRequest|NextResponse|notFound|redirect|revalidatePath|revalidateTag)\b"),
+        ("next_component", r"""from\s+['"]next/(?:link|image|head|router|navigation)['"]"""),
+    ],
+    "Express": [
+        ("express_init", r"\bexpress\s*\(\s*\)"),
+        ("route_handler", r"\bapp\s*\.\s*(?:get|post|put|delete|patch|use|listen)\s*\("),
+        ("router", r"\bRouter\s*\(\s*\)"),
+        ("middleware", r"\bapp\s*\.\s*use\s*\("),
+    ],
+    "Node.js": [
+        ("node_require", r"""\brequire\(\s*['"](?:fs|path|http|https|express|node:[\w-]+)['"]\s*\)"""),
+        ("node_import", r"""from\s+['"](?:fs|path|http|https|node:[\w-]+)['"]"""),
+        ("server_listen", r"\.listen\s*\(\s*\d+"),
+        ("process_api", r"\bprocess\s*\.\s*(?:env|argv|exit|nextTick)\b"),
+    ],
+    "TypeScript": [
+        ("type_annotation", r":\s*(?:string|number|boolean|void|never|unknown|any)\b"),
+        ("interface_def", r"\binterface\s+\w+"),
+        ("type_alias", r"\btype\s+\w+\s*="),
+        ("generic", r"<[A-Z]\w*(?:,\s*[A-Z]\w*)*>"),
+        ("ts_directive", r"//\s*@ts-"),
+    ],
+    "REST APIs": [
+        ("fastapi_app", r"\bFastAPI\s*\("),
+        ("flask_app", r"\bFlask\s*\("),
+        ("django_view", r"\b(?:APIView|ViewSet|Response|serializers?)\b"),
+        ("route_decorator", r"@app\s*\.\s*(?:route|get|post|put|delete|patch)\s*\("),
+        ("api_router", r"\bAPIRouter\s*\("),
+        ("http_client", r"\b(?:fetch\s*\(|axios\s*\.\s*(?:get|post|put|delete)|XMLHttpRequest)\b"),
+        ("express_route", r"\b(?:app|router)\s*\.\s*(?:get|post|put|delete|patch)\s*\(\s*['\"]/"),
+    ],
+    "PostgreSQL": [
+        ("pg_import", r"\b(?:psycopg2|asyncpg|pg|postgres)\b"),
+        ("sql_ddl", r"\bCREATE\s+TABLE\b"),
+        ("sql_query", r"\bSELECT\b.+?\bFROM\b"),
+        ("pg_config", r"\bPOSTGRES(?:_DB|_USER|_PASSWORD)?\b"),
+    ],
+    "MongoDB": [
+        ("mongo_import", r"\b(?:mongoose|pymongo|mongodb)\b"),
+        ("mongo_api", r"\b(?:Schema|model\s*\(|MongoClient|ObjectId|findOne|aggregate)\b"),
+    ],
+    "Docker": [
+        ("docker_from", r"^\s*FROM\s+\S+",),
+        ("docker_run", r"^\s*(?:RUN|COPY|CMD|ENTRYPOINT|WORKDIR|EXPOSE)\b"),
+    ],
+    "Kubernetes": [
+        ("k8s_kind", r"kind\s*:\s*(?:Deployment|Service|Ingress|ConfigMap|Secret|StatefulSet|DaemonSet|Job|CronJob)"),
+        ("k8s_api", r"apiVersion\s*:\s*(?:apps/v1|v1|networking\.k8s\.io/v1)"),
+    ],
+    "Testing": [
+        ("test_def", r"\b(?:def\s+test_\w+|test\s*\(|it\s*\(|describe\s*\(|expect\s*\(|assert\w*\s*\(?)\b"),
+        ("test_import", r"\b(?:pytest|unittest|jest|mocha|vitest|cypress|playwright|supertest|junit|testng|mockito)\b"),
+    ],
+}
+
+# Phase 3: merge taxonomy-constrained API-usage patterns (Deep Learning,
+# Scikit-learn, Spring Boot, Django/REST, SQL, MySQL, Redis, CI/CD) into the
+# single reusable detection table. No technology is invented: every key must
+# resolve through the canonical taxonomy (see usage_status.
+# validate_patterns_against_taxonomy, exercised by tests).
+for _phase3_skill, _phase3_patterns in _PHASE3_API_PATTERNS.items():
+    _existing_ids = {pid for pid, _ in FRAMEWORK_USAGE_PATTERNS.get(_phase3_skill, [])}
+    FRAMEWORK_USAGE_PATTERNS.setdefault(_phase3_skill, []).extend(
+        (pid, rx) for pid, rx in _phase3_patterns if pid not in _existing_ids
+    )
+
+# Pattern ids matched on comment-stripped text WITH string literals intact,
+# because the construct itself contains a quoted module specifier
+# (e.g. ``from 'next/link'``). Every other pattern is matched on comment-
+# AND string-stripped text so words inside string literals never count as
+# API usage.
+_STRING_SENSITIVE_PATTERN_IDS = frozenset({
+    "next_import", "next_component", "node_require", "node_import",
+    "express_route",
+}) | set(_PHASE3_STRING_SENSITIVE_IDS)
+
+_COMPILED_USAGE_PATTERNS: Dict[str, List[Tuple[str, "re.Pattern"]]] = {
+    skill: [(pid, re.compile(rx, re.I | re.M)) for pid, rx in patterns]
+    for skill, patterns in FRAMEWORK_USAGE_PATTERNS.items()
+}
+
+
+def detect_usage_patterns(text: str) -> Dict[str, List[str]]:
+    """
+    Detect framework-specific implementation patterns in a single file/text.
+
+    Returns canonical skill -> sorted list of matched pattern ids. A single
+    keyword mention is insufficient: patterns require API-shaped usage
+    (hooks, components, routes, handlers, queries, model calls).
+
+    False-positive guards: comments and docstrings are stripped before every
+    match; string-literal contents are additionally stripped for all API
+    patterns except import-style constructs that inherently live inside
+    string literals (``require('express')``). Matching is local static
+    inspection only -- repository code is never executed and never sent to
+    external services.
+    """
+    if not text or not str(text).strip():
+        return {}
+    text_c = _strip_code_comments(str(text))
+    if not text_c.strip():
+        return {}
+    try:
+        text_cs = _strip_string_literals(text_c)
+    except Exception:
+        text_cs = text_c
+    hits: Dict[str, List[str]] = {}
+    for skill, compiled in _COMPILED_USAGE_PATTERNS.items():
+        matched: List[str] = []
+        for pid, rx in compiled:
+            target = text_c if pid in _STRING_SENSITIVE_PATTERN_IDS else text_cs
+            try:
+                if rx.search(target):
+                    matched.append(pid)
+            except Exception:
+                continue
+        if matched:
+            hits[skill] = sorted(set(matched))
+    return hits
+
+
+def merge_pattern_counts(
+    acc: Dict[str, Dict[str, int]],
+    file_hits: Dict[str, List[str]],
+) -> Dict[str, Dict[str, int]]:
+    """Accumulate per-file pattern hits into skill -> {pattern: file_count}."""
+    for skill, pids in (file_hits or {}).items():
+        bucket = acc.setdefault(skill, {})
+        for pid in pids:
+            bucket[pid] = bucket.get(pid, 0) + 1
+    return acc
+
+
+def _classify_framework_depth(
+    *,
+    has_dependency: bool,
+    import_count: int = 0,
+    usage_files: int = 0,
+    distinct_patterns: int = 0,
+    implementation_files: int = 0,
+    has_tests_or_workflows: bool = False,
+) -> int:
+    """
+    Layered depth for a framework/library skill.
+
+    - L1 (mention) is handled by the documentation block, not here.
+    - L2 (dependency): declared in a manifest but never imported/used.
+    - L3 (implementation): imported or matched by API patterns in >=1 file.
+    - L4 (substantial): used across multiple files / patterns, especially
+      with tests or workflows corroborating a real project.
+
+    Importing without a declared dependency still counts as implementation
+    (vendored or transitive usage); a declared dependency without any import
+    or pattern match stays at configuration level.
+    """
+    from .base import EvidenceDepth as _Depth
+
+    has_usage = (import_count or 0) >= 1 or (distinct_patterns or 0) >= 1 or (usage_files or 0) >= 1
+    if not has_usage:
+        return _Depth.LEVEL_2_CONFIG if has_dependency else _Depth.LEVEL_1_MENTION
+
+    multi_file = (usage_files or 0) >= 2 or (implementation_files or 0) >= 3
+    multi_signal = (import_count or 0) >= 3 or (distinct_patterns or 0) >= 2
+    corroborated = bool(has_tests_or_workflows)
+    if (multi_file and multi_signal) or (multi_signal and corroborated) or ((usage_files or 0) >= 3):
+        return _Depth.LEVEL_4_SUBSTANTIAL
+    return _Depth.LEVEL_3_IMPLEMENTATION
 
 # Activity thresholds for classification
 REPO_ACTIVE_DAYS = 365 * 2
@@ -403,12 +680,16 @@ def extract_import_tokens(text: str) -> Dict[str, int]:
     Extract raw import/usage module tokens and their occurrence counts from a
     source file, using language-agnostic patterns. Mapping tokens to skills is
     left to the canonical taxonomy so no technology is special-cased here.
+
+    Commented-out imports are ignored: the text is comment-stripped first so
+    a technology mentioned only in comments never counts as implementation.
     """
     tokens: Dict[str, int] = {}
     if not text:
         return tokens
+    cleaned = _strip_code_comments(str(text))[:MAX_SOURCE_TEXT_CHARS]
     for pattern in IMPORT_PATTERNS:
-        for match in pattern.findall(text[:MAX_SOURCE_TEXT_CHARS]):
+        for match in pattern.findall(cleaned):
             raw = match if isinstance(match, str) else (match[0] if match else "")
             raw = str(raw).strip()
             if not raw or len(raw) > 200:
@@ -536,7 +817,8 @@ def compact_inspection(inspection: dict, keep_excerpt: bool = True) -> Dict[str,
     if not isinstance(inspection, dict):
         return {}
     compact = {k: v for k, v in inspection.items() if k not in
-               ("readme_text", "config_text", "top_files", "import_tokens")}
+               ("readme_text", "config_text", "top_files", "import_tokens",
+                "source_texts", "import_file_map")}
     readme_text = str(inspection.get("readme_text") or "")
     if keep_excerpt and readme_text:
         compact["readme_excerpt"] = readme_text[:400]
@@ -990,16 +1272,21 @@ class GitHubProvider(EvidenceProvider):
                         if base.endswith(".csproj"):
                             tree_csproj_paths.append(path)
                         tree_manifest_basenames.add(base)
-                        # Per-extension implementation file counts
-                        dot = base.rfind(".")
-                        if dot > 0:
-                            ext = base[dot:]
-                            if ext in EXTENSION_SKILL_MAP:
-                                ext_file_counts[ext] = ext_file_counts.get(ext, 0) + 1
-                        if low.endswith(".java"):
-                            java_file_count += 1
-                            if "test" in low:
-                                java_test_file_count += 1
+                        # Vendored / generated / lock artifacts must never
+                        # inflate implementation evidence: skip them before
+                        # counting language footprints.
+                        _skippable = _is_skippable_path(low)
+                        if not _skippable:
+                            # Per-extension implementation file counts
+                            dot = base.rfind(".")
+                            if dot > 0:
+                                ext = base[dot:]
+                                if ext in EXTENSION_SKILL_MAP:
+                                    ext_file_counts[ext] = ext_file_counts.get(ext, 0) + 1
+                            if low.endswith(".java"):
+                                java_file_count += 1
+                                if "test" in low:
+                                    java_test_file_count += 1
                         # Kubernetes / extra-CI markers
                         if base in K8S_MARKERS or low.startswith(K8S_DIR_MARKERS):
                             has_k8s_manifests = True
@@ -1162,6 +1449,12 @@ class GitHubProvider(EvidenceProvider):
                 ]
             sampled_source_files: List[str] = []
             import_tokens: Dict[str, int] = {}
+            # Per-file provenance for layered depth grading:
+            # which files imported which tokens, and which files matched
+            # framework-specific implementation patterns.
+            import_file_map: Dict[str, List[str]] = {}
+            usage_pattern_counts: Dict[str, Dict[str, int]] = {}
+            usage_pattern_files: Dict[str, Set[str]] = {}
             for path in select_source_files(source_candidates, MAX_SOURCE_FILES_PER_REPO):
                 text = await _fetch_content(path, MAX_SOURCE_TEXT_CHARS)
                 if not text:
@@ -1169,6 +1462,17 @@ class GitHubProvider(EvidenceProvider):
                 sampled_source_files.append(path)
                 for token, count in extract_import_tokens(text).items():
                     import_tokens[token] = import_tokens.get(token, 0) + count
+                    lst = import_file_map.setdefault(token, [])
+                    if path not in lst:
+                        lst.append(path)
+                try:
+                    file_hits = detect_usage_patterns(text)
+                except Exception:
+                    file_hits = {}
+                if file_hits:
+                    merge_pattern_counts(usage_pattern_counts, file_hits)
+                    for skill in file_hits:
+                        usage_pattern_files.setdefault(skill, set()).add(path)
 
             # 9c. Configuration / infrastructure files.
             sampled_config_files: List[str] = []
@@ -1223,6 +1527,13 @@ class GitHubProvider(EvidenceProvider):
                 "readme_present": bool(readme_text),
                 "source_files_sampled": sampled_source_files,
                 "import_tokens": import_tokens,
+                "import_file_map": {k: list(v) for k, v in import_file_map.items()},
+                "usage_patterns": {k: dict(v) for k, v in usage_pattern_counts.items()},
+                "usage_files": {k: sorted(v) for k, v in usage_pattern_files.items()},
+                "files_analyzed": ([readme_path] if readme_path and readme_text else [])
+                + list(sampled_source_files)
+                + list(sampled_config_files),
+                "implementation_files": list(sampled_source_files),
                 "config_files_sampled": sampled_config_files,
                 "config_text": config_text,
                 "test_file_count": test_file_count,
@@ -1609,6 +1920,7 @@ class GitHubProvider(EvidenceProvider):
         Preserves:
         - Canonical taxonomy skill
         - Strongest demonstrated EvidenceDepth
+        - Strongest technology usage status (mentioned < ... < substantial)
         - Ownership vs fork discount
         - Recency and archival status
         - Full provenance with supporting repositories list
@@ -1680,7 +1992,9 @@ class GitHubProvider(EvidenceProvider):
                 final_depth = min(best_sig.depth, EvidenceDepth.LEVEL_2_CONFIG)
                 final_strength = round(min(0.55, best_sig.signal_strength), 2)
 
-            # Build provenance repository list
+            # Build provenance repository list. Each entry traces the skill
+            # back to its repository, relevant files, depth, and reason --
+            # paths and labels only, never source contents.
             provenance_repos = [
                 {
                     "name": r.get("name"),
@@ -1691,6 +2005,10 @@ class GitHubProvider(EvidenceProvider):
                     "classification": r.get("classification", "owned_active"),
                     "depth": s.depth,
                     "signal_strength": s.signal_strength,
+                    "files": list((s.metadata or {}).get("relevant_files") or [])[:5],
+                    "usage_status": (s.metadata or {}).get("usage_status"),
+                    "file_importance": (s.metadata or {}).get("file_importance"),
+                    "reason": s.reason,
                 }
                 for s, r in unique_items
             ]
@@ -1747,6 +2065,85 @@ class GitHubProvider(EvidenceProvider):
             if not active_owned and owned_items:
                 metadata["archived"] = True
                 metadata["historical_only"] = True
+
+            # Phase 3: propagate the strongest per-repository usage status.
+            # Still one aggregated signal per skill (no double counting); the
+            # max status describes the strongest demonstration observed.
+            try:
+                _status_rank = {str(s): i for i, s in enumerate(_STATUS_ORDER)}
+                _seen_statuses = [
+                    str((s.metadata or {}).get("usage_status") or "").lower()
+                    for s, _ in unique_items
+                    if str((s.metadata or {}).get("usage_status") or "").lower() in _status_rank
+                ]
+                if _seen_statuses:
+                    metadata["usage_status"] = max(
+                        _seen_statuses, key=lambda s: _status_rank[s]
+                    )
+                else:
+                    # Legacy signals without status: conservative depth
+                    # equivalent that never overclaims usage.
+                    _agg_depth = int(final_depth)
+                    metadata["usage_status"] = (
+                        _US_SUBSTANTIAL if _agg_depth >= 4
+                        else (_US_DECLARED if _agg_depth <= 2 else _US_IMPORTED)
+                    )
+            except Exception:
+                pass
+
+            # Phase 4: traceability provenance on the aggregated signal.
+            # Union of contributing repositories' file/pattern evidence
+            # (capped, paths and labels only -- never source contents), plus
+            # profile URL and observation timestamp. Still one signal/skill.
+            try:
+                metadata.setdefault("provider", self.provider_name)
+                metadata.setdefault("source_url", f"https://github.com/{owner}")
+                try:
+                    if verified_at is not None:
+                        metadata.setdefault("observed_at", verified_at.isoformat())
+                except Exception:
+                    pass
+                _agg_files: List[str] = []
+                for _s, _ in unique_items:
+                    for _f in (list((_s.metadata or {}).get("relevant_files") or [])[:6]):
+                        if _f not in _agg_files:
+                            _agg_files.append(str(_f))
+                        if len(_agg_files) >= 10:
+                            break
+                    if len(_agg_files) >= 10:
+                        break
+                metadata["relevant_files"] = _agg_files
+                _agg_patterns: List[str] = []
+                for _s, _ in unique_items:
+                    for _p in (list((_s.metadata or {}).get("detected_usage_patterns") or [])[:6]):
+                        if _p not in _agg_patterns:
+                            _agg_patterns.append(str(_p))
+                        if len(_agg_patterns) >= 8:
+                            break
+                    if len(_agg_patterns) >= 8:
+                        break
+                metadata["detected_usage_patterns"] = _agg_patterns
+                _imp_rank = ["ignore", "low", "medium", "high", "very_high"]
+                _seen_imp = [
+                    str((s.metadata or {}).get("file_importance") or "").lower()
+                    for s, _ in unique_items
+                    if str((s.metadata or {}).get("file_importance") or "").lower() in _imp_rank
+                ]
+                if _seen_imp:
+                    metadata["file_importance"] = max(
+                        _seen_imp, key=lambda v: _imp_rank.index(v)
+                    )
+                else:
+                    # Legacy signals without importance: conservative depth
+                    # equivalent (never claims very_high for old data).
+                    _agg_d = int(final_depth)
+                    metadata["file_importance"] = (
+                        "high" if _agg_d >= 3
+                        else ("medium" if _agg_d == 2 else ("low" if _agg_d == 1 else "ignore"))
+                    )
+                metadata["evidence_count"] = int(total_repos)
+            except Exception:
+                pass
 
             # Generic evidence validation gate: reject weak/incidental candidates
             tmp_signal = ExtractedSignal(
@@ -2078,6 +2475,257 @@ class GitHubProvider(EvidenceProvider):
         has_test_deps = any(_is_test_lib(d) for d in all_deps)
         has_tests = has_test_files or has_test_deps or int(inspection.get("test_file_count") or 0) > 0
 
+        # --- Layered implementation evidence (incremental depth grading) ---
+        # Dependency declarations, imports, and framework-specific API usage
+        # are tracked separately so depth reflects demonstration, not mention:
+        #   L1 documentation mention < L2 dependency/config
+        #   < L3 import/usage in >=1 file < L4 substantial multi-file usage.
+        # `usage_patterns` / `usage_files` come from live content inspection;
+        # mock fixtures without them fall back to import counts + sampled files.
+        _dep_skills_early: Dict[str, str] = dependency_skill_names(all_deps)
+        _usage_counts_early: Dict[str, int] = import_skill_counts(import_tokens)
+        _usage_patterns_raw = dict(inspection.get("usage_patterns") or {})
+        _usage_files_raw = {str(k): list(v or []) for k, v in (inspection.get("usage_files") or {}).items()}
+        _import_file_map_raw = inspection.get("import_file_map") or {}
+
+        # --- Phase 3: infrastructure API usage from configuration text ---
+        # Dockerfile / Kubernetes manifest / CI workflow bodies are scanned
+        # locally (never executed, never sent externally) for API-shaped
+        # constructs. Only infra skills are accepted here; application skills
+        # require source-file evidence. Merged additively into the same
+        # pattern/file maps so depth, importance, and status share one view.
+        try:
+            _cfg_text = str(config_text or "")
+            if _cfg_text.strip() and sampled_config_files:
+                _cfg_hits = detect_usage_patterns(_cfg_text)
+                for _cfg_skill in ("Docker", "Kubernetes", "CI/CD"):
+                    _cfg_pids = _cfg_hits.get(_cfg_skill) or []
+                    if not _cfg_pids:
+                        continue
+                    _existing = _usage_patterns_raw.get(_cfg_skill)
+                    if isinstance(_existing, dict):
+                        for _pid in _cfg_pids:
+                            _existing[_pid] = int(_existing.get(_pid, 0) or 0) + 1
+                    elif isinstance(_existing, list):
+                        _usage_patterns_raw[_cfg_skill] = sorted(set(list(_existing) + list(_cfg_pids)))
+                    else:
+                        _usage_patterns_raw[_cfg_skill] = {_pid: 1 for _pid in _cfg_pids}
+                    _merged_cfg_files = sorted(set(
+                        list(_usage_files_raw.get(_cfg_skill) or [])
+                        + list(sampled_config_files[:3])
+                    ))[:6]
+                    _usage_files_raw[_cfg_skill] = _merged_cfg_files
+        except Exception:
+            pass
+
+        def _fw_evidence(skill: str) -> Tuple[int, int, int, List[str]]:
+            """Return (import_count, distinct_patterns, usage_file_count, usage_files) for a skill."""
+            canonical = normalize_skill(skill) or skill
+            import_count = int(_usage_counts_early.get(canonical, 0))
+            pats = _usage_patterns_raw.get(canonical) or _usage_patterns_raw.get(skill) or {}
+            if isinstance(pats, dict):
+                distinct = len(pats)
+            elif isinstance(pats, (list, tuple, set)):
+                distinct = len(set(pats))
+            else:
+                distinct = 0
+            ufiles = _usage_files_raw.get(canonical) or _usage_files_raw.get(skill) or []
+            if isinstance(ufiles, (set, tuple)):
+                ufiles = sorted(ufiles)
+            ufiles = list(ufiles or [])
+            if import_count >= 1 and not ufiles:
+                # Mock/backfill: imports prove >=1 implementation file; do not
+                # invent multi-file spread without per-file provenance.
+                ufiles = list(sampled_source_files[:1]) if sampled_source_files else []
+            return import_count, distinct, len(ufiles), ufiles
+
+        def _relevant_files_for_skill(skill: str, fallback: Optional[List[str]] = None) -> List[str]:
+            canonical = normalize_skill(skill) or skill
+            ufiles = _usage_files_raw.get(canonical) or _usage_files_raw.get(skill) or []
+            if ufiles:
+                return sorted(set(str(f) for f in ufiles))[:6]
+            # Map import tokens back to files for this skill
+            rel: List[str] = []
+            for tok, files in (_import_file_map_raw or {}).items():
+                try:
+                    for cand in _import_token_candidates(str(tok)):
+                        if (normalize_skill(cand) or "") == canonical:
+                            rel.extend(str(f) for f in (files or []))
+                            break
+                except Exception:
+                    continue
+            if rel:
+                return sorted(set(rel))[:6]
+            if _usage_counts_early.get(canonical, 0) >= 1 and sampled_source_files:
+                return list(sampled_source_files[:3])
+            return list(fallback or [])[:6]
+
+        def _detected_patterns_for_skill(skill: str) -> List[str]:
+            canonical = normalize_skill(skill) or skill
+            pats = _usage_patterns_raw.get(canonical) or _usage_patterns_raw.get(skill) or {}
+            if isinstance(pats, dict):
+                return sorted(str(k) for k in pats.keys())
+            if isinstance(pats, (list, tuple, set)):
+                return sorted(str(p) for p in pats)
+            return []
+
+        # --- Phase 2: deterministic file-importance weighting ---
+        # Importance is separate from the skill score: it caps which evidence
+        # depth a file may support (IGNORE->L0, LOW->L1, MEDIUM->L2, HIGH->L3,
+        # VERY_HIGH->L4) and is recorded as metadata. Signal strengths stay
+        # depth-mapped so EvidenceDepth compatibility is preserved, and the
+        # one-signal-per-skill rule prevents double counting.
+        # Per-file evidence hints combine structure with actual detection:
+        # a file counts as having imports/patterns only when the sampled
+        # content maps prove it (never from filename or keyword frequency).
+        _comments_only_files = {
+            str(f).replace("\\", "/").lower()
+            for f in (inspection.get("comments_only_files") or [])
+        }
+        _per_file_import_counts: Dict[str, int] = {}
+        for _tok, _files in (_import_file_map_raw or {}).items():
+            for _f in (_files or []):
+                _key = str(_f).replace("\\", "/")
+                _per_file_import_counts[_key] = _per_file_import_counts.get(_key, 0) + 1
+        # Invert skill->files usage map to file->pattern counts.
+        _per_file_pattern_counts: Dict[str, int] = {}
+        for _skill_key, _files in (_usage_files_raw or {}).items():
+            for _f in (_files or []):
+                _key = str(_f).replace("\\", "/")
+                _per_file_pattern_counts[_key] = _per_file_pattern_counts.get(_key, 0) + 1
+
+        def _evidence_hint_for_file(path: str) -> Dict[str, Any]:
+            key = str(path).replace("\\", "/")
+            low_key = key.lower()
+            imp = 0
+            for tok_key, cnt in _per_file_import_counts.items():
+                if tok_key == key or tok_key.lower() == low_key:
+                    imp += int(cnt or 0)
+            pat = 0
+            for f_key, cnt in _per_file_pattern_counts.items():
+                if f_key == key or f_key.lower() == low_key:
+                    pat += int(cnt or 0)
+            # Fallback for mock inspections without per-file maps: if global
+            # imports exist and this is a sampled source file, attribute a
+            # single import hint only when there is exactly one sampled file
+            # (avoids inventing multi-file spread).
+            if imp == 0 and pat == 0 and key in list(sampled_source_files):
+                if len(sampled_source_files) == 1 and sum(_usage_counts_early.values()) >= 1:
+                    imp = 1
+            return {
+                "has_imports": imp > 0,
+                "import_count": imp,
+                "has_patterns": pat > 0,
+                "pattern_count": pat,
+                "comments_only": low_key in _comments_only_files,
+            }
+
+        # Candidate files for importance: sampled content plus tree-listed
+        # files and root manifests (so mock inspections without sampled lists
+        # still classify dependency manifests as MEDIUM, not IGNORE).
+        # IGNORE files are kept in the map (tier 0) so caps can suppress them.
+        _importance_candidate_files: List[str] = []
+        for _cand in (
+            ([inspection.get("readme_path")] if inspection.get("readme_path") else [])
+            + list(sampled_source_files)
+            + list(sampled_config_files)
+            + [str(f) for f in (inspection.get("top_files") or [])]
+            + [str(f) for f in (inspection.get("root_files") or [])]
+        ):
+            if _cand and str(_cand) not in _importance_candidate_files:
+                _importance_candidate_files.append(str(_cand))
+        _file_tiers: Dict[str, int] = {}
+        for _cand in _importance_candidate_files[:40]:
+            try:
+                _file_tiers[_cand] = _classify_file_importance(
+                    _cand, size=None, evidence=_evidence_hint_for_file(_cand)
+                )
+            except Exception:
+                _file_tiers[_cand] = _FI_LOW
+        # Repository aggregate for VERY_HIGH gating.
+        try:
+            _all_pattern_files = set()
+            for _files in (_usage_files_raw or {}).values():
+                for _f in (_files or []):
+                    _all_pattern_files.add(str(_f))
+            _total_distinct_patterns = sum(
+                len(v) if isinstance(v, dict) else len(set(v or []))
+                for v in (_usage_patterns_raw or {}).values()
+            )
+            _max_usage_files = 0
+            for _files in (_usage_files_raw or {}).values():
+                _max_usage_files = max(_max_usage_files, len(list(_files or [])))
+            # Fallback when per-file maps are absent but global usage exists.
+            if not _all_pattern_files and sum(_usage_counts_early.values()) >= 1:
+                _max_usage_files = max(_max_usage_files, min(len(sampled_source_files), 1))
+            _repo_importance = _assess_repo_importance(
+                _file_tiers,
+                {
+                    "has_tests": bool(has_tests),
+                    "has_workflows": bool(has_workflows),
+                    "pattern_files": len(_all_pattern_files),
+                    "distinct_patterns": _total_distinct_patterns,
+                    "usage_files": _max_usage_files,
+                },
+            )
+        except Exception:
+            _repo_importance = {"level": _FI_HIGH, "label": "high", "reason": "", "counts": {}}
+
+        def _tier_of_file(path: str) -> int:
+            try:
+                if path in _file_tiers:
+                    return int(_file_tiers[path])
+                return int(_classify_file_importance(str(path), evidence=_evidence_hint_for_file(str(path))))
+            except Exception:
+                return _FI_LOW
+
+        def _cap_depth_by_importance(
+            proposed: int, relevant: Optional[List[str]]
+        ) -> Tuple[int, int, str]:
+            """
+            Cap a proposed EvidenceDepth by file importance (upper bound only,
+            never upgrades). Returns (capped_depth, max_tier, tier_label).
+            Empty/unknown file lists do not cap (preserves backward compat
+            for inspections without file provenance); explicitly LOW/IGNORE
+            lists do cap.
+            """
+            try:
+                prop = int(proposed)
+            except (TypeError, ValueError):
+                prop = 1
+            rel = [str(f) for f in (relevant or []) if str(f)]
+            if not rel:
+                return prop, int(_repo_importance.get("level", _FI_HIGH)), str(
+                    _repo_importance.get("label", "high")
+                )
+            tiers = [_tier_of_file(f) for f in rel]
+            if all(t == _FI_IGNORE for t in tiers):
+                return 0, _FI_IGNORE, "ignore"
+            known = [t for t in tiers]
+            max_tier = max(known) if known else _FI_LOW
+            cap = _max_depth_for_tier(max_tier)
+            # Composition of multiple MEDIUM configs (Dockerfile + compose,
+            # workflows + CI) corroborates L3 configuration evidence without
+            # any single MEDIUM file claiming implementation alone.
+            if max_tier == _FI_MEDIUM and int(cap) < int(prop) <= 3:
+                medium_relevant = sum(1 for t in tiers if t >= _FI_MEDIUM)
+                if medium_relevant >= 2:
+                    return int(prop), _FI_MEDIUM, _importance_label(_FI_MEDIUM)
+            # L4 requires substantial multi-file evidence: repository VERY_HIGH
+            # aggregate or a VERY_HIGH file. A single HIGH file stays L3.
+            # Multi-file HIGH usage corroborated at repo level earns VERY_HIGH.
+            if prop >= 4:
+                repo_level = int(_repo_importance.get("level", _FI_HIGH))
+                has_very_high_file = any(t >= _FI_VERY_HIGH for t in tiers)
+                high_relevant = sum(1 for t in tiers if t >= _FI_HIGH)
+                if has_very_high_file:
+                    return prop, _FI_VERY_HIGH, _importance_label(_FI_VERY_HIGH)
+                if repo_level >= _FI_VERY_HIGH and high_relevant >= 2:
+                    return prop, _FI_VERY_HIGH, _importance_label(_FI_VERY_HIGH)
+                if high_relevant < 2:
+                    return min(prop, 3), max_tier, _importance_label(max_tier)
+            return min(prop, int(cap)), max_tier, _importance_label(max_tier)
+
         # Helper to safely record signals honoring fork discounts.
         # Only the strongest evidence for a canonical skill is kept per
         # repository; weaker corroborating findings are retained as provenance.
@@ -2090,10 +2738,44 @@ class GitHubProvider(EvidenceProvider):
         ):
             canonical = normalize_skill(skill_name) or skill_name
             final_depth = min(depth, EvidenceDepth.LEVEL_2_CONFIG) if is_fork else depth
+            # Phase 2: file importance caps depth (never upgrades, never
+            # double-counts — still one signal per skill per repository).
+            # Default to the repository aggregate (not HIGH) so manifest-only
+            # inspections without file provenance stay MEDIUM, not HIGH.
+            try:
+                _repo_level_default = int(_repo_importance.get("level", _FI_MEDIUM))
+                _repo_label_default = str(_repo_importance.get("label", "medium"))
+            except Exception:
+                _repo_level_default, _repo_label_default = _FI_MEDIUM, "medium"
+            _rel_for_cap = None
+            try:
+                _rel_for_cap = (dict(meta or {}).get("relevant_files")
+                                or dict(meta or {}).get("config_files")
+                                or dict(meta or {}).get("source_files_inspected"))
+            except Exception:
+                _rel_for_cap = None
+            _cap_tier = _repo_level_default
+            _cap_label = _repo_label_default
+            try:
+                if _rel_for_cap:
+                    final_depth, _cap_tier, _cap_label = _cap_depth_by_importance(
+                        final_depth, list(_rel_for_cap)[:6]
+                    )
+                    if int(final_depth) <= 0:
+                        # All relevant files IGNORE (vendor/generated): no evidence.
+                        return
+            except Exception:
+                pass
             raw_strength = EvidenceDepth.get_strength_for_depth(final_depth)
             final_strength = round(min(0.55, raw_strength * 0.70), 2) if is_fork else raw_strength
             final_reason = f"[Forked Repository] {reason_text}" if is_fork else reason_text
             metadata = dict(meta or {})
+            # Required Phase 2 metadata (additive; never overwrites explicit).
+            metadata.setdefault("file_importance", _cap_label)
+            try:
+                metadata.setdefault("file_importance_score", round(float(_importance_weight(_cap_tier)), 3))
+            except Exception:
+                metadata.setdefault("file_importance_score", 0.5)
             if is_fork:
                 metadata["is_fork"] = True
             if is_archived:
@@ -2124,7 +2806,7 @@ class GitHubProvider(EvidenceProvider):
                 metadata=metadata,
             )
 
-        # 1. Docker Detection
+        # 1. Docker Detection (configuration; Dockerfile+compose together is stronger)
         has_dockerfile = any("dockerfile" in f.lower() for f in all_files)
         has_docker_compose = any(any(dc in f.lower() for dc in ("docker-compose.yml", "docker-compose.yaml", "compose.yml", "compose.yaml")) for f in all_files)
         if has_dockerfile or has_docker_compose:
@@ -2138,7 +2820,12 @@ class GitHubProvider(EvidenceProvider):
                 "Docker",
                 depth,
                 f"Repository '{repo_name}' contains verified container configuration: {', '.join(details)}.",
-                {"files": details, "evidence_kind": "configuration"},
+                {
+                    "files": details,
+                    "relevant_files": list(sampled_config_files[:3]) or details,
+                    "detected_usage_patterns": _detected_patterns_for_skill("Docker"),
+                    "evidence_kind": "configuration",
+                },
             )
 
         # 2. CI/CD & GitHub Actions Detection
@@ -2148,7 +2835,11 @@ class GitHubProvider(EvidenceProvider):
                 "GitHub Actions",
                 depth,
                 f"Repository '{repo_name}' contains automated CI/CD workflow definitions (.github/workflows).",
-                {"has_workflows": has_workflows, "evidence_kind": "configuration"},
+                {
+                    "has_workflows": has_workflows,
+                    "relevant_files": list(sampled_config_files[:3]),
+                    "evidence_kind": "configuration",
+                },
             )
             _add_signal(
                 "CI/CD",
@@ -2157,77 +2848,271 @@ class GitHubProvider(EvidenceProvider):
                 {"evidence_kind": "configuration"},
             )
 
-        # 3. JavaScript / React / Next.js / Express / Node.js Detection
+        # 3. JavaScript / React / Next.js / Express / Node.js Detection.
+        # Layered grading (taxonomy-driven, no substring false positives):
+        #   dependency declared but never imported/used -> LEVEL_2 (config)
+        #   imported or matched by API patterns in >=1 file -> LEVEL_3
+        #   used across multiple files/patterns (+ tests/workflows) -> LEVEL_4
+        # A README mention alone never reaches this block (handled as L1 docs).
         has_js_ts = "JavaScript" in languages or "TypeScript" in languages or "package.json" in all_files or bool(pkg_deps)
         if has_js_ts:
-            # React
-            if any("react" in d for d in pkg_deps):
-                is_substantial = has_tests and len(pkg_deps) >= 5
-                depth = EvidenceDepth.LEVEL_4_SUBSTANTIAL if is_substantial else EvidenceDepth.LEVEL_3_IMPLEMENTATION
+            # React (exact taxonomy resolution avoids 'interaction' style false positives)
+            if "React" in _dep_skills_early:
+                _imp, _dist, _ufiles_n, _ufiles = _fw_evidence("React")
+                _depth = _classify_framework_depth(
+                    has_dependency=True,
+                    import_count=_imp,
+                    usage_files=_ufiles_n,
+                    distinct_patterns=_dist,
+                    implementation_files=len(sampled_source_files),
+                    has_tests_or_workflows=bool(has_tests or has_workflows),
+                )
+                if _depth >= EvidenceDepth.LEVEL_3_IMPLEMENTATION:
+                    _kind = "implementation" if _depth >= EvidenceDepth.LEVEL_3_IMPLEMENTATION and (_imp >= 1 or _dist >= 1) else "dependency_manifest"
+                    # Substantial phrasing only when multi-file usage is proven
+                    if _depth >= EvidenceDepth.LEVEL_4_SUBSTANTIAL:
+                        _reason = (
+                            f"Repository '{repo_name}' substantially implements React "
+                            f"({_imp} import reference(s), {len(_detected_patterns_for_skill('React'))} usage pattern(s) "
+                            f"across {max(_ufiles_n, 1)} file(s){' with tests/workflows' if (has_tests or has_workflows) else ''})."
+                        )
+                        _kind = "implementation"
+                    elif _imp >= 1 or _dist >= 1:
+                        _reason = (
+                            f"Repository '{repo_name}' imports/uses React in implementation "
+                            f"({_imp} reference(s){', patterns: ' + ', '.join(_detected_patterns_for_skill('React')[:3]) if _detected_patterns_for_skill('React') else ''})."
+                        )
+                        _kind = "source_usage"
+                    else:
+                        _reason = f"Repository '{repo_name}' declares React in its dependency manifest without observed imports."
+                        _kind = "dependency_manifest"
+                else:
+                    _reason = f"Repository '{repo_name}' declares React in its dependency manifest without observed imports."
+                    _kind = "dependency_manifest"
                 _add_signal(
                     "React",
-                    depth,
-                    f"Repository '{repo_name}' contains React dependencies in package.json and project implementation.",
-                    {"package_json": True, "evidence_kind": "dependency_manifest"},
+                    _depth,
+                    _reason,
+                    {
+                        "package_json": True,
+                        "dependency": _dep_skills_early.get("React", "react"),
+                        "usage_count": _imp,
+                        "detected_usage_patterns": _detected_patterns_for_skill("React"),
+                        "relevant_files": _relevant_files_for_skill("React", sampled_source_files),
+                        "evidence_kind": _kind,
+                    },
                 )
 
             # Next.js
-            if any("next" in d for d in pkg_deps):
+            if "Next.js" in _dep_skills_early:
+                _imp, _dist, _ufiles_n, _ufiles = _fw_evidence("Next.js")
+                _depth = _classify_framework_depth(
+                    has_dependency=True,
+                    import_count=_imp,
+                    usage_files=_ufiles_n,
+                    distinct_patterns=_dist,
+                    implementation_files=len(sampled_source_files),
+                    has_tests_or_workflows=bool(has_tests or has_workflows),
+                )
+                _kind = "source_usage" if (_imp >= 1 or _dist >= 1) else "dependency_manifest"
+                if _depth >= EvidenceDepth.LEVEL_3_IMPLEMENTATION and _kind == "source_usage":
+                    _reason = f"Repository '{repo_name}' imports/uses Next.js in implementation ({_imp} reference(s))."
+                else:
+                    _reason = f"Repository '{repo_name}' declares Next.js in its dependency manifest without observed imports."
                 _add_signal(
                     "Next.js",
-                    EvidenceDepth.LEVEL_3_IMPLEMENTATION,
-                    f"Repository '{repo_name}' contains Next.js framework dependencies.",
-                    {"evidence_kind": "dependency_manifest"},
+                    _depth,
+                    _reason,
+                    {
+                        "dependency": _dep_skills_early.get("Next.js", "next"),
+                        "usage_count": _imp,
+                        "detected_usage_patterns": _detected_patterns_for_skill("Next.js"),
+                        "relevant_files": _relevant_files_for_skill("Next.js", sampled_source_files),
+                        "evidence_kind": _kind,
+                    },
                 )
 
             # Express
-            if any("express" in d for d in pkg_deps):
+            if "Express" in _dep_skills_early:
+                _imp, _dist, _ufiles_n, _ufiles = _fw_evidence("Express")
+                _depth = _classify_framework_depth(
+                    has_dependency=True,
+                    import_count=_imp,
+                    usage_files=_ufiles_n,
+                    distinct_patterns=_dist,
+                    implementation_files=len(sampled_source_files),
+                    has_tests_or_workflows=bool(has_tests or has_workflows),
+                )
+                _kind = "source_usage" if (_imp >= 1 or _dist >= 1) else "dependency_manifest"
+                if _kind == "source_usage":
+                    _reason = f"Repository '{repo_name}' imports/uses Express in server implementation ({_imp} reference(s))."
+                else:
+                    _reason = f"Repository '{repo_name}' declares Express in its dependency manifest without observed server usage."
                 _add_signal(
                     "Express",
-                    EvidenceDepth.LEVEL_3_IMPLEMENTATION,
-                    f"Repository '{repo_name}' contains Express server framework dependencies.",
-                    {"evidence_kind": "dependency_manifest"},
+                    _depth,
+                    _reason,
+                    {
+                        "dependency": _dep_skills_early.get("Express", "express"),
+                        "usage_count": _imp,
+                        "detected_usage_patterns": _detected_patterns_for_skill("Express"),
+                        "relevant_files": _relevant_files_for_skill("Express", sampled_source_files),
+                        "evidence_kind": _kind,
+                    },
                 )
 
-            # Node.js
-            if "package.json" in all_files or pkg_deps:
+            # Node.js (runtime manifest; implementation requires JS/TS sources or usage)
+            if "package.json" in all_files or pkg_deps or "Node.js" in _dep_skills_early:
+                _imp_n, _dist_n, _ufiles_n_n, _ = _fw_evidence("Node.js")
+                _js_files = sum(c for ext, c in ext_file_counts.items() if EXTENSION_SKILL_MAP.get(ext) in ("JavaScript", "TypeScript"))
+                if _js_files >= 1 or _imp_n >= 1 or _dist_n >= 1 or _usage_counts_early.get("Express", 0) >= 1 or _usage_counts_early.get("React", 0) >= 1:
+                    _depth_n = EvidenceDepth.LEVEL_3_IMPLEMENTATION
+                    # Substantial Node service: multiple sources + tests/workflows
+                    if _js_files >= 5 and (has_tests or has_workflows):
+                        _depth_n = EvidenceDepth.LEVEL_4_SUBSTANTIAL
+                    _reason_n = f"Repository '{repo_name}' implements a Node.js service (package manifest with {_js_files} JS/TS source file(s))."
+                    _kind_n = "implementation"
+                else:
+                    _depth_n = EvidenceDepth.LEVEL_2_CONFIG
+                    _reason_n = f"Repository '{repo_name}' contains a Node.js package manifest without observed JS/TS implementation files."
+                    _kind_n = "dependency_manifest"
                 _add_signal(
                     "Node.js",
-                    EvidenceDepth.LEVEL_3_IMPLEMENTATION,
-                    f"Repository '{repo_name}' contains Node.js runtime package manifest.",
-                    {"evidence_kind": "dependency_manifest"},
+                    _depth_n,
+                    _reason_n,
+                    {
+                        "source_file_count": _js_files,
+                        "relevant_files": _relevant_files_for_skill("Node.js", sampled_source_files),
+                        "evidence_kind": _kind_n,
+                    },
                 )
 
-        # TypeScript Detection (independent of package.json)
-        if any("typescript" in d for d in all_deps) or "tsconfig.json" in all_files or "TypeScript" in languages:
+        # TypeScript Detection: layered (manifest/config alone is L2; sources/usage raise to L3/L4).
+        _ts_has_dep = ("TypeScript" in _dep_skills_early) or ("tsconfig.json" in all_files)
+        _ts_bytes = 0
+        if isinstance(languages, dict):
+            _ts_bytes = int(languages.get("TypeScript", 0) or 0)
+        _ts_files = sum(c for ext, c in ext_file_counts.items() if EXTENSION_SKILL_MAP.get(ext) == "TypeScript")
+        if _ts_has_dep or "TypeScript" in languages or _ts_files > 0:
+            _imp_t, _dist_t, _ufiles_n_t, _ = _fw_evidence("TypeScript")
+            if _ts_files >= 10 and (has_tests or has_workflows or _ts_has_dep):
+                _ts_depth = EvidenceDepth.LEVEL_4_SUBSTANTIAL
+                _ts_detail = f"substantial TypeScript implementation ({_ts_files} source files, {_ts_bytes} bytes)"
+                _ts_kind = "implementation"
+            elif _ts_files >= 1 or _imp_t >= 1 or _dist_t >= 1 or _ts_bytes >= 5000:
+                _ts_depth = EvidenceDepth.LEVEL_3_IMPLEMENTATION
+                _ts_detail = f"TypeScript implementation ({_ts_files} source files, {_ts_bytes} bytes)"
+                _ts_kind = "implementation" if (_ts_files >= 1 or _imp_t >= 1) else "dependency_manifest"
+            else:
+                _ts_depth = EvidenceDepth.LEVEL_2_CONFIG
+                _ts_detail = "TypeScript configuration without observed TypeScript sources"
+                _ts_kind = "dependency_manifest"
             _add_signal(
                 "TypeScript",
-                EvidenceDepth.LEVEL_3_IMPLEMENTATION,
-                f"Repository '{repo_name}' contains TypeScript configuration and code.",
-                {"evidence_kind": "dependency_manifest"},
+                _ts_depth,
+                f"Repository '{repo_name}' {_ts_detail}.",
+                {
+                    "source_file_count": _ts_files,
+                    "language_bytes": _ts_bytes,
+                    "usage_count": _imp_t,
+                    "detected_usage_patterns": _detected_patterns_for_skill("TypeScript"),
+                    "relevant_files": _relevant_files_for_skill("TypeScript", sampled_source_files),
+                    "evidence_kind": _ts_kind,
+                },
             )
 
-        # 4. Python & Python Ecosystem Detection
+        # 4. Python & Python Ecosystem Detection (layered).
+        # Manifest alone without sources is configuration-level; sources,
+        # imports and tests raise to implementation / substantial.
         has_py_manifest = any(f in root_files for f in ("requirements.txt", "pyproject.toml", "setup.py", "Pipfile"))
         is_python_repo = "Python" in languages or has_py_manifest
         if is_python_repo:
             py_bytes = languages.get("Python", 0) if isinstance(languages, dict) else 0
-            is_substantial = (has_tests or has_dockerfile) and isinstance(py_bytes, (int, float)) and py_bytes > 5000
-            depth = EvidenceDepth.LEVEL_4_SUBSTANTIAL if is_substantial else EvidenceDepth.LEVEL_3_IMPLEMENTATION
+            if not isinstance(py_bytes, (int, float)):
+                py_bytes = 0
+            py_files = sum(c for ext, c in ext_file_counts.items() if EXTENSION_SKILL_MAP.get(ext) == "Python")
+            if py_files == 0 and all_files_lower:
+                # Fixtures listing sources via top_files without ext counts
+                py_files = sum(1 for f in all_files_lower if f.endswith(".py") and not _is_skippable_path(f))
+            _py_substantial_legacy = (
+                (has_tests or has_dockerfile)
+                and isinstance(py_bytes, (int, float)) and py_bytes > 5000
+            )
+            if (py_files >= 10 and (has_py_manifest or has_tests or has_workflows or has_dockerfile)) or (
+                _py_substantial_legacy and (py_files >= 2 or py_bytes >= 8000)
+            ):
+                py_depth = EvidenceDepth.LEVEL_4_SUBSTANTIAL
+                py_detail = f"substantial Python implementation ({py_files} source files, {int(py_bytes)} bytes)"
+                py_kind = "implementation"
+            elif (
+                py_files >= 3
+                or (py_files >= 1 and has_py_manifest)
+                or (isinstance(py_bytes, (int, float)) and py_bytes >= 5000 and has_py_manifest)
+                or (isinstance(py_bytes, (int, float)) and py_bytes >= 20000)
+                or (not tree_scanned and py_files == 0 and ("Python" in languages or has_py_manifest))
+            ):
+                py_depth = EvidenceDepth.LEVEL_3_IMPLEMENTATION
+                py_detail = (
+                    f"verified Python implementation ({py_files} Python source files, "
+                    f"{int(py_bytes)} bytes of Python"
+                    f"{', build manifest present' if has_py_manifest else ''})"
+                )
+                py_kind = "implementation"
+            else:
+                py_depth = EvidenceDepth.LEVEL_2_CONFIG
+                py_detail = (
+                    f"limited Python footprint ({int(py_bytes)} bytes of Python, "
+                    f"{py_files} Python source files"
+                    f"{', build manifest present' if has_py_manifest else ', no build manifest'})"
+                )
+                py_kind = "dependency_manifest"
             _add_signal(
                 "Python",
-                depth,
-                f"Repository '{repo_name}' implements Python software (verified languages/manifests).",
-                {"evidence_kind": "implementation"},
+                py_depth,
+                f"Repository '{repo_name}' {py_detail}.",
+                {
+                    "source_file_count": py_files,
+                    "language_bytes": int(py_bytes),
+                    "has_build_manifest": has_py_manifest,
+                    "relevant_files": _relevant_files_for_skill("Python", sampled_source_files),
+                    "evidence_kind": py_kind,
+                },
             )
 
-            # Python Frameworks & Data Science
+            # Python Frameworks -> REST APIs (layered: dep-only is L2, usage raises to L3).
             if any(d in py_deps for d in ("fastapi", "flask", "django")):
+                _imp_r, _dist_r, _uf_n_r, _ = _fw_evidence("REST APIs")
+                # Also accept Python web-framework imports mapped via taxonomy
+                # (fastapi/flask resolve to REST APIs) plus explicit patterns.
+                _has_rest_usage = (_imp_r >= 1 or _dist_r >= 1)
+                if not _has_rest_usage:
+                    # Fallback: framework dep + any Python source using it
+                    # (import_tokens contain fastapi/flask even if taxonomy maps oddly)
+                    _has_rest_usage = any(
+                        tok in ("fastapi", "flask", "django") for tok in import_tokens
+                    )
+                _rest_depth = (
+                    EvidenceDepth.LEVEL_3_IMPLEMENTATION if _has_rest_usage
+                    else EvidenceDepth.LEVEL_2_CONFIG
+                )
+                _rest_kind = "source_usage" if _has_rest_usage else "dependency_manifest"
+                if _has_rest_usage:
+                    _rest_reason = f"Repository '{repo_name}' implements REST API services with Python web frameworks."
+                else:
+                    _rest_reason = (
+                        f"Repository '{repo_name}' declares a Python web framework "
+                        f"without observed API implementation."
+                    )
                 _add_signal(
                     "REST APIs",
-                    EvidenceDepth.LEVEL_3_IMPLEMENTATION,
-                    f"Repository '{repo_name}' implements REST API services with Python web frameworks.",
-                    {"evidence_kind": "dependency_manifest"},
+                    _rest_depth,
+                    _rest_reason,
+                    {
+                        "usage_count": _imp_r,
+                        "detected_usage_patterns": _detected_patterns_for_skill("REST APIs"),
+                        "relevant_files": _relevant_files_for_skill("REST APIs", sampled_source_files),
+                        "evidence_kind": _rest_kind,
+                    },
                 )
 
             if any("pandas" in d for d in py_deps):
@@ -2246,11 +3131,29 @@ class GitHubProvider(EvidenceProvider):
                 )
 
             if any(d in py_deps for d in ("scikit-learn", "sklearn", "torch", "tensorflow")):
+                # Layered: declared ML framework without observed imports stays L2.
+                _ml_imp = int(_usage_counts_early.get("Machine Learning", 0) or 0)
+                _ml_has_usage = _ml_imp >= 1 or any(
+                    tok in ("sklearn", "scikit-learn", "torch", "tensorflow", "keras")
+                    for tok in import_tokens
+                )
+                _ml_depth = (
+                    EvidenceDepth.LEVEL_3_IMPLEMENTATION if _ml_has_usage
+                    else EvidenceDepth.LEVEL_2_CONFIG
+                )
                 _add_signal(
                     "Machine Learning",
-                    EvidenceDepth.LEVEL_3_IMPLEMENTATION,
-                    f"Repository '{repo_name}' specifies machine learning framework dependencies.",
-                    {"evidence_kind": "dependency_manifest"},
+                    _ml_depth,
+                    (
+                        f"Repository '{repo_name}' imports/uses machine learning frameworks."
+                        if _ml_has_usage else
+                        f"Repository '{repo_name}' declares machine learning dependencies without observed usage."
+                    ),
+                    {
+                        "usage_count": _ml_imp,
+                        "relevant_files": _relevant_files_for_skill("Machine Learning", sampled_source_files),
+                        "evidence_kind": "source_usage" if _ml_has_usage else "dependency_manifest",
+                    },
                 )
 
         # 5. Java / JVM Detection (tiered by implementation evidence).
@@ -2404,14 +3307,38 @@ class GitHubProvider(EvidenceProvider):
                 {"source_file_count": _files, "language_bytes": _bytes, "has_build_manifest": _manifest, "evidence_kind": "implementation" if _depth >= EvidenceDepth.LEVEL_3_IMPLEMENTATION else "dependency_manifest"},
             )
 
-        # 5c. Cross-ecosystem web frameworks -> canonical REST APIs skill.
+        # 5c. Cross-ecosystem web frameworks -> canonical REST APIs skill (layered).
+        # A framework dependency without observed imports/patterns stays at
+        # configuration level; observed usage raises to implementation.
         rest_hits = sorted({d for d in all_deps if d in REST_FRAMEWORK_DEPS})
-        if rest_hits:
+        if rest_hits and "REST APIs" not in signal_map:
+            _imp_x, _dist_x, _uf_n_x, _ = _fw_evidence("REST APIs")
+            _has_x_usage = (_imp_x >= 1 or _dist_x >= 1) or any(
+                tok in rest_hits or tok.split("/")[-1] in rest_hits for tok in import_tokens
+            )
+            _x_depth = (
+                EvidenceDepth.LEVEL_3_IMPLEMENTATION if _has_x_usage
+                else EvidenceDepth.LEVEL_2_CONFIG
+            )
+            _x_kind = "source_usage" if _has_x_usage else "dependency_manifest"
+            if _has_x_usage:
+                _x_reason = f"Repository '{repo_name}' implements REST API services ({', '.join(rest_hits[:5])})."
+            else:
+                _x_reason = (
+                    f"Repository '{repo_name}' declares REST framework dependencies "
+                    f"({', '.join(rest_hits[:5])}) without observed API usage."
+                )
             _add_signal(
                 "REST APIs",
-                EvidenceDepth.LEVEL_3_IMPLEMENTATION,
-                f"Repository '{repo_name}' implements REST API services ({', '.join(rest_hits[:5])}).",
-                {"frameworks": rest_hits[:5], "evidence_kind": "dependency_manifest"},
+                _x_depth,
+                _x_reason,
+                {
+                    "frameworks": rest_hits[:5],
+                    "usage_count": _imp_x,
+                    "detected_usage_patterns": _detected_patterns_for_skill("REST APIs"),
+                    "relevant_files": _relevant_files_for_skill("REST APIs", sampled_source_files),
+                    "evidence_kind": _x_kind,
+                },
             )
 
         # 5d. Styling dependencies -> canonical CSS skill.
@@ -2523,42 +3450,95 @@ class GitHubProvider(EvidenceProvider):
 
         # 11. Declared dependencies -> canonical skills (taxonomy driven).
         # Any dependency in any ecosystem manifest that resolves to a canonical
-        # skill becomes configuration/dependency-level evidence. No technology
-        # is special-cased here: resolution goes through normalize_skill.
-        dep_skills = dependency_skill_names(all_deps)
+        # skill becomes configuration/dependency-level evidence (LEVEL_2).
+        # A declared-but-never-imported dependency stays weak by design.
+        # Reuse the early taxonomy resolution so framework blocks and this
+        # generic block agree on dependency identity.
+        dep_skills = _dep_skills_early
         for dep_skill, dep_token in sorted(dep_skills.items()):
             _add_signal(
                 dep_skill,
                 EvidenceDepth.LEVEL_2_CONFIG,
                 f"Repository '{repo_name}' declares '{dep_token}' in its dependency/build manifest.",
-                {"dependency": dep_token, "evidence_kind": "dependency_manifest"},
+                {
+                    "dependency": dep_token,
+                    "relevant_files": _relevant_files_for_skill(dep_skill, sampled_config_files or sampled_source_files),
+                    "evidence_kind": "dependency_manifest",
+                },
             )
 
         # 12. Imports / usages observed in sampled implementation files.
-        # Depth scales with how often the technology is actually used and
-        # whether the usage is backed by a declared dependency or tests.
-        usage_counts = import_skill_counts(import_tokens)
-        for use_skill, use_count in sorted(usage_counts.items()):
+        # Layered depth (not mere keyword counting):
+        #   L2: single import without dependency/tests/patterns (weak usage)
+        #   L3: repeated imports, or import + declared dep, or API patterns
+        #   L4: substantial use across multiple files/patterns (+ tests/workflows)
+        # Comment-stripped imports (see extract_import_tokens) plus
+        # framework-specific patterns (see detect_usage_patterns) decide.
+        usage_counts = _usage_counts_early
+        # Phase 3: skills observed ONLY through API-usage patterns (no
+        # resolvable import token -- e.g. SQL queries in .sql files, Spring
+        # annotations, workflow steps) still earn implementation signals.
+        # Pattern-table keys are taxonomy-constrained, and _add_signal keeps
+        # one signal per skill, so this cannot double-count evidence.
+        def _skill_has_patterns(_name: str) -> bool:
+            _p = _usage_patterns_raw.get(_name)
+            if isinstance(_p, dict):
+                return len(_p) > 0
+            if isinstance(_p, (list, tuple, set)):
+                return len(set(_p)) > 0
+            return False
+
+        _pattern_only_skills = set()
+        for _raw_skill in (_usage_patterns_raw or {}).keys():
+            _canon = normalize_skill(str(_raw_skill)) or str(_raw_skill)
+            if _canon not in usage_counts and normalize_skill(_canon) == _canon \
+                    and _skill_has_patterns(str(_raw_skill)):
+                _pattern_only_skills.add(_canon)
+        for use_skill in sorted(set(usage_counts.keys()) | _pattern_only_skills):
+            use_count = int(usage_counts.get(use_skill, 0) or 0)
             declared = use_skill in dep_skills
-            if use_count >= 3 and (declared or has_tests):
+            _imp_u, _dist_u, _uf_n_u, _uf_list_u = _fw_evidence(use_skill)
+            _patterns_u = _detected_patterns_for_skill(use_skill)
+            # Substantial: multi-file spread with repeated/patterned usage,
+            # especially when corroborated by tests/workflows or a declared dep.
+            if (
+                (_uf_n_u >= 2 and (use_count >= 3 or len(_patterns_u) >= 2))
+                or (_uf_n_u >= 3)
+                or (use_count >= 3 and (declared or has_tests or len(_patterns_u) >= 1))
+            ):
                 use_depth = EvidenceDepth.LEVEL_4_SUBSTANTIAL
-            elif use_count >= 2 or (use_count >= 1 and declared):
+                use_kind = "source_usage"
+            elif use_count >= 2 or (use_count >= 1 and declared) or len(_patterns_u) >= 1:
                 use_depth = EvidenceDepth.LEVEL_3_IMPLEMENTATION
+                use_kind = "source_usage"
             else:
                 use_depth = EvidenceDepth.LEVEL_2_CONFIG
+                use_kind = "source_usage"
+            if use_count >= 1:
+                _use_reason = (
+                    f"Repository '{repo_name}' imports/uses {use_skill} in {use_count} place(s) "
+                    f"across {max(_uf_n_u, 1)} inspected source file(s)"
+                    f"{' with a matching declared dependency' if declared else ''}"
+                    f"{', patterns: ' + ', '.join(_patterns_u[:3]) if _patterns_u else ''}."
+                )
+            else:
+                # Phase 3: API usage without a resolvable import token.
+                _use_reason = (
+                    f"Repository '{repo_name}' uses {use_skill} API "
+                    f"across {max(_uf_n_u, 1)} inspected source file(s)"
+                    f"{', patterns: ' + ', '.join(_patterns_u[:3]) if _patterns_u else ''}."
+                )
             _add_signal(
                 use_skill,
                 use_depth,
-                (
-                    f"Repository '{repo_name}' imports/uses {use_skill} in {use_count} place(s) "
-                    f"across inspected source files"
-                    f"{' with a matching declared dependency' if declared else ''}."
-                ),
+                _use_reason,
                 {
                     "usage_count": use_count,
                     "declared_dependency": declared,
+                    "detected_usage_patterns": _patterns_u,
+                    "relevant_files": _relevant_files_for_skill(use_skill, sampled_source_files),
                     "source_files_inspected": sampled_source_files[:MAX_SOURCE_FILES_PER_REPO],
-                    "evidence_kind": "source_usage",
+                    "evidence_kind": use_kind,
                 },
             )
 
@@ -2589,6 +3569,7 @@ class GitHubProvider(EvidenceProvider):
         doc_text = " ".join(
             [str(description or ""), " ".join(str(t) for t in topics), readme_text]
         ).strip()
+        _doc_relevant = ([inspection.get("readme_path")] if inspection.get("readme_path") else ["README.md"])
         for doc_skill, doc_count in sorted(skill_mention_counts(doc_text).items()):
             _add_signal(
                 doc_skill,
@@ -2600,6 +3581,7 @@ class GitHubProvider(EvidenceProvider):
                 {
                     "documentation_only": True,
                     "mentions": doc_count,
+                    "relevant_files": list(_doc_relevant)[:3],
                     "evidence_kind": "documentation",
                 },
                 only_if_absent=True,
@@ -2631,13 +3613,192 @@ class GitHubProvider(EvidenceProvider):
         inspection["candidates_accepted"] = len(signal_map)
 
         # Attach corroborating evidence provenance without changing strength.
+        # Structured metadata: every signal carries repository-level inspection
+        # facts (no raw file contents) so downstream stages can audit depth.
+        _files_analyzed = list(inspection.get("files_analyzed") or (
+            ([inspection.get("readme_path")] if inspection.get("readme_text") else [])
+            + list(sampled_source_files) + list(sampled_config_files)
+        ))
+        _files_analyzed = [str(f) for f in _files_analyzed if f][:10]
+        _impl_files = list(inspection.get("implementation_files") or sampled_source_files)[:10]
+        # Phase 3: documentation mentions per skill (for usage_status). One
+        # taxonomy scan total, then per-signal lookup (no per-signal rescan).
+        try:
+            _doc_counts_for_status = skill_mention_counts(doc_text)
+        except Exception:
+            _doc_counts_for_status = {}
+        _primary_lang = ""
+        try:
+            if isinstance(languages, dict) and languages:
+                _primary_lang = str(max(languages.items(), key=lambda kv: int(kv[1] or 0) if isinstance(kv[1], (int, float)) else 0)[0])
+        except Exception:
+            _primary_lang = ""
+        # Phase 3: documentation mentions per skill (for usage_status). One
+        # taxonomy scan total, then per-signal lookup (no per-signal rescan).
+        try:
+            _doc_counts_for_status = skill_mention_counts(doc_text)
+        except Exception:
+            _doc_counts_for_status = {}
         signals: List[ExtractedSignal] = []
         for canonical, sig in signal_map.items():
             notes = evidence_notes.get(canonical) or []
             if notes:
                 sig.metadata["supporting_evidence"] = notes[:5]
                 sig.metadata["evidence_signal_count"] = len(notes)
+            # Required structured fields (additive; existing keys preserved)
+            # Phase 3: technology usage status (mentioned < declared <
+            # imported < used < substantial). Equivalent to EvidenceDepth;
+            # scoring formulas and signal strengths are unchanged.
+            try:
+                # NOTE: raw (non-backfilled) usage-file count is used here so
+                # that a bare import without observed API usage stays
+                # "imported" instead of being promoted to "used".
+                _st_raw_ufiles = _usage_files_raw.get(canonical) or []
+                _st_raw_n = len(list(_st_raw_ufiles or []))
+                _st_patterns = _detected_patterns_for_skill(canonical)
+                # Phase 4: language skills are "used" when source files are
+                # written in that language -- even though language imports
+                # resolve to other skills (e.g. `import fastapi` -> REST
+                # APIs, not Python). Count relevant/top files whose extension
+                # maps to this skill; this only ever rescues NONE -> USED and
+                # never feeds the multi-file substantial path.
+                _st_lang_files = 0
+                try:
+                    _st_seen_lang: Set[str] = set()
+                    _st_candidates = list(sig.metadata.get("relevant_files") or [])
+                    _st_candidates += [str(f) for f in (inspection.get("top_files") or [])]
+                    for _st_f in _st_candidates:
+                        if _st_lang_files >= 1:
+                            break
+                        _st_fl = str(_st_f).lower()
+                        if _st_fl in _st_seen_lang:
+                            continue
+                        _st_seen_lang.add(_st_fl)
+                        try:
+                            if _is_skippable_path(_st_fl):
+                                continue
+                        except Exception:
+                            pass
+                        _st_dot = _st_fl.rfind(".")
+                        _st_ext = _st_fl[_st_dot:] if _st_dot > 0 else ""
+                        try:
+                            if _st_ext and EXTENSION_SKILL_MAP.get(_st_ext) == canonical:
+                                _st_lang_files += 1
+                        except Exception:
+                            continue
+                except Exception:
+                    _st_lang_files = 0
+                sig.metadata.setdefault(
+                    "usage_status",
+                    _classify_usage_status(
+                        has_mention=bool(_doc_counts_for_status.get(canonical)),
+                        has_dependency=bool(canonical in _dep_skills_early),
+                        import_count=int(_usage_counts_early.get(canonical, 0) or 0),
+                        has_api_usage=bool(_st_patterns) or _st_lang_files >= 1,
+                        distinct_patterns=len(_st_patterns),
+                        usage_files=int(_st_raw_n or 0),
+                        implementation_files=len(_impl_files),
+                        has_tests_or_workflows=bool(has_tests or has_workflows),
+                    ),
+                )
+            except Exception:
+                try:
+                    _fallback_depth = int(sig.depth)
+                except (TypeError, ValueError):
+                    _fallback_depth = 1
+                sig.metadata.setdefault(
+                    "usage_status",
+                    _US_USED if _fallback_depth >= 3
+                    else (_US_DECLARED if _fallback_depth == 2 else _US_MENTIONED),
+                )
+            sig.metadata.setdefault("repository_name", repo_name)
+            sig.metadata.setdefault("full_name", inspection.get("full_name") or f"{owner}/{repo}")
+            if _primary_lang:
+                sig.metadata.setdefault("language", _primary_lang)
+            if isinstance(languages, dict) and languages:
+                sig.metadata.setdefault("languages", dict(languages))
+            sig.metadata["evidence_depth"] = sig.depth
+            sig.metadata["evidence_count"] = len(notes) or 1
+            # Phase 4: traceability provenance (additive, compact, no source
+            # contents). Every signal carries who observed what, where, when.
+            sig.metadata.setdefault("provider", self.provider_name)
+            try:
+                _repo_full = str(inspection.get("full_name") or f"{owner}/{repo}").strip("/")
+                sig.metadata.setdefault("source_url", f"https://github.com/{_repo_full}")
+            except Exception:
+                pass
+            try:
+                if verified_at is not None:
+                    sig.metadata.setdefault("observed_at", verified_at.isoformat())
+            except Exception:
+                pass
+            sig.metadata.setdefault("files_analyzed", _files_analyzed)
+            sig.metadata.setdefault("files_analyzed_count", len(_files_analyzed))
+            sig.metadata.setdefault("implementation_files", _impl_files)
+            if not sig.metadata.get("relevant_files"):
+                try:
+                    sig.metadata["relevant_files"] = _relevant_files_for_skill(canonical, _impl_files or _files_analyzed)
+                except Exception:
+                    sig.metadata["relevant_files"] = (_impl_files or _files_analyzed)[:3]
+            if "detected_usage_patterns" not in sig.metadata:
+                try:
+                    sig.metadata["detected_usage_patterns"] = _detected_patterns_for_skill(canonical)
+                except Exception:
+                    sig.metadata["detected_usage_patterns"] = []
+            # Phase 2: file importance metadata (recomputed from final relevant
+            # files so it always matches the emitted evidence; additive only).
+            try:
+                _final_rel = list(sig.metadata.get("relevant_files") or [])
+                if _final_rel and "file_importance" not in sig.metadata:
+                    _capped, _tier, _label = _cap_depth_by_importance(sig.depth, _final_rel)
+                    sig.metadata["file_importance"] = _label
+                    sig.metadata["file_importance_score"] = round(float(_importance_weight(_tier)), 3)
+                sig.metadata.setdefault("file_importance", "medium")
+                sig.metadata.setdefault("file_importance_score", 0.5)
+                sig.metadata.setdefault("file_importance_breakdown", dict(_repo_importance.get("counts", {})))
+                sig.metadata.setdefault("repository_importance", _repo_importance.get("label", "high"))
+            except Exception:
+                sig.metadata.setdefault("file_importance", "medium")
+                sig.metadata.setdefault("file_importance_score", 0.5)
+            # Phase 3: technology usage status (mentioned < declared <
+            # imported < used < substantial). Additive metadata equivalent to
+            # EvidenceDepth; scoring formulas and signal strengths unchanged.
+            try:
+                _st_imp, _st_dist, _st_ufn, _ = _fw_evidence(canonical)
+                _st_patterns = _detected_patterns_for_skill(canonical)
+                _status = _classify_usage_status(
+                    has_mention=bool(_doc_counts_for_status.get(canonical)),
+                    has_dependency=bool(canonical in _dep_skills_early),
+                    import_count=int(_usage_counts_early.get(canonical, 0) or 0),
+                    has_api_usage=bool(_st_patterns),
+                    distinct_patterns=len(_st_patterns),
+                    usage_files=int(_st_ufn or 0),
+                    implementation_files=len(_impl_files),
+                    has_tests_or_workflows=bool(has_tests or has_workflows),
+                )
+                sig.metadata.setdefault("usage_status", _status)
+            except Exception:
+                try:
+                    _fallback_depth = int(sig.depth)
+                except (TypeError, ValueError):
+                    _fallback_depth = 1
+                sig.metadata.setdefault(
+                    "usage_status",
+                    _US_USED if _fallback_depth >= 3
+                    else (_US_DECLARED if _fallback_depth == 2 else _US_MENTIONED),
+                )
+            sig.metadata.setdefault("reason", sig.reason)
             signals.append(sig)
+
+        # Phase 2 audit trail: per-file importance and repository aggregate.
+        try:
+            inspection["file_importances"] = {
+                str(k): _importance_label(int(v)) for k, v in list(_file_tiers.items())[:40]
+            }
+            inspection["repository_importance"] = _repo_importance.get("label", "high")
+            inspection["repository_importance_reason"] = _repo_importance.get("reason", "")
+        except Exception:
+            pass
 
         detected_names = [s.skill for s in signals]
         message = (

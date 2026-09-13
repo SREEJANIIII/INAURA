@@ -1,0 +1,248 @@
+/* SkillEvidenceCard — same design language as AnalysisResults (prov__ / results__). */
+
+.evcard {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.evcard__header {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  gap: 12px;
+}
+
+.evcard__eyebrow {
+  font-size: 0.72rem;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: #64748b;
+  font-weight: 700;
+}
+
+.evcard__title {
+  margin: 4px 0 0;
+  font-size: 1.15rem;
+}
+
+.evcard__category {
+  font-size: 0.78rem;
+  color: #64748b;
+  margin-top: 2px;
+}
+
+.evcard__badge {
+  font-size: 0.75rem;
+  font-weight: 700;
+  padding: 3px 10px;
+  border-radius: 9999px;
+  border: 1px solid #e2e8f0;
+  background: #f1f5f9;
+  color: #475569;
+  white-space: nowrap;
+}
+
+.evcard__badge--strong {
+  background: #ecfdf5;
+  border-color: #a7f3d0;
+  color: #059669;
+}
+
+.evcard__badge--moderate {
+  background: #fef3c7;
+  border-color: #fde68a;
+  color: #92400e;
+}
+
+.evcard__badge--weak {
+  background: #f1f5f9;
+  border-color: #e2e8f0;
+  color: #475569;
+}
+
+.evcard__badge--evidence-gap {
+  background: #ffedd5;
+  border-color: #fed7aa;
+  color: #9a3412;
+}
+
+.evcard__badge--no-evidence {
+  background: #f8fafc;
+  border-color: #e2e8f0;
+  color: #64748b;
+  border-style: dashed;
+}
+
+.evcard__badge--ai {
+  background: #f59e0b;
+  border-color: #f59e0b;
+  color: #fff;
+}
+
+.evcard__stats {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(120px, 1fr));
+  gap: 8px;
+}
+
+.evcard__stat {
+  background: #f8fafc;
+  border: 1px solid #e2e8f0;
+  border-radius: 8px;
+  padding: 8px 10px;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  font-size: 0.85rem;
+}
+
+.evcard__stat--primary {
+  border-color: #a7f3d0;
+  background: #ecfdf5;
+}
+
+.evcard__stat-label {
+  font-size: 0.72rem;
+  color: #64748b;
+  font-weight: 600;
+}
+
+.evcard__stat-value {
+  font-size: 1.1rem;
+}
+
+.evcard__note {
+  font-size: 0.82rem;
+  color: #92400e;
+  background: #fef3c7;
+  border: 1px solid #fde68a;
+  border-radius: 8px;
+  padding: 8px 10px;
+}
+
+.evcard__note--subtle {
+  margin-top: 6px;
+  background: #f8fafc;
+  border-color: #e2e8f0;
+  color: #64748b;
+}
+
+.evcard__why h4,
+.evcard__evidence h4 {
+  margin: 4px 0 8px;
+  font-size: 0.92rem;
+}
+
+.evcard__why ul {
+  margin: 0;
+  padding-left: 20px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  font-size: 0.86rem;
+  color: #334155;
+}
+
+.evcard__empty {
+  font-size: 0.85rem;
+  color: #475569;
+  background: #f8fafc;
+  border: 1px dashed #cbd5e1;
+  border-radius: 8px;
+  padding: 10px 12px;
+  line-height: 1.5;
+  margin: 0;
+}
+
+.evcard__source {
+  border: 1px solid #e2e8f0;
+  border-radius: 8px;
+  padding: 10px 12px;
+  margin-top: 8px;
+  background: #fff;
+}
+
+.evcard__source--assessment {
+  border-color: #a7f3d0;
+  background: #f0fdf4;
+}
+
+.evcard__source-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  font-size: 0.88rem;
+}
+
+.evcard__source-type {
+  font-size: 0.72rem;
+  color: #64748b;
+  text-transform: uppercase;
+  font-weight: 700;
+}
+
+.evcard__source-meta {
+  font-size: 0.78rem;
+  color: #475569;
+  margin-top: 4px;
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.evcard__explanation {
+  font-size: 0.84rem;
+  color: #334155;
+  margin-top: 6px;
+}
+
+.evcard__repos {
+  list-style: none;
+  margin: 8px 0 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.evcard__repo {
+  font-size: 0.82rem;
+  border-left: 2px solid #e2e8f0;
+  padding-left: 8px;
+}
+
+.evcard__repo-name a {
+  color: #0f766e;
+  word-break: break-all;
+}
+
+.evcard__repo-files {
+  font-size: 0.78rem;
+  color: #475569;
+  margin-top: 2px;
+  word-break: break-all;
+}
+
+.evcard__repo-meta {
+  font-size: 0.75rem;
+  color: #64748b;
+  margin-top: 2px;
+  display: flex;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+
+.evcard__usage {
+  font-size: 0.78rem;
+  color: #475569;
+  margin-top: 6px;
+}
+
+.evcard__honesty {
+  font-size: 0.75rem;
+  color: #64748b;
+  font-style: italic;
+  margin: 0;
+}

@@ -72,6 +72,14 @@ export type EvidenceSource = {
   explanation?: string;
   is_ai_assisted?: boolean;
   is_overridden?: boolean;
+  /** Direct link to the source (repository, profile, or artifact). */
+  source_url?: string;
+  /** EvidenceDepth integer when the backend measured one. */
+  evidence_depth?: number | null;
+  /** Technology usage status (mentioned/declared/imported/used/substantial). */
+  usage_status?: string;
+  /** ISO timestamp of when the evidence was observed, when available. */
+  completed_at?: string;
 };
 
 export type SkillGap = {

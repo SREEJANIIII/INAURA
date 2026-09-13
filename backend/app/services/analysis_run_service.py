@@ -204,6 +204,52 @@ def build_evidence_sources(signals: List[dict]) -> List[dict]:
                 details["evidence_depth"] = meta["evidence_depth"]
             if meta.get("project_name"):
                 details["project"] = meta["project_name"]
+            # Phase 4: traceability provenance (compact, safe). File paths,
+            # usage/importance labels, and pattern ids only -- capped lists,
+            # never source contents. Missing keys degrade gracefully so old
+            # cached verified_signals stay valid (backward compatible).
+            try:
+                _rel = list(meta.get("relevant_files") or [])[:10]
+                if _rel:
+                    details["relevant_files"] = [str(f) for f in _rel]
+                if meta.get("usage_status"):
+                    details["usage_status"] = str(meta.get("usage_status"))
+                if meta.get("file_importance"):
+                    details["file_importance"] = str(meta.get("file_importance"))
+                if meta.get("file_importance_score") is not None:
+                    try:
+                        details["file_importance_score"] = round(float(meta.get("file_importance_score")), 3)
+                    except (TypeError, ValueError):
+                        pass
+                _pats = list(meta.get("detected_usage_patterns") or [])[:8]
+                if _pats:
+                    details["detected_usage_patterns"] = [str(p) for p in _pats]
+                if meta.get("evidence_count") is not None:
+                    try:
+                        details["evidence_count"] = int(meta.get("evidence_count"))
+                    except (TypeError, ValueError):
+                        pass
+                if meta.get("observed_at"):
+                    details["observed_at"] = str(meta.get("observed_at"))
+                # Keep per-repository entries compact even if a caller passes
+                # through richer per-repo signal metadata.
+                if isinstance(details.get("repositories"), list):
+                    _repos = []
+                    for _r in details["repositories"][:10]:
+                        if not isinstance(_r, dict):
+                            continue
+                        _repos.append({
+                            k: _r.get(k) for k in (
+                                "name", "full_name", "url", "fork", "archived",
+                                "classification", "depth", "signal_strength",
+                                "files", "usage_status", "file_importance", "reason",
+                            ) if k in _r
+                        })
+                        if isinstance(_repos[-1].get("files"), list):
+                            _repos[-1]["files"] = [str(f) for f in _repos[-1]["files"][:5]]
+                    details["repositories"] = _repos
+            except Exception:
+                pass
         elif src_type == "project":
             proj_name = meta.get("project_name") or "Project"
             label = f"Project \u00b7 {proj_name}"
@@ -262,6 +308,7 @@ def build_evidence_sources(signals: List[dict]) -> List[dict]:
             "strength": round(strength, 3),
             "reliability": round(reliability, 3),
             "evidence_depth": meta.get("evidence_depth") if meta.get("evidence_depth") is not None else s.get("depth"),
+            "usage_status": str(meta.get("usage_status") or ""),
             "details": details,
             "explanation": s.get("reason") or s.get("explanation", ""),
             "is_ai_assisted": bool(s.get("is_ai_assisted") or meta.get("is_ai_assisted")),
@@ -269,6 +316,116 @@ def build_evidence_sources(signals: List[dict]) -> List[dict]:
             "completed_at": meta.get("completed_at") or "",
         })
     return sources
+
+
+def _evidence_depth_name(depth: Any) -> str:
+    """Human-readable EvidenceDepth name for explanations (additive helper)."""
+    try:
+        level = int(depth)
+    except (TypeError, ValueError):
+        return "unverified"
+    return {
+        0: "URL only",
+        1: "mention",
+        2: "configuration",
+        3: "implementation",
+        4: "substantial implementation",
+    }.get(level, "unverified")
+
+
+def build_skill_evidence_explanation(assessment: Dict[str, Any]) -> Dict[str, Any]:
+    """
+    Structured evidence explanation for one final skill assessment.
+
+    Answers: "Why did INAURA give this skill this score?" by tracing the
+    chain Skill Score -> Skill -> Signals -> Evidence -> Source ->
+    Repository -> Relevant file/artifact -> Evidence depth/reason.
+
+    Built from the assessment's existing `evidence_sources` (see
+    build_evidence_sources) plus its proficiency/confidence/explanation, so
+    no scoring input is reinterpreted here. Compact and safe: repository
+    names, file paths, labels, and reasons only -- never source contents.
+    """
+    assessment = assessment or {}
+    skill = str(assessment.get("canonical_name") or assessment.get("skill") or "Unknown")
+    # Exact assessment values (no rounding): the explanation must trace the
+    # score, never restate a different one. Display formatting is the UI's job.
+    try:
+        proficiency = float(assessment.get("proficiency", 0.0) or 0.0)
+    except (TypeError, ValueError):
+        proficiency = 0.0
+    try:
+        confidence = float(assessment.get("confidence", 0.0) or 0.0)
+    except (TypeError, ValueError):
+        confidence = 0.0
+
+    sources: List[Dict[str, Any]] = []
+    for src in (assessment.get("evidence_sources") or []):
+        if not isinstance(src, dict):
+            continue
+        details = src.get("details") or {}
+        files = list(details.get("relevant_files") or [])[:5]
+        repositories = details.get("repositories")
+        if isinstance(repositories, list) and repositories:
+            first = repositories[0] if isinstance(repositories[0], dict) else {}
+            repository = str(first.get("full_name") or first.get("name") or details.get("project") or src.get("source_label") or src.get("source_type") or "")
+            repository_url = str(first.get("url") or details.get("source_url") or src.get("source_url") or "")
+            if not files:
+                files = list(first.get("files") or [])[:5]
+        else:
+            repository = str(
+                details.get("project") or details.get("full_name")
+                or src.get("source_label") or src.get("source_type") or ""
+            )
+            repository_url = str(details.get("source_url") or src.get("source_url") or "")
+        try:
+            depth: Any = src.get("evidence_depth")
+            depth = int(depth) if depth is not None else None
+        except (TypeError, ValueError):
+            depth = None
+        sources.append({
+            "provider": str(src.get("source_type") or ""),
+            "repository": repository,
+            "repository_url": repository_url,
+            "files": [str(f) for f in files],
+            "depth": depth,
+            "depth_name": _evidence_depth_name(depth),
+            "usage_status": str(src.get("usage_status") or details.get("usage_status") or ""),
+            "file_importance": str(details.get("file_importance") or ""),
+            "strength": src.get("strength"),
+            "reason": str(src.get("explanation") or ""),
+        })
+
+    if not sources:
+        summary = (
+            f"{skill}: proficiency {int(round(proficiency * 100))}% with "
+            f"{int(round(confidence * 100))}% confidence. "
+            f"{assessment.get('explanation') or 'No evidence submitted for this skill.'}"
+        )
+    else:
+        strongest = max(
+            sources,
+            key=lambda e: (
+                (e["depth"] if isinstance(e["depth"], int) else -1),
+                float(e["strength"] or 0.0),
+            ),
+        )
+        summary = (
+            f"{skill}: proficiency {int(round(proficiency * 100))}% with "
+            f"{int(round(confidence * 100))}% confidence, based on "
+            f"{len(sources)} evidence source(s). Strongest: "
+            f"{strongest['provider'] or 'evidence'}"
+            f"{' (' + strongest['repository'] + ')' if strongest['repository'] else ''} "
+            f"at {_evidence_depth_name(strongest['depth'])} depth"
+            f"{' -- ' + strongest['reason'] if strongest['reason'] else ''}."
+        )
+    return {
+        "skill": skill,
+        "proficiency": proficiency,
+        "confidence": confidence,
+        "summary": summary,
+        "evidence_sources": sources,
+    }
 
 
 def load_user_overrides(user_id: str, c: Optional[Client]) -> Dict[str, dict]:

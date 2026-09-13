@@ -102,14 +102,16 @@ def validate_aggregated_signal(signal: Any, metadata: Dict[str, Any]) -> Tuple[b
             if KIND_DEPENDENCY not in kinds or KIND_SOURCE_USAGE not in kinds:
                 return False, "insufficient_corroboration"
 
-    # 7. Frameworks (Frontend/Backend) need dependency + usage corroboration
+    # 7. Frameworks (Frontend/Backend): layered grading.
+    # A declared dependency without observed imports/usage is LEVEL_2 weak
+    # evidence (accepted as such); it is never upgraded to implementation.
+    # Only documentation-level (L1) singletons without any usage are rejected.
     if category in ("Frontend", "Backend"):
         has_dep = KIND_DEPENDENCY in kinds
         has_usage = KIND_SOURCE_USAGE in kinds
         has_impl = KIND_IMPLEMENTATION in kinds or KIND_SUBSTANTIAL in kinds
         if has_dep and not (has_usage or has_impl):
-            # Single dependency without usage and only 1 repo is weak
-            if repo_count < 2 and int(depth) <= int(EvidenceDepth.LEVEL_2_CONFIG):
+            if repo_count < 2 and int(depth) < int(EvidenceDepth.LEVEL_2_CONFIG):
                 return False, "insufficient_corroboration"
 
     # 8. Databases need dependency/config + usage or implementation

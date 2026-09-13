@@ -1,13 +1,14 @@
 /* eslint-disable @typescript-eslint/no-explicit-any, react-hooks/set-state-in-effect */
 import { useCallback, useEffect, useState } from "react";
 import { Link } from "react-router-dom";
-import { getLatestAnalysis, getGaps, setSkillOverride, type AnalysisResult, type SkillGap, type EvidenceSource } from "../services/analysis";
+import { getLatestAnalysis, getGaps, setSkillOverride, type AnalysisResult, type SkillGap } from "../services/analysis";
 import { listEvidence, listProjects, listGithubRepos, type Evidence, type Project, type GithubRepo, setEvidenceExcluded, setProjectExcluded, setEvidenceAiAssisted, setProjectAiAssisted, setGithubRepoExcluded, setGithubRepoAiAssisted } from "../services/evidence";
 import {
   getAvailableAssessments,
   type AvailableAssessment,
 } from "../services/assessment";
 import AssessmentModal from "../components/assessment/AssessmentModal";
+import SkillEvidenceCard from "../components/analysis/SkillEvidenceCard";
 import Button from "../components/ui/Button";
 import "./AnalysisResults.css";
 
@@ -331,7 +332,6 @@ export default function AnalysisResults() {
     if (!provenanceGap) return null;
     const g = provenanceGap;
     const displayName = g.skills?.display_name || g.skills?.canonical_name || g.canonical_name;
-    const sources: EvidenceSource[] = (g.evidence_sources as EvidenceSource[]) || [];
     return (
       <div className="prov__overlay" onClick={() => setProvenanceGap(null)} role="dialog" aria-modal="true">
         <div className="prov__drawer" onClick={(e) => e.stopPropagation()}>
@@ -343,73 +343,8 @@ export default function AnalysisResults() {
             <button className="prov__close" onClick={() => setProvenanceGap(null)}>×</button>
           </div>
           <div className="prov__body">
-            <div className="prov__row">
-              <span>Current proficiency</span><strong>{Math.round(g.current_proficiency*100)}%</strong>
-            </div>
-            <div className="prov__row">
-              <span>Confidence</span><strong>{Math.round(g.confidence*100)}%</strong>
-            </div>
-            <div className="prov__row">
-              <span>Required</span><strong>{Math.round(g.required_level*100)}%</strong>
-            </div>
-            <div className="prov__row">
-              <span>Gap</span><strong style={{ color: g.gap>0 ? "#dc2626" : "#059669" }}>{Math.round(g.gap*100)}%</strong>
-            </div>
-            <div className="prov__row">
-              <span>Evidence state</span><strong>{g.evidence_state_label || g.evidence_state}</strong>
-            </div>
-            {g.is_overridden && <div className="prov__note">This skill was overridden by you to 0%. Original estimate was {Math.round(((g as any).original_proficiency||0)*100)}%.</div>}
+            <SkillEvidenceCard gap={g} />
             <div className="prov__sources">
-              <h4>Contributing sources ({sources.length})</h4>
-              {sources.length === 0 ? (
-                <div className="prov__empty">No evidence found. INAURA has no evidence demonstrating this skill. This indicates absence of submitted evidence, not confirmed inability. Submit a GitHub project, coding profile, coursework, certification, or complete an INAURA assessment to demonstrate it.</div>
-              ) : (
-                sources.map((s, idx) => (
-                  <div key={idx} className="prov__source">
-                    <div className="prov__source-head">
-                      <strong>{s.source_label}</strong>
-                      <span className="prov__source-type">{s.source_type}</span>
-                      {s.is_ai_assisted && <span className="prov__badge prov__badge--ai">AI-assisted</span>}
-                    </div>
-                    <div className="prov__source-meta">
-                      <span>Strength: {(s.strength*100).toFixed(0)}%</span>
-                      <span>·</span>
-                      <span>Reliability: {(s.reliability*100).toFixed(0)}%</span>
-                    </div>
-                    {s.explanation && <div className="prov__explanation">{s.explanation}</div>}
-                    {s.details && Object.keys(s.details).length>0 && (
-                      <div className="prov__details">
-                        {Object.entries(s.details).filter(([k]) => k !== "repositories").map(([k,v]) => (
-                          <div key={k} className="prov__detail"><span className="prov__detail-k">{k}:</span> <span>{String(v).slice(0,200)}</span></div>
-                        ))}
-                        {(s.details as any).repositories && Array.isArray((s.details as any).repositories) && (
-                          <div style={{ marginTop: 6 }}>
-                            <div style={{ fontWeight: 600, fontSize: "0.82rem" }}>Contributing repositories ({(s.details as any).repositories.length}):</div>
-                            {(s.details as any).repositories.map((r: any, ri: number) => (
-                              <div key={ri} style={{ fontSize: "0.78rem", paddingLeft: 8, marginTop: 2 }}>
-                                • <strong>{r.full_name || r.name}</strong> {r.url ? <a href={r.url} target="_blank" rel="noreferrer" style={{ color: "#0f766e" }}>{r.url}</a> : null} {r.depth !== undefined ? `(depth ${r.depth}, strength ${Math.round((r.signal_strength||0)*100)}%, reliability 40%)` : null} {r.classification ? `· ${r.classification}` : null}
-                              </div>
-                            ))}
-                          </div>
-                        )}
-                        {(s as any).source_url && !(s.details as any).source_url && (
-                          <div className="prov__detail"><span className="prov__detail-k">source_url:</span> <a href={(s as any).source_url} target="_blank" rel="noreferrer" style={{ color: "#0f766e" }}>{(s as any).source_url}</a></div>
-                        )}
-                        {(s as any).evidence_depth !== undefined && !(s.details as any).evidence_depth && (
-                          <div className="prov__detail"><span className="prov__detail-k">evidence_depth:</span> <span>{String((s as any).evidence_depth)}</span></div>
-                        )}
-                      </div>
-                    )}
-                  </div>
-                ))
-              )}
-              {g.has_assessment && (
-                <div className="prov__source prov__source--assessment">
-                  <div className="prov__source-head"><strong>INAURA Assessment</strong><span className="prov__badge">Validated</span></div>
-                  <div>Score: {g.assessment_score!==null && g.assessment_score!==undefined ? Math.round((g.assessment_score as number)*100)+'%' : '—'}</div>
-                  <div style={{ fontSize: "0.82rem", color: "#64748b" }}>Assessment is a separate stronger evidence source. GitHub reliability remains unchanged (supporting evidence).</div>
-                </div>
-              )}
               <div style={{ marginTop: 12, padding: 10, background: "#f8fafc", border: "1px solid #e2e8f0", borderRadius: 8 }}>
                 <h4 style={{ margin: "0 0 6px", fontSize: "0.90rem" }}>Why is this skill required for {analysis.target_role}?</h4>
                 <div style={{ fontSize: "0.82rem", color: "#334155", display: "flex", flexDirection: "column", gap: 4 }}>

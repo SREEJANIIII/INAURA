@@ -121,11 +121,14 @@ def test_fixture_c_dependency_only_is_limited():
     ]
     res = _verify_mock(owner, repos)
     skills = {s.skill: s for s in res.signals}
-    # Single dependency without source usage and only 1 repo at L3 should be considered weak for Frontend; our validator allows single dep at L3? It requires corroboration for depth <=2, but this is depth 3, so accepted
-    # So React at depth 3 with single dep should be accepted (dependency alone at L3 is stronger than doc)
-    # But if we require corroboration for Frontend at depth 3, it would still be accepted because depth 3 >2
+    # Layered grading: a declared dependency without observed imports/usage
+    # stays at LEVEL_2 (configuration), never implementation. It is accepted
+    # as weak evidence (stronger than README-only L1, weaker than L3 usage).
     assert "React" in skills
-    assert skills["React"].depth == EvidenceDepth.LEVEL_3_IMPLEMENTATION
+    assert skills["React"].depth == EvidenceDepth.LEVEL_2_CONFIG
+    assert skills["React"].signal_strength == EvidenceDepth.get_strength_for_depth(
+        EvidenceDepth.LEVEL_2_CONFIG
+    )
 
 
 # ---------------------------------------------------------------------------

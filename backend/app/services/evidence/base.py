@@ -8,7 +8,16 @@ from datetime import datetime, timezone
 # recorded under an older version so live runs never serve outdated signals.
 # 2: deep GitHub repository-content evidence (full pagination + content stage).
 # 3: generic evidence-validation gate (reject documentation-only & incidental)
-EVIDENCE_PIPELINE_VERSION = 3
+# 4: layered GitHub implementation grading (mention < dependency < import/usage
+#    < substantial) with comment stripping, vendor exclusion, framework usage
+#    patterns, and structured per-signal inspection metadata.
+# 5: deterministic GitHub file-importance weighting (IGNORE/LOW/MEDIUM/HIGH/
+#    VERY_HIGH) gating evidence depth with per-signal importance metadata.
+# 6: technology usage-status detection (mentioned < declared < imported <
+#    used < substantial) with string-literal-safe API-usage patterns and
+#    per-signal usage_status metadata. All matching stays local (regex);
+#    repository code is never executed nor sent to external services.
+EVIDENCE_PIPELINE_VERSION = 6
 
 
 class VerificationStatus:
