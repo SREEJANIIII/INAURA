@@ -173,6 +173,25 @@
   word-break: break-all;
 }
 
+.capmap__explain {
+  margin: 6px 0 4px;
+  font-size: 0.85rem;
+}
+
+.capmap__explain summary {
+  cursor: pointer;
+  color: var(--muted);
+  font-size: 0.82rem;
+}
+
+.capmap__explain p {
+  margin: 4px 0;
+}
+
+.capmap__explain ul {
+  margin: 2px 0 6px;
+}
+
 .capmap__next {
   background: var(--accent-soft);
   border: 1px solid var(--accent-border);

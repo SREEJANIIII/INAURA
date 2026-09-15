@@ -250,6 +250,840 @@ def _has_implementation(signals: List[dict]) -> bool:
     return any(_signal_depth(s) >= 3 for s in (signals or []))
 
 
+def classify_capability_status(support: Any, has_implementation: bool = False) -> str:
+    """Deterministic capability status around the existing support score.
+
+    Interpretation layer only — never changes scoring:
+      support >= DEMONSTRATED_SUPPORT -> demonstrated
+      support >= DEVELOPING_SUPPORT  -> developing
+      support < DEVELOPING_SUPPORT   -> unverified, unless the existing
+        evidence logic already identifies a genuine gap (skill-level
+        implementation evidence exists while this capability is unmet),
+        in which case -> confirmed_gap.
+
+    Absence of evidence is unverified, never confirmed inability.
+    Mirrors the existing evidence_gap vs skill_gap distinction:
+      no implementation evidence -> unverified (evidence_gap analogue)
+      implementation evidence + support == 0 -> confirmed_gap (skill_gap analogue)
+    """
+    try:
+        value = float(support or 0.0)
+    except (TypeError, ValueError):
+        value = 0.0
+    if value >= DEMONSTRATED_SUPPORT:
+        return STATUS_DEMONSTRATED
+    if value >= DEVELOPING_SUPPORT:
+        return STATUS_DEVELOPING
+    if bool(has_implementation) and value <= 0.0:
+        return STATUS_CONFIRMED_GAP
+    return STATUS_UNVERIFIED
+
+
+def build_capability_knowledge_statement(
+    title: Any,
+    support: Any,
+    status: str,
+    evidence: Optional[List[Dict[str, Any]]] = None,
+) -> str:
+    """Concise deterministic statement describing what INAURA knows.
+
+    Derived only from the capability title, its support/status, and the
+    depth of its existing evidence. Never claims inability; unverified
+    capabilities explicitly report insufficient evidence.
+    """
+    label = str(title or "").strip() or "this capability"
+    entries = evidence or []
+    has_impl_evidence = any(
+        isinstance(e, dict) and int(e.get("depth", 0) or 0) >= 3
+        for e in entries
+        if isinstance(e, dict)
+    )
+    if status == STATUS_DEMONSTRATED:
+        if has_impl_evidence:
+            return (
+                f"INAURA has strong implementation-level evidence "
+                f"that you have demonstrated {label}."
+            )
+        return f"INAURA has strong evidence that you have demonstrated {label}."
+    if status == STATUS_DEVELOPING:
+        return (
+            f"INAURA has some evidence related to {label}, but the available "
+            f"evidence does not fully demonstrate this capability."
+        )
+    if status == STATUS_CONFIRMED_GAP:
+        return (
+            f"INAURA has implementation-level evidence for this skill, but the "
+            f"available evidence does not demonstrate {label}."
+        )
+    return (
+        f"INAURA does not currently have sufficient evidence to verify {label}."
+    )
+
+
+def build_evidence_summary(skill_signals: Optional[List[dict]]) -> Dict[str, Any]:
+    """Compact evidence summary reusing existing provenance (path-only).
+
+    Counts only signals already available to the capability map:
+      evidence_count: total signals relevant to the skill
+      source_types: unique provider/source types (sorted)
+      implementation_evidence_count: signals with depth >= 3
+    """
+    signals = list(skill_signals or [])
+    providers: List[str] = []
+    impl_count = 0
+    for sig in signals:
+        if not isinstance(sig, dict):
+            continue
+        provider = _signal_source(sig) or "evidence"
+        if provider not in providers:
+            providers.append(provider)
+        if _signal_depth(sig) >= 3:
+            impl_count += 1
+    return {
+        "evidence_count": len(signals),
+        "source_types": sorted(providers),
+        "implementation_evidence_count": impl_count,
+    }
+
+
+def _empty_what_inaura_knows(summary: str) -> Dict[str, Any]:
+    """Consistent empty shape for skills without evaluable capabilities."""
+    return {
+        "summary": summary,
+        "demonstrated_areas": [],
+        "developing_areas": [],
+        "unverified_areas": [],
+        "evidence_summary": {
+            "evidence_count": 0,
+            "source_types": [],
+            "implementation_evidence_count": 0,
+        },
+    }
+
+
+def build_what_inaura_knows_summary(
+    canonical_skill: str,
+    demonstrated_areas: List[Dict[str, Any]],
+    developing_areas: List[Dict[str, Any]],
+    unverified_areas: List[Dict[str, Any]],
+    has_implementation: bool,
+) -> str:
+    """Deterministic skill-level summary from capability evaluation results.
+
+    Mentions only curated capability titles and evidence depth already
+    present. Never invents experience; reports limited evidence honestly.
+    """
+    skill = str(canonical_skill or "").strip() or "this skill"
+    if not demonstrated_areas and not developing_areas:
+        return f"INAURA has limited evidence about how {skill} is used in practice."
+
+    def _titles(areas: List[Dict[str, Any]]) -> str:
+        names = [
+            str(a.get("capability_title") or "").strip()
+            for a in areas
+            if str(a.get("capability_title") or "").strip()
+        ]
+        return ", ".join(names)
+
+    parts: List[str] = []
+    if demonstrated_areas:
+        titles = _titles(demonstrated_areas)
+        depth_phrase = (
+            "implementation-level evidence" if has_implementation else "evidence"
+        )
+        if titles:
+            parts.append(
+                f"INAURA has {depth_phrase} of {skill} usage, including {titles}."
+            )
+        else:
+            parts.append(
+                f"INAURA has {depth_phrase} of {skill} usage."
+            )
+    elif developing_areas:
+        titles = _titles(developing_areas)
+        if titles:
+            parts.append(
+                f"INAURA has partial evidence of {skill} usage related to {titles}."
+            )
+        else:
+            parts.append(f"INAURA has partial evidence of {skill} usage.")
+    if demonstrated_areas and developing_areas:
+        titles = _titles(developing_areas)
+        if titles:
+            parts.append(f"{titles} have weaker or partial evidence.")
+    if unverified_areas and (demonstrated_areas or developing_areas):
+        titles = _titles(unverified_areas)
+        if titles:
+            parts.append(f"{titles} have insufficient evidence.")
+    return " ".join(p for p in parts if p).strip()
+
+
+def build_what_inaura_knows(
+    canonical_skill: str,
+    capabilities_out: List[Dict[str, Any]],
+    skill_signals: Optional[List[dict]],
+) -> Dict[str, Any]:
+    """Interpretation layer: deterministic synthesis of existing evidence.
+
+    Flow preserved: capability blueprint -> "you should be able to do" ->
+    student evidence -> capability evaluation (support preserved) ->
+    "what INAURA knows" -> status/gaps/next action.
+
+    Each capability keeps its support score and evidence list; this adds
+    only status + statement. Evidence remains the underlying support layer.
+    """
+    signals = list(skill_signals or [])
+    has_impl = _has_implementation(signals)
+    demonstrated_areas: List[Dict[str, Any]] = []
+    developing_areas: List[Dict[str, Any]] = []
+    unverified_areas: List[Dict[str, Any]] = []
+    for cap in capabilities_out or []:
+        if not isinstance(cap, dict):
+            continue
+        try:
+            support = float(cap.get("support", 0.0) or 0.0)
+        except (TypeError, ValueError):
+            support = 0.0
+        evidence = cap.get("evidence") or []
+        if not isinstance(evidence, list):
+            evidence = []
+        # For REST APIs the capability's own status is already refined to
+        # capability-specific evidence (generic REST alone stays unverified);
+        # reuse it so WHAT INAURA KNOWS and STILL DEVELOP stay consistent.
+        raw_status = cap.get("status")
+        if isinstance(raw_status, str) and raw_status:
+            status = raw_status
+        else:
+            status = classify_capability_status(support, has_impl)
+        statement = build_capability_knowledge_statement(
+            cap.get("title"), support, status, evidence
+        )
+        area = {
+            "capability_id": str(cap.get("id") or ""),
+            "capability_title": str(cap.get("title") or ""),
+            "statement": statement,
+            "support": support,
+            "status": status,
+        }
+        if status == STATUS_DEMONSTRATED:
+            demonstrated_areas.append(area)
+        elif status == STATUS_DEVELOPING:
+            developing_areas.append(area)
+        else:
+            # Both unverified and confirmed_gap live here; status distinguishes
+            # absence of evidence (unverified) from a genuine gap already
+            # identified by the existing skill_gap logic (confirmed_gap).
+            unverified_areas.append(area)
+    summary = build_what_inaura_knows_summary(
+        canonical_skill, demonstrated_areas, developing_areas,
+        unverified_areas, has_impl,
+    )
+    return {
+        "summary": summary,
+        "demonstrated_areas": demonstrated_areas,
+        "developing_areas": developing_areas,
+        "unverified_areas": unverified_areas,
+        "evidence_summary": build_evidence_summary(signals),
+    }
+
+
+# ---------------------------------------------------------------------------
+# Phase 2: Capability-level evidence & explainability (deterministic).
+#
+# Presentation/explanation layer only. Every helper below reads the existing
+# capability blueprint rules and the existing grouped evidence through the
+# SAME _rule_matches() engine used by evaluate_capability(). Nothing here
+# feeds back into proficiency, confidence, readiness, gap, priority, RAG,
+# industry-requirement, or GitHub-inspection logic.
+#
+# Kept separate from "What INAURA knows" (a synthesis of understanding) and
+# from "Evidence" (provenance/artifacts): this layer answers WHY a status
+# was assigned, citing only rules that actually matched and rules from the
+# curated blueprint that did not.
+# ---------------------------------------------------------------------------
+
+EVIDENCE_STRENGTH_STRONG = "strong"
+EVIDENCE_STRENGTH_MODERATE = "moderate"
+EVIDENCE_STRENGTH_WEAK = "weak"
+EVIDENCE_STRENGTH_INSUFFICIENT = "insufficient"
+
+
+def classify_evidence_strength(support: Any) -> str:
+    """Evidence strength from the existing support score (display only).
+
+    support >= 0.75         -> strong
+    support >= 0.40         -> moderate
+    support > 0             -> weak
+    support == 0            -> insufficient
+    """
+    try:
+        value = float(support or 0.0)
+    except (TypeError, ValueError):
+        value = 0.0
+    if value >= DEMONSTRATED_SUPPORT:
+        return EVIDENCE_STRENGTH_STRONG
+    if value >= DEVELOPING_SUPPORT:
+        return EVIDENCE_STRENGTH_MODERATE
+    if value > 0:
+        return EVIDENCE_STRENGTH_WEAK
+    return EVIDENCE_STRENGTH_INSUFFICIENT
+
+
+def _status_reasons() -> Dict[str, str]:
+    # Built lazily: the STATUS_* constants are defined further below with
+    # the rest of the capability model vocabulary.
+    return {
+        STATUS_DEMONSTRATED: "Strong implementation evidence supports this capability.",
+        STATUS_DEVELOPING: (
+            "INAURA found partial implementation evidence, but not enough "
+            "evidence to establish the full capability."
+        ),
+        STATUS_UNVERIFIED: (
+            "INAURA does not have sufficient evidence to determine whether "
+            "this capability is demonstrated."
+        ),
+        STATUS_CONFIRMED_GAP: (
+            "Available assessment/evidence indicates this capability is "
+            "currently below the required level."
+        ),
+    }
+
+
+def build_status_reason(status: str) -> str:
+    """Fixed deterministic reason for a capability status (no LLM)."""
+    reasons = _status_reasons()
+    return reasons.get(str(status or ""), reasons[STATUS_UNVERIFIED])
+
+
+def _humanize_pattern(pattern_id: Any) -> str:
+    """Internal pattern ids ('fastapi_app') -> readable words ('fastapi app')."""
+    return str(pattern_id or "").strip().replace("_", " ")
+
+
+def _rule_subject_skill(rule: Dict[str, Any]) -> str:
+    """Canonical skill a rule inspects ('' when the rule has none)."""
+    skill = rule.get("skill") if isinstance(rule, dict) else None
+    if skill:
+        return _canon(skill)
+    return ""
+
+
+def _depth_word(min_depth: int) -> str:
+    if min_depth >= 3:
+        return "implementation"
+    if min_depth == 2:
+        return "configuration"
+    if min_depth == 1:
+        return "mention"
+    return "usage"
+
+
+def _depth_phrase(min_depth: int) -> str:
+    if min_depth >= 3:
+        return "implementation-level"
+    if min_depth == 2:
+        return "configuration-level"
+    if min_depth == 1:
+        return "mention-level"
+    return "recorded"
+
+
+def _rule_signal_label(rule: Dict[str, Any]) -> str:
+    """Short human label for one evidence rule (no weights, no internals)."""
+    kind = str((rule or {}).get("kind") or "")
+    if kind == "signal":
+        skill = _rule_subject_skill(rule) or "skill"
+        try:
+            depth = int(rule.get("min_depth", 0) or 0)
+        except (TypeError, ValueError):
+            depth = 0
+        return f"{skill} {_depth_word(depth)} evidence"
+    if kind == "patterns":
+        skill = _rule_subject_skill(rule) or "skill"
+        return f"{skill} code patterns"
+    if kind == "files":
+        skill = _rule_subject_skill(rule) or "skill"
+        return f"{skill} project files"
+    if kind == "related_present":
+        skills = [_canon(s) for s in ((rule or {}).get("skills") or [])]
+        skills = [s for s in skills if s]
+        return f"related {', '.join(skills)} activity" if skills else "related activity"
+    return "supporting evidence"
+
+
+def _rule_expectation_detail(rule: Dict[str, Any]) -> str:
+    """What one rule expects, in human words derived from the rule itself."""
+    kind = str((rule or {}).get("kind") or "")
+    if kind == "signal":
+        skill = _rule_subject_skill(rule) or "this skill"
+        try:
+            depth = int(rule.get("min_depth", 0) or 0)
+        except (TypeError, ValueError):
+            depth = 0
+        detail = f"{_depth_phrase(depth)} {skill} usage"
+        sources = sorted({str(s).strip().lower() for s in (rule.get("sources") or [])
+                          if str(s or "").strip()})
+        if sources:
+            detail += f" from {', '.join(sources)}"
+        usage_in = sorted({str(s).strip().lower() for s in (rule.get("usage_in") or [])
+                           if str(s or "").strip()})
+        if usage_in:
+            detail += f" with '{', '.join(usage_in)}' usage"
+        try:
+            min_files = int(rule.get("min_files", 0) or 0)
+        except (TypeError, ValueError):
+            min_files = 0
+        if min_files:
+            detail += f" across {min_files}+ files"
+        return detail
+    if kind == "patterns":
+        skill = _rule_subject_skill(rule) or "skill"
+        wanted = [_humanize_pattern(p) for p in (rule.get("any_of") or [])]
+        wanted = [w for w in wanted if w]
+        if wanted:
+            return f"{skill} code patterns ({', '.join(wanted)})"
+        return f"{skill} code patterns"
+    if kind == "files":
+        skill = _rule_subject_skill(rule) or "skill"
+        try:
+            min_count = int(rule.get("min_count", 1) or 1)
+        except (TypeError, ValueError):
+            min_count = 1
+        return f"project files showing {skill} use ({min_count}+ files)"
+    if kind == "related_present":
+        skills = [_canon(s) for s in ((rule or {}).get("skills") or [])]
+        skills = [s for s in skills if s]
+        if skills:
+            return f"related activity in {', '.join(skills)}"
+        return "related skill activity"
+    return "supporting evidence"
+
+
+def _rule_weight_entries(capability: Dict[str, Any]) -> List[Tuple[Dict[str, Any], float]]:
+    """(rule, weight) pairs exactly as evaluate_capability() counts them."""
+    out: List[Tuple[Dict[str, Any], float]] = []
+    for rule in ((capability or {}).get("evidence_rules") or []):
+        if not isinstance(rule, dict):
+            continue
+        try:
+            weight = float(rule.get("weight", 1.0) or 0.0)
+        except (TypeError, ValueError):
+            weight = 0.0
+        if weight <= 0:
+            continue
+        out.append((rule, weight))
+    return out
+
+
+def _is_rest_generic_rule(rule: Dict[str, Any], canonical_skill: Any) -> bool:
+    """Generic skill-level REST APIs evidence (signal/files on REST APIs).
+
+    For the REST APIs skill, a bare `signal` or `files` rule on REST APIs
+    proves the project uses REST APIs but does NOT prove a specific
+    capability such as validation, auth, or documentation. Those need a
+    capability-specific rule (patterns / related_present). This helper lets
+    the explanation layer separate skill-level context from capability-specific
+    evidence without inventing any new rules.
+    """
+    try:
+        canon = _canon(canonical_skill) if canonical_skill else ""
+    except Exception:
+        canon = ""
+    if canon != "REST APIs":
+        return False
+    kind = str((rule or {}).get("kind") or "")
+    if kind not in ("signal", "files"):
+        return False
+    skill = _rule_subject_skill(rule)
+    return skill == "REST APIs"
+
+
+def _split_capability_rules(
+    capability: Dict[str, Any], canonical_skill: Any
+) -> Tuple[List[Tuple[Dict[str, Any], float]], List[Tuple[Dict[str, Any], float]]]:
+    """Split blueprint rules into (specific, generic) for the explanation layer.
+
+    Generic = REST APIs skill-level signal/files on REST APIs (context only).
+    Specific = everything else that actually proves the capability.
+    For non-REST skills the split is trivial (all specific) so existing
+    Python/JS/etc. behaviour is unchanged. No rule is invented or removed;
+    support scoring is untouched — this is presentation only.
+    """
+    weighted = _rule_weight_entries(capability)
+    # Only the REST APIs skill has a meaningful generic/specific distinction.
+    try:
+        canon = _canon(canonical_skill) if canonical_skill else ""
+    except Exception:
+        canon = ""
+    if canon != "REST APIs":
+        return weighted, []
+    specific: List[Tuple[Dict[str, Any], float]] = []
+    generic: List[Tuple[Dict[str, Any], float]] = []
+    for rule, weight in weighted:
+        if _is_rest_generic_rule(rule, canonical_skill):
+            generic.append((rule, weight))
+        else:
+            specific.append((rule, weight))
+    return specific, generic
+
+
+def _specific_support(
+    capability: Dict[str, Any],
+    grouped: Dict[str, List[dict]],
+    canonical_skill: Any,
+) -> Tuple[float, float, float]:
+    """Specific support for the explanation layer (deterministic).
+
+    Returns (specific_support, matched_specific_weight, total_specific_weight).
+    When a REST capability has no specific rules (e.g. Validate, Document),
+    total_specific_weight == 0 and specific_support == 0 — the explanation
+    will explicitly say no capability-specific evidence was found.
+    """
+    specific, _generic = _split_capability_rules(capability, canonical_skill)
+    total = sum(w for _, w in specific)
+    if total <= 0:
+        return 0.0, 0.0, 0.0
+    matched_weight = 0.0
+    for rule, weight in specific:
+        if _matched_rule_entries(rule, grouped):
+            matched_weight += weight
+    return round(matched_weight / total, 3) if total > 0 else 0.0, matched_weight, total
+
+
+def _has_generic_rest_evidence(
+    capability: Dict[str, Any],
+    grouped: Dict[str, List[dict]],
+    canonical_skill: Any,
+) -> bool:
+    _, generic = _split_capability_rules(capability, canonical_skill)
+    for rule, _ in generic:
+        if _matched_rule_entries(rule, grouped):
+            return True
+    return False
+
+
+def _matched_rule_entries(rule: Dict[str, Any],
+                           grouped: Dict[str, List[dict]]) -> List[Dict[str, Any]]:
+    """Provenance entries for one rule, or [] when it does not match."""
+    try:
+        matched, entries = _rule_matches(rule, grouped or {})
+    except Exception:
+        return []
+    return list(entries) if matched else []
+
+
+def _dominant_provider(entries: List[Dict[str, Any]]) -> str:
+    """Most common provider across entries (ties -> first sorted)."""
+    counts: Dict[str, int] = {}
+    for entry in entries:
+        provider = str((entry or {}).get("provider") or "evidence")
+        counts[provider] = counts.get(provider, 0) + 1
+    if not counts:
+        return "evidence"
+    best = max(counts.values())
+    return sorted(p for p, n in counts.items() if n == best)[0]
+
+
+def _union_files(entries: List[Dict[str, Any]], limit: int = 3) -> List[str]:
+    """Ordered, deduped file paths across entries (capped, path-only)."""
+    files: List[str] = []
+    for entry in entries:
+        for path in ((entry or {}).get("files") or []):
+            text = str(path or "").strip()
+            if text and text not in files:
+                files.append(text)
+            if len(files) >= limit:
+                return files
+    return files
+
+
+def _build_matched_entries_for_rules(
+    rules: List[Tuple[Dict[str, Any], float]],
+    grouped: Dict[str, List[dict]],
+    total: float,
+) -> List[Dict[str, Any]]:
+    """Build matched signal entries for a specific rule subset."""
+    matched: List[Dict[str, Any]] = []
+    for rule, weight in rules:
+        entries = _matched_rule_entries(rule, grouped)
+        if not entries:
+            continue
+        kind = str(rule.get("kind") or "")
+        provider = _dominant_provider(entries)
+        files = _union_files(entries)
+        if kind == "patterns":
+            found: List[str] = []
+            for entry in entries:
+                for pattern in ((entry or {}).get("patterns") or []):
+                    label = _humanize_pattern(pattern)
+                    if label and label not in found:
+                        found.append(label)
+            skill = _rule_subject_skill(rule) or "skill"
+            if found:
+                statement = (f"INAURA found {skill} code patterns "
+                             f"({', '.join(found)}) in {provider} evidence.")
+            else:
+                statement = (f"INAURA found {_rule_expectation_detail(rule)} "
+                             f"in {provider} evidence.")
+        elif kind == "files":
+            skill = _rule_subject_skill(rule) or "skill"
+            count = len({path for entry in entries
+                         for path in ((entry or {}).get("files") or []) if str(path or "").strip()})
+            statement = (f"INAURA found project files showing {skill} use "
+                         f"({count} file{'s' if count != 1 else ''}) "
+                         f"in {provider} evidence.")
+        elif kind == "related_present":
+            skills = [_canon(s) for s in (rule.get("skills") or [])]
+            hit = [s for s in skills if s and (grouped or {}).get(s)]
+            names = hit or [s for s in skills if s]
+            statement = (f"INAURA found related {', '.join(names)} activity "
+                         f"in {provider} evidence.") if names else (
+                f"INAURA found {_rule_expectation_detail(rule)} in {provider} evidence.")
+        else:
+            statement = (f"INAURA found {_rule_expectation_detail(rule)} "
+                         f"in {provider} evidence.")
+        matched.append({
+            "signal": _rule_signal_label(rule),
+            "statement": statement,
+            "source_type": provider,
+            "support": round(weight / total, 3) if total > 0 else 0.0,
+            "files": files,
+        })
+    return matched
+
+
+def build_matched_signals(capability: Dict[str, Any],
+                           grouped: Dict[str, List[dict]],
+                           canonical_skill: Any = None) -> List[Dict[str, Any]]:
+    """Signals that actually matched, one entry per satisfied blueprint rule.
+
+    Each entry cites only real provenance (dominant source type + up to 3
+    file paths already present in the capability evidence). Support is the
+    rule's existing weight share (weight / total rule weight), i.e. the same
+    arithmetic evaluate_capability() uses — presentation only.
+
+    Refinement: for the REST APIs skill, generic skill-level REST presence
+    (signal/files on REST APIs) is treated as contextual, not capability-
+    specific. matched_signals returns only capability-specific matches; the
+    generic context is available via _has_generic_rest_evidence() and the
+    summary wording. Pass canonical_skill for that split; when omitted the
+    legacy behaviour (all rules) is preserved for backwards compat.
+    """
+    if canonical_skill is None or _canon(canonical_skill) != "REST APIs":
+        weighted = _rule_weight_entries(capability)
+        total = sum(weight for _, weight in weighted)
+        return _build_matched_entries_for_rules(weighted, grouped, total)
+    specific, _generic = _split_capability_rules(capability, canonical_skill)
+    if not specific:
+        return []
+    total = sum(weight for _, weight in specific)
+    return _build_matched_entries_for_rules(specific, grouped, total)
+
+
+def build_missing_signals(capability: Dict[str, Any],
+                           grouped: Dict[str, List[dict]],
+                           canonical_skill: Any = None) -> List[Dict[str, Any]]:
+    """Blueprint rules with insufficient evidence (expectations, not verdicts).
+
+    'Missing' means INAURA did not find sufficient evidence — never that the
+    candidate cannot do it. For the REST APIs skill, only capability-specific
+    rules are reported as missing; generic REST presence is contextual.
+    """
+    if canonical_skill is None or _canon(canonical_skill) != "REST APIs":
+        missing: List[Dict[str, Any]] = []
+        for rule, _weight in _rule_weight_entries(capability):
+            if _matched_rule_entries(rule, grouped):
+                continue
+            missing.append({
+                "signal": _rule_signal_label(rule),
+                "statement": ("INAURA did not find sufficient evidence for "
+                              f"{_rule_expectation_detail(rule)}."),
+            })
+        return missing
+    specific, _generic = _split_capability_rules(capability, canonical_skill)
+    if not specific:
+        return []
+    missing: List[Dict[str, Any]] = []
+    for rule, _weight in specific:
+        if _matched_rule_entries(rule, grouped):
+            continue
+        missing.append({
+            "signal": _rule_signal_label(rule),
+            "statement": ("INAURA did not find sufficient evidence for "
+                          f"{_rule_expectation_detail(rule)}."),
+        })
+    return missing
+
+
+def _join_and(items: List[str]) -> str:
+    items = [str(i or "").strip() for i in (items or [])]
+    items = [i for i in items if i]
+    if not items:
+        return ""
+    if len(items) == 1:
+        return items[0]
+    if len(items) == 2:
+        return f"{items[0]} and {items[1]}"
+    return f"{', '.join(items[:-1])}, and {items[-1]}"
+
+
+def build_capability_explanation_summary(
+    title: Any,
+    status: str,
+    support: Any,
+    matched_labels: List[str],
+    missing_labels: List[str],
+    canonical_skill: Any = None,
+    has_generic_context: bool = False,
+) -> str:
+    """Deterministic why-summary assembled only from rule outcomes.
+
+    Refinement: when a REST APIs capability has no capability-specific
+    evidence, the summary explicitly says so and mentions the generic REST
+    context rather than presenting generic presence as capability proof.
+    """
+    label = str(title or "").strip() or "this capability"
+    # REST generic-but-no-specific case: explicit capability-specific gap.
+    try:
+        canon = _canon(canonical_skill) if canonical_skill else ""
+    except Exception:
+        canon = ""
+    if canon == "REST APIs" and has_generic_context and not matched_labels:
+        # Generic REST APIs evidence exists, but nothing capability-specific.
+        # Keep the distinction: generic skill evidence ≠ capability evidence.
+        return (
+            f"INAURA found REST API implementation in the project, but no "
+            f"capability-specific evidence for {label.lower()} was detected."
+        )
+    try:
+        value = float(support or 0.0)
+    except (TypeError, ValueError):
+        value = 0.0
+    if status == STATUS_DEMONSTRATED:
+        if matched_labels:
+            return (f"INAURA found {_join_and(list(matched_labels))} "
+                    f"supporting {label}.")
+        return f"INAURA found strong evidence supporting {label}."
+    if status == STATUS_DEVELOPING:
+        if matched_labels and missing_labels:
+            return (f"INAURA found partial evidence for {label} "
+                    f"({_join_and(list(matched_labels))}), but did not find "
+                    f"sufficient evidence for {_join_and(list(missing_labels))}.")
+        if matched_labels:
+            return (f"INAURA found partial evidence for {label} "
+                    f"({_join_and(list(matched_labels))}), but the evidence does "
+                    f"not fully establish the capability.")
+        return (f"INAURA found partial evidence for {label}, but the evidence "
+                f"does not fully establish the capability.")
+    if status == STATUS_CONFIRMED_GAP:
+        return ("INAURA found implementation evidence for this skill but did "
+                f"not find sufficient evidence for {label}.")
+    if value > 0 and matched_labels:
+        if missing_labels:
+            return (f"INAURA found only weak evidence related to {label}. "
+                    f"INAURA did not find sufficient evidence for "
+                    f"{_join_and(list(missing_labels))}.")
+        return (f"INAURA found only weak evidence related to {label}, which is "
+                f"not enough to verify the capability.")
+    return f"INAURA did not find sufficient evidence for {label}."
+
+
+def build_capability_explanation(
+    capability: Dict[str, Any],
+    grouped: Dict[str, List[dict]],
+    support: Any,
+    status: str,
+    canonical_skill: Any = None,
+) -> Dict[str, Any]:
+    """Explain WHY a capability got its status (deterministic, read-only).
+
+    Inputs are the curated blueprint capability, the existing grouped
+    evidence, and the already-computed support/status. Output adds no new
+    scoring: strength mirrors support thresholds, matched/missing signals
+    mirror per-rule _rule_matches() outcomes.
+
+    Refinement: for the REST APIs skill, generic REST presence is kept as
+    contextual and does not count as capability-specific support; the summary
+    and strength use the capability-specific support instead. Pass
+    canonical_skill for that split; when omitted the legacy behaviour is
+    preserved for backwards compat.
+    """
+    capability = capability if isinstance(capability, dict) else {}
+    grouped = grouped if isinstance(grouped, dict) else {}
+    # Capability-specific strength/status for REST APIs; otherwise overall.
+    try:
+        canon = _canon(canonical_skill) if canonical_skill else ""
+    except Exception:
+        canon = ""
+    if canon == "REST APIs":
+        specific_support, _matched_w, _total_w = _specific_support(
+            capability, grouped, canonical_skill
+        )
+        has_generic = _has_generic_rest_evidence(capability, grouped, canonical_skill)
+        # Strength mirrors capability-specific support for REST; this is
+        # presentation only — the capability's top-level `support` field keeps
+        # the original overall support from evaluate_capability().
+        strength_value = specific_support
+        # Refine status for explanation (generic alone stays unverified).
+        specific, _generic = _split_capability_rules(capability, canonical_skill)
+        if not specific:
+            # No capability-specific rules exist — generic alone never proves
+            # validation / documentation etc. Report unverified even though
+            # overall support may be 1.0.
+            refined_status = STATUS_UNVERIFIED
+        elif specific_support == 0:
+            refined_status = STATUS_UNVERIFIED
+        else:
+            refined_status = build_status_reason(status)  # placeholder to keep import order
+            refined_status = status  # will be overwritten below with specific-based
+            try:
+                v = float(specific_support or 0.0)
+            except (TypeError, ValueError):
+                v = 0.0
+            if v >= DEMONSTRATED_SUPPORT:
+                refined_status = STATUS_DEMONSTRATED
+            elif v >= DEVELOPING_SUPPORT:
+                refined_status = STATUS_DEVELOPING
+            else:
+                refined_status = STATUS_UNVERIFIED
+        matched = build_matched_signals(capability, grouped, canonical_skill)
+        missing = build_missing_signals(capability, grouped, canonical_skill)
+        return {
+            "summary": build_capability_explanation_summary(
+                capability.get("title"), str(refined_status or ""),
+                specific_support,
+                [m.get("signal", "") for m in matched],
+                [m.get("signal", "") for m in missing],
+                canonical_skill,
+                has_generic,
+            ),
+            "status_reason": build_status_reason(refined_status),
+            "evidence_strength": classify_evidence_strength(specific_support),
+            "matched_signals": matched,
+            "missing_signals": missing,
+        }
+    try:
+        value = float(support or 0.0)
+    except (TypeError, ValueError):
+        value = 0.0
+    matched = build_matched_signals(capability, grouped, canonical_skill)
+    missing = build_missing_signals(capability, grouped, canonical_skill)
+    return {
+        "summary": build_capability_explanation_summary(
+            capability.get("title"), str(status or ""),
+            value,
+            [m.get("signal", "") for m in matched],
+            [m.get("signal", "") for m in missing],
+            canonical_skill,
+            False,
+        ),
+        "status_reason": build_status_reason(status),
+        "evidence_strength": classify_evidence_strength(value),
+        "matched_signals": matched,
+        "missing_signals": missing,
+    }
+
+
 def get_capability_blueprint(skill: Any) -> List[Dict[str, Any]]:
     """Curated capability definitions for a canonical skill (slug or name)."""
     text = str(skill or "").strip()
@@ -428,12 +1262,20 @@ def build_skill_capability(
         "evidence_sources": [],
         "requirement": {},
         "explanation": "",
+        "what_inaura_knows": _empty_what_inaura_knows(
+            f"INAURA has limited evidence about how {canonical or skill} "
+            "is used in practice."
+        ),
     }
 
     if not requirement:
         base["explanation"] = (
             f"No industry requirement for {canonical or skill} under role '{role}': "
             "INAURA cannot define expected capabilities without industry evidence."
+        )
+        base["what_inaura_knows"] = _empty_what_inaura_knows(
+            f"INAURA has limited evidence about how {canonical or skill} "
+            "is used in practice."
         )
         return base
     blueprint = get_capability_blueprint(slug) or get_capability_blueprint(canonical)
@@ -442,6 +1284,9 @@ def build_skill_capability(
         base["explanation"] = (
             f"INAURA has no capability definition for {canonical}: industry "
             "expectations are not invented to fill the UI."
+        )
+        base["what_inaura_knows"] = _empty_what_inaura_knows(
+            f"INAURA has limited evidence about how {canonical} is used in practice."
         )
         return base
 
@@ -499,6 +1344,47 @@ def build_skill_capability(
     for cap in blueprint:
         evaluated = evaluate_capability(cap, grouped)
         support = evaluated["support"]
+        # Interpretation layer (adds status + statement only; support and
+        # evidence preserved verbatim from evaluate_capability).
+        # Refinement for REST APIs: generic skill-level REST presence is
+        # contextual, not capability-specific. A capability with no
+        # capability-specific evidence remains unverified even if generic
+        # REST support is moderate. This is explanation/presentation only —
+        # `support` and `demonstrated` keep the original overall scoring.
+        is_rest = _canon(canonical) == "REST APIs"
+        if is_rest:
+            specific_support, _matched_w, _total_w = _specific_support(
+                cap, grouped, canonical
+            )
+            specific_rules, _generic_rules = _split_capability_rules(cap, canonical)
+            has_generic = _has_generic_rest_evidence(cap, grouped, canonical)
+            if not specific_rules:
+                # No capability-specific rule exists for this capability
+                # (e.g. Validate, Document). Generic REST alone never proves it.
+                knowledge_status = STATUS_UNVERIFIED
+            elif specific_support == 0:
+                knowledge_status = STATUS_UNVERIFIED
+            elif specific_support >= DEMONSTRATED_SUPPORT:
+                knowledge_status = STATUS_DEMONSTRATED
+            elif specific_support >= DEVELOPING_SUPPORT:
+                knowledge_status = STATUS_DEVELOPING
+            else:
+                knowledge_status = STATUS_UNVERIFIED
+            # Keep specific values for the demonstrated check below.
+            _rest_specific_support = specific_support
+            _rest_specific_rules = specific_rules
+        else:
+            knowledge_status = classify_capability_status(support, has_impl)
+            _rest_specific_support = None  # type: ignore
+            _rest_specific_rules = []  # type: ignore
+        knowledge_statement = build_capability_knowledge_statement(
+            cap.get("title"), support, knowledge_status, evaluated["evidence"]
+        )
+        # Phase 2: explain WHY this status was assigned (read-only layer over
+        # the same blueprint rules and grouped evidence; scoring untouched).
+        explanation = build_capability_explanation(
+            cap, grouped, support, knowledge_status, canonical
+        )
         entry = {
             "id": cap.get("id"),
             "title": cap.get("title"),
@@ -507,9 +1393,27 @@ def build_skill_capability(
             "related_skills": list(cap.get("related_skills") or []),
             "support": support,
             "evidence": evaluated["evidence"],
+            "status": knowledge_status,
+            "knowledge_statement": knowledge_statement,
+            "capability_explanation": explanation,
         }
         capabilities_out.append(entry)
-        if evaluated["demonstrated"]:
+        # For REST APIs, demonstrated requires capability-specific support;
+        # generic REST presence alone never demonstrates validation / docs etc.
+        if is_rest:
+            if _rest_specific_rules and _rest_specific_support >= DEMONSTRATED_SUPPORT:
+                strengths = [float(s.get("signal_strength", s.get("signal_value", 0.0)) or 0.0)
+                             for s in _signals_for_evidence(grouped, cap, evaluated["evidence"])]
+                cap_conf = round(max(strengths) if strengths else support, 3)
+                demonstrated_out.append({
+                    "id": cap.get("id"),
+                    "title": cap.get("title"),
+                    "support": support,
+                    "confidence": cap_conf,
+                    "evidence": evaluated["evidence"],
+                })
+                continue
+        elif evaluated["demonstrated"]:
             strengths = [float(s.get("signal_strength", s.get("signal_value", 0.0)) or 0.0)
                          for s in _signals_for_evidence(grouped, cap, evaluated["evidence"])]
             cap_conf = round(max(strengths) if strengths else support, 3)
@@ -521,8 +1425,22 @@ def build_skill_capability(
                 "evidence": evaluated["evidence"],
             })
             continue
+        # Status-consistency fix: STILL DEVELOP derives from the same
+        # deterministic knowledge status (single source of truth).
+        # - developing: support >= DEVELOPING_SUPPORT with partial evidence
+        # - unverified (support < threshold): reported as evidence_gap
+        #   ("Evidence gap" / "Needs verification"), never "Developing"
+        # - confirmed_gap: genuine gap already identified by existing logic
+        #   (has_impl + support == 0), never from absence alone.
+        if knowledge_status == STATUS_DEVELOPING:
+            missing_status = STATUS_DEVELOPING
+        elif knowledge_status == STATUS_CONFIRMED_GAP:
+            missing_status = STATUS_CONFIRMED_GAP
+        else:
+            missing_status = STATUS_EVIDENCE_GAP
+        # Priority calculation unchanged: same engine, same inputs, same
+        # gap_kind mapping (skill_gap if has_impl else evidence_gap).
         gap_kind = STATUS_SKILL_GAP if has_impl else STATUS_EVIDENCE_GAP
-        status = STATUS_DEVELOPING if support > 0 else gap_kind
         priority, category, _breakdown = engine.calculate_prioritized_gap(
             gap_val=round(1.0 - support, 3),
             importance=importance,
@@ -537,19 +1455,22 @@ def build_skill_capability(
             "id": cap.get("id"),
             "title": cap.get("title"),
             "support": support,
-            "status": status,
+            "status": missing_status,
             "priority": priority,
             "priority_category": category,
             "next_actions": actions,
             "resources": resources,
             "evidence": evaluated["evidence"],
         })
-        if status == STATUS_SKILL_GAP:
+        if missing_status == STATUS_CONFIRMED_GAP:
+            # Backwards compat: confirmed gaps still populate the legacy
+            # skill_gap title list (same membership as before: support == 0
+            # with skill-level implementation evidence).
             skill_gap_titles.append(str(cap.get("title")))
-        elif status == STATUS_EVIDENCE_GAP:
+        elif missing_status == STATUS_EVIDENCE_GAP:
             evidence_gap_titles.append(str(cap.get("title")))
-        # developing capabilities are partial, not gaps: listed in
-        # missing_capabilities with support > 0, in neither gap list.
+        # developing capabilities are partial (support >= DEVELOPING_SUPPORT),
+        # not gaps: listed in missing_capabilities, in neither gap list.
         if priority > best_priority:
             best_priority = priority
             best_category = category
@@ -589,6 +1510,8 @@ def build_skill_capability(
             "this indicates absence of submitted evidence, not confirmed inability."
         )
 
+    what_knows = build_what_inaura_knows(canonical, capabilities_out, skill_signals)
+
     base.update({
         "industry_expectations": expectations,
         "capabilities": capabilities_out,
@@ -601,6 +1524,7 @@ def build_skill_capability(
         "priority": best_priority,
         "priority_category": best_category,
         "explanation": explanation,
+        "what_inaura_knows": what_knows,
     })
     return base
 
@@ -754,15 +1678,21 @@ def build_capability_map_for_user(
     }
 
 
-CAPABILITY_MODEL_VERSION = "capability-v1"
+CAPABILITY_MODEL_VERSION = "capability-v2"
 
 # Support thresholds (documented, deterministic).
 DEMONSTRATED_SUPPORT = 0.75  # >= this fraction of rule weight -> demonstrated
-# Support in (0, 0.75) -> developing; support == 0 -> missing (gap kind below).
+DEVELOPING_SUPPORT = 0.40  # >= this and < demonstrated -> developing
+# Support in (0, 0.75) -> developing (legacy gap ladder); support == 0 ->
+# missing (gap kind below). The "What INAURA knows" interpretation layer
+# below uses DEMONSTRATED_SUPPORT / DEVELOPING_SUPPORT; the legacy
+# missing_capabilities ladder is intentionally untouched.
 
 # Skill statuses. Reuses engine gap vocabulary where it exists.
 STATUS_DEMONSTRATED = "demonstrated"
 STATUS_DEVELOPING = "developing"
+STATUS_UNVERIFIED = "unverified"
+STATUS_CONFIRMED_GAP = "confirmed_gap"
 STATUS_EVIDENCE_GAP = "evidence_gap"
 STATUS_SKILL_GAP = "skill_gap"
 STATUS_INDUSTRY_GAP = "industry_gap"

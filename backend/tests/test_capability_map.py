@@ -248,13 +248,19 @@ def test_priority_reuses_engine_formula():
     missing = {c["id"]: c for c in out["missing_capabilities"]}
     assert missing
     for cap in missing.values():
+        # Priority calculation unchanged: engine always receives the legacy
+        # gap_kind (skill_gap if has_impl else evidence_gap). New
+        # missing statuses (developing/evidence_gap/confirmed_gap) derive
+        # from the same knowledge status; confirmed_gap maps to skill_gap
+        # weighting, developing/confirmed_gap fall back to skill_gap here
+        # because this fixture has implementation evidence.
         expected, category, _ = engine.calculate_prioritized_gap(
             gap_val=round(1.0 - cap["support"], 3),
             importance=0.90, demand=0.80, student_confidence=0.5,
             interview_relevance=0.85, industry_confidence=0.90,
             gap_type=cap["status"] if cap["status"] in ("skill_gap", "evidence_gap") else "skill_gap",
         )
-        # statuses developing/evidence_gap/skill_gap all flow through the engine
+        # statuses developing/evidence_gap/confirmed_gap all flow through the engine
         assert cap["priority"] == pytest.approx(expected)
         assert cap["priority_category"] == category
 
@@ -286,7 +292,8 @@ def test_readme_mention_never_demonstrates_implementation():
 
 
 def test_status_ladder_and_developing_state():
-    # Partial support -> developing, never demonstrated.
+    # Partial support >= 0.40 -> developing, never demonstrated.
+    # Unverified (support < 0.40) must never be labelled developing.
     grouped = {
         "Python": [_sig("Python", depth=4, metadata={"relevant_files": ["a.py"]})],
     }
@@ -295,7 +302,7 @@ def test_status_ladder_and_developing_state():
     assert out["status"] == "developing"
     developing = [c for c in out["missing_capabilities"] if c["status"] == "developing"]
     assert developing
-    assert all(0 < c["support"] < 0.75 for c in developing)
+    assert all(0.40 <= c["support"] < 0.75 for c in developing)
 
 
 def test_map_builder_filters_and_summarizes(monkeypatch):

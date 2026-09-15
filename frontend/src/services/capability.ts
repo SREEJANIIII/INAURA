@@ -15,6 +15,27 @@ export type IndustryExpectation = {
   relevance: string[];
 };
 
+export type CapabilityMatchedSignal = {
+  signal: string;
+  statement: string;
+  source_type: string;
+  support: number;
+  files: string[];
+};
+
+export type CapabilityMissingSignal = {
+  signal: string;
+  statement: string;
+};
+
+export type CapabilityExplanation = {
+  summary: string;
+  status_reason: string;
+  evidence_strength: string;
+  matched_signals: CapabilityMatchedSignal[];
+  missing_signals: CapabilityMissingSignal[];
+};
+
 export type CapabilityItem = {
   id: string;
   title: string;
@@ -23,6 +44,29 @@ export type CapabilityItem = {
   related_skills: string[];
   support: number;
   evidence: CapabilityEvidence[];
+  status?: string;
+  knowledge_statement?: string;
+  capability_explanation?: CapabilityExplanation;
+};
+
+export type WhatInauraKnowsArea = {
+  capability_id: string;
+  capability_title: string;
+  statement: string;
+  support: number;
+  status: string;
+};
+
+export type WhatInauraKnows = {
+  summary: string;
+  demonstrated_areas: WhatInauraKnowsArea[];
+  developing_areas: WhatInauraKnowsArea[];
+  unverified_areas: WhatInauraKnowsArea[];
+  evidence_summary: {
+    evidence_count: number;
+    source_types: string[];
+    implementation_evidence_count: number;
+  };
 };
 
 export type DemonstratedCapability = {
@@ -89,6 +133,7 @@ export type SkillCapability = {
   evidence_sources: CapabilityEvidence[];
   requirement: RequirementProvenance;
   explanation: string;
+  what_inaura_knows?: WhatInauraKnows;
 };
 
 export type CapabilityMap = {

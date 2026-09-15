@@ -17,6 +17,27 @@ class IndustryExpectation(BaseModel):
     relevance: List[str] = Field(default_factory=list)
 
 
+class CapabilityMatchedSignal(BaseModel):
+    signal: str = ""
+    statement: str = ""
+    source_type: str = ""
+    support: float = 0.0
+    files: List[str] = Field(default_factory=list)
+
+
+class CapabilityMissingSignal(BaseModel):
+    signal: str = ""
+    statement: str = ""
+
+
+class CapabilityExplanation(BaseModel):
+    summary: str = ""
+    status_reason: str = ""
+    evidence_strength: str = ""
+    matched_signals: List[CapabilityMatchedSignal] = Field(default_factory=list)
+    missing_signals: List[CapabilityMissingSignal] = Field(default_factory=list)
+
+
 class CapabilityItem(BaseModel):
     id: str = ""
     title: str = ""
@@ -25,6 +46,37 @@ class CapabilityItem(BaseModel):
     related_skills: List[str] = Field(default_factory=list)
     support: float = 0.0
     evidence: List[CapabilityEvidence] = Field(default_factory=list)
+    # Interpretation layer (deterministic; support/evidence unchanged).
+    status: str = ""
+    knowledge_statement: str = ""
+    # Phase 2: why this status was assigned (read-only explanation).
+    capability_explanation: CapabilityExplanation = Field(
+        default_factory=CapabilityExplanation
+    )
+
+
+class WhatInauraKnowsArea(BaseModel):
+    capability_id: str = ""
+    capability_title: str = ""
+    statement: str = ""
+    support: float = 0.0
+    status: str = ""
+
+
+class WhatInauraKnowsEvidenceSummary(BaseModel):
+    evidence_count: int = 0
+    source_types: List[str] = Field(default_factory=list)
+    implementation_evidence_count: int = 0
+
+
+class WhatInauraKnows(BaseModel):
+    summary: str = ""
+    demonstrated_areas: List[WhatInauraKnowsArea] = Field(default_factory=list)
+    developing_areas: List[WhatInauraKnowsArea] = Field(default_factory=list)
+    unverified_areas: List[WhatInauraKnowsArea] = Field(default_factory=list)
+    evidence_summary: WhatInauraKnowsEvidenceSummary = Field(
+        default_factory=WhatInauraKnowsEvidenceSummary
+    )
 
 
 class DemonstratedCapability(BaseModel):
@@ -79,6 +131,7 @@ class SkillCapability(BaseModel):
     evidence_sources: List[CapabilityEvidence] = Field(default_factory=list)
     requirement: RequirementProvenance = Field(default_factory=RequirementProvenance)
     explanation: str = ""
+    what_inaura_knows: WhatInauraKnows = Field(default_factory=WhatInauraKnows)
 
 
 class CapabilityMapResponse(BaseModel):

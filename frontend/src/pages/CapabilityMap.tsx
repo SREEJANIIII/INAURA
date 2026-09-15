@@ -4,6 +4,7 @@ import Button from "../components/ui/Button";
 import { getLatestAnalysis } from "../services/analysis";
 import {
   getCapabilityMap,
+  type CapabilityExplanation,
   type MissingCapability,
   type SkillCapability,
 } from "../services/capability";
@@ -12,6 +13,8 @@ import "./CapabilityMap.css";
 const STATUS_LABELS: Record<string, string> = {
   demonstrated: "Demonstrated",
   developing: "Developing",
+  unverified: "Unverified",
+  confirmed_gap: "Confirmed gap",
   evidence_gap: "Evidence gap",
   skill_gap: "Skill gap",
   industry_gap: "Industry gap",
@@ -20,6 +23,65 @@ const STATUS_LABELS: Record<string, string> = {
 
 function statusLabel(status: string): string {
   return STATUS_LABELS[status] ?? status;
+}
+
+const STRENGTH_LABELS: Record<string, string> = {
+  strong: "Strong",
+  moderate: "Moderate",
+  weak: "Weak",
+  insufficient: "Insufficient",
+};
+
+function strengthLabel(strength: string): string {
+  return STRENGTH_LABELS[strength] ?? strength;
+}
+
+function WhyDetails({ explanation }: { explanation: CapabilityExplanation }) {
+  const matched = explanation.matched_signals ?? [];
+  const missing = explanation.missing_signals ?? [];
+  return (
+    <details className="capmap__explain">
+      <summary>Why INAURA thinks this</summary>
+      {explanation.status_reason && <p>{explanation.status_reason}</p>}
+      {explanation.evidence_strength && (
+        <p className="capmap__muted">
+          Evidence strength: <strong>{strengthLabel(explanation.evidence_strength)}</strong>
+        </p>
+      )}
+      {matched.length > 0 && (
+        <>
+          <p className="capmap__muted">
+            <strong>Observed</strong>
+          </p>
+          <ul>
+            {matched.map((sig, i) => (
+              <li key={`${sig.signal}-${i}`}>
+                • {sig.statement}
+                {sig.source_type && (
+                  <span className="capmap__muted"> — {sig.source_type}</span>
+                )}
+              </li>
+            ))}
+          </ul>
+        </>
+      )}
+      {missing.length > 0 && (
+        <>
+          <p className="capmap__muted">
+            <strong>Still needs evidence for</strong>
+          </p>
+          <ul>
+            {missing.map((sig, i) => (
+              <li key={`${sig.signal}-${i}`}>• {sig.statement}</li>
+            ))}
+          </ul>
+        </>
+      )}
+      {matched.length === 0 && (
+        <p className="capmap__muted">No supporting evidence was found yet.</p>
+      )}
+    </details>
+  );
 }
 
 function depthName(depth: number): string {
@@ -41,6 +103,11 @@ function SkillCard({
 }) {
   const pct = Math.round(entry.proficiency * 100);
   const topAction = entry.missing_capabilities[0]?.next_actions[0];
+  const explainById = Object.fromEntries(
+    (entry.capabilities ?? [])
+      .filter((c) => c.capability_explanation)
+      .map((c) => [c.id, c.capability_explanation as CapabilityExplanation]),
+  );
   return (
     <div className="capmap__card">
       <button
@@ -123,6 +190,59 @@ function SkillCard({
             </section>
           )}
 
+          {entry.what_inaura_knows && (
+            <section className="capmap__section">
+              <h4>What INAURA knows</h4>
+              {entry.what_inaura_knows.summary && (
+                <p className="capmap__explanation">
+                  {entry.what_inaura_knows.summary}
+                </p>
+              )}
+              {entry.what_inaura_knows.demonstrated_areas.length > 0 && (
+                <>
+                  <p className="capmap__muted">
+                    <strong>Demonstrated</strong>
+                  </p>
+                  <ul>
+                    {entry.what_inaura_knows.demonstrated_areas.map((area) => (
+                      <li key={area.capability_id}>
+                        ✓ {area.capability_title}
+                      </li>
+                    ))}
+                  </ul>
+                </>
+              )}
+              {entry.what_inaura_knows.developing_areas.length > 0 && (
+                <>
+                  <p className="capmap__muted">
+                    <strong>Developing</strong>
+                  </p>
+                  <ul>
+                    {entry.what_inaura_knows.developing_areas.map((area) => (
+                      <li key={area.capability_id}>
+                        ◐ {area.capability_title}
+                      </li>
+                    ))}
+                  </ul>
+                </>
+              )}
+              {entry.what_inaura_knows.unverified_areas.length > 0 && (
+                <>
+                  <p className="capmap__muted">
+                    <strong>Unverified</strong>
+                  </p>
+                  <ul>
+                    {entry.what_inaura_knows.unverified_areas.map((area) => (
+                      <li key={area.capability_id}>
+                        ? {area.capability_title}
+                      </li>
+                    ))}
+                  </ul>
+                </>
+              )}
+            </section>
+          )}
+
           {entry.demonstrated_capabilities.length > 0 && (
             <section className="capmap__section">
               <h4>What INAURA found</h4>
@@ -138,6 +258,9 @@ function SkillCard({
                         {ev.depth >= 3 ? ` (${depthName(ev.depth)})` : ""}
                       </span>
                     ))}
+                    {explainById[cap.id] && (
+                      <WhyDetails explanation={explainById[cap.id]} />
+                    )}
                   </li>
                 ))}
               </ul>
@@ -190,6 +313,9 @@ function SkillCard({
                       ({statusLabel(cap.status)} · priority{" "}
                       {Math.round(cap.priority)})
                     </span>
+                    {explainById[cap.id] && (
+                      <WhyDetails explanation={explainById[cap.id]} />
+                    )}
                   </li>
                 ))}
               </ul>
