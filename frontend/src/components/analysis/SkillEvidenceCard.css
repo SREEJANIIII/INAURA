@@ -246,3 +246,300 @@
   font-style: italic;
   margin: 0;
 }
+
+/* ---- GitHub evidence: student-friendly presentation layer ---- */
+
+.evcard__source--github {
+  border-color: #cbd5e1;
+}
+
+.evcard__github-summary {
+  font-size: 0.9rem;
+  font-weight: 600;
+  color: #0f172a;
+  margin: 8px 0 0;
+}
+
+.evcard__github-breakdown {
+  font-size: 0.8rem;
+  color: #475569;
+  margin: 2px 0 0;
+}
+
+.evcard__legend {
+  margin-top: 8px;
+  font-size: 0.78rem;
+  color: #475569;
+  background: #f8fafc;
+  border: 1px solid #e2e8f0;
+  border-radius: 8px;
+  padding: 6px 10px;
+}
+
+.evcard__legend summary {
+  cursor: pointer;
+  font-weight: 600;
+  color: #334155;
+}
+
+.evcard__legend summary:focus-visible {
+  outline: 2px solid #0f766e;
+  outline-offset: 2px;
+  border-radius: 4px;
+}
+
+.evcard__legend ul {
+  margin: 6px 0 2px;
+  padding-left: 18px;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.evcard__repogroups {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  margin-top: 10px;
+}
+
+.evcard__repogroup-title {
+  margin: 0 0 6px;
+  font-size: 0.8rem;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: #64748b;
+  font-weight: 700;
+}
+
+.evcard__repocards {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.evcard__repocard {
+  border: 1px solid #e2e8f0;
+  border-radius: 10px;
+  padding: 10px 12px;
+  background: #fff;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 0;
+}
+
+.evcard__repocard--strong {
+  border-left: 3px solid #059669;
+}
+
+.evcard__repocard--supporting {
+  border-left: 3px solid #d97706;
+}
+
+.evcard__repocard--limited,
+.evcard__repocard--unknown {
+  border-left: 3px solid #cbd5e1;
+}
+
+.evcard__repocard-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  min-width: 0;
+}
+
+.evcard__repocard-dot {
+  font-size: 0.8rem;
+  line-height: 1;
+}
+
+.evcard__repocard-name {
+  font-size: 0.95rem;
+  font-weight: 700;
+  color: #0f172a;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.evcard__repocard-name a {
+  color: #0f766e;
+  overflow-wrap: anywhere;
+}
+
+.evcard__badge--own {
+  background: #f1f5f9;
+  border-color: #e2e8f0;
+  color: #475569;
+  font-weight: 600;
+}
+
+.evcard__badge--fork {
+  background: #fef3c7;
+  border-color: #fde68a;
+  color: #92400e;
+}
+
+.evcard__repocard-strength {
+  font-size: 0.84rem;
+  color: #0f172a;
+}
+
+.evcard__repocard-usage {
+  font-size: 0.8rem;
+  color: #475569;
+}
+
+.evcard__repocard-files-line {
+  font-size: 0.8rem;
+  color: #334155;
+}
+
+.evcard__repocard-files {
+  font-size: 0.78rem;
+  color: #475569;
+  overflow-wrap: anywhere;
+}
+
+.evcard__details {
+  margin-top: 4px;
+  font-size: 0.82rem;
+}
+
+.evcard__details > summary {
+  cursor: pointer;
+  color: #0f766e;
+  font-weight: 600;
+  font-size: 0.8rem;
+  width: fit-content;
+}
+
+.evcard__details > summary:focus-visible {
+  outline: 2px solid #0f766e;
+  outline-offset: 2px;
+  border-radius: 4px;
+}
+
+.evcard__details-body {
+  margin-top: 8px;
+  border-top: 1px solid #f1f5f9;
+  padding-top: 8px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.evcard__details-body h5 {
+  margin: 6px 0 2px;
+  font-size: 0.78rem;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: #64748b;
+}
+
+.evcard__details-body h5:first-child {
+  margin-top: 0;
+}
+
+.evcard__facts {
+  margin: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.evcard__facts > div {
+  display: grid;
+  grid-template-columns: 150px 1fr;
+  gap: 8px;
+  font-size: 0.8rem;
+}
+
+.evcard__facts dt {
+  color: #64748b;
+  font-weight: 600;
+}
+
+.evcard__facts dd {
+  margin: 0;
+  color: #334155;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.evcard__facts--tech dt {
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-weight: 500;
+  font-size: 0.74rem;
+}
+
+.evcard__fact-path {
+  overflow-wrap: anywhere;
+  word-break: break-word;
+}
+
+.evcard__filelist {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.evcard__observed {
+  margin: 0;
+  padding-left: 4px;
+  list-style: none;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  font-size: 0.82rem;
+  color: #334155;
+}
+
+.evcard__why-counts {
+  margin: 0;
+  font-size: 0.82rem;
+  color: #334155;
+  line-height: 1.5;
+}
+
+.evcard__tech-head {
+  margin-top: 8px;
+}
+
+.evcard__repo-link {
+  color: #0f766e;
+  font-weight: 600;
+  font-size: 0.82rem;
+  width: fit-content;
+}
+
+.evcard__aggregate-note {
+  font-size: 0.75rem;
+  color: #64748b;
+  font-style: italic;
+  margin: 4px 0 0;
+}
+
+.evcard__details--source {
+  margin-top: 10px;
+  border-top: 1px solid #f1f5f9;
+  padding-top: 8px;
+}
+
+@media (max-width: 560px) {
+  .evcard__facts > div {
+    grid-template-columns: 1fr;
+    gap: 0;
+  }
+
+  .evcard__repocard-name {
+    font-size: 0.88rem;
+  }
+}

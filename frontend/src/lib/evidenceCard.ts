@@ -275,6 +275,213 @@ function assessmentBullets(source: EvidenceSource): string[] {
   return [`INAURA assessment completed (validated)`];
 }
 
+/* =====================================================================
+ * User-facing GitHub evidence presentation helpers (presentation layer only).
+ *
+ * These translate existing backend provenance into student-friendly
+ * language WITHOUT changing the evidence model, scoring, or meaning.
+ * Every helper derives strictly from backend fields (depth, usage_status,
+ * fork, files). Nothing is invented; unknown values degrade to neutral
+ * wording. Backend fields themselves are never renamed here.
+ * ===================================================================== */
+
+export type EvidenceCategory = "strong" | "supporting" | "limited" | "unknown";
+
+/**
+ * Group a repository by its OWN accepted depth (never the source aggregate).
+ * - depth 4/3 -> strong (found used in implementation)
+ * - depth 2   -> supporting (configured/referenced)
+ * - depth 1/0 -> limited (mentions/metadata)
+ */
+export function getEvidenceCategory(depth: unknown): EvidenceCategory {
+  if (typeof depth !== "number" || !Number.isFinite(depth)) return "unknown";
+  if (depth >= 3) return "strong";
+  if (depth === 2) return "supporting";
+  if (depth <= 1) return "limited";
+  return "unknown";
+}
+
+export function getEvidenceCategoryLabel(category: EvidenceCategory): string {
+  switch (category) {
+    case "strong":
+      return "Strong evidence";
+    case "supporting":
+      return "Supporting evidence";
+    case "limited":
+      return "Limited evidence";
+    default:
+      return "Evidence";
+  }
+}
+
+/** Short repo display name: "owner/Repo" -> "Repo". Falls back safely. */
+export function shortRepoName(fullName: unknown, fallback = "Repository"): string {
+  if (typeof fullName !== "string" || !fullName.trim()) return fallback;
+  const trimmed = fullName.trim();
+  const parts = trimmed.split("/");
+  const last = parts[parts.length - 1]?.trim();
+  return last || trimmed;
+}
+
+/**
+ * User-friendly evidence headline derived from the repo's own depth.
+ * Never claims implementation when depth is only config/mention.
+ */
+export function getEvidenceLabel(depth: unknown): string {
+  const category = getEvidenceCategory(depth);
+  switch (category) {
+    case "strong":
+      return "Used in your implementation";
+    case "supporting":
+      return "Configured in project";
+    case "limited":
+      return "Mentioned in project";
+    default:
+      return "Found in project";
+  }
+}
+
+/**
+ * User-friendly usage line. `usage` should already be coerced so it never
+ * outranks depth (see coerce helpers in the card component).
+ */
+export function getUsageDescription(
+  usageStatus: unknown,
+  depth: unknown,
+  fileCount: number,
+): string {
+  const raw = typeof usageStatus === "string" ? usageStatus.toLowerCase() : "";
+  const category: EvidenceCategory = getEvidenceCategory(depth);
+  if (category === "strong") {
+    if (raw === "substantial") return "Used across multiple files";
+    if (raw === "used" || raw === "imported") return "Used in implementation";
+    if (raw === "declared") return "Added as a project dependency";
+    if (raw === "mentioned") return "Referenced in project files";
+    return fileCount > 1 ? "Used across multiple files" : "Used in implementation";
+  }
+  if (category === "supporting") {
+    return "Added as a project dependency";
+  }
+  if (category === "limited") {
+    return "Referenced in project files";
+  }
+  if (raw === "substantial") return "Used across multiple files";
+  if (raw === "used" || raw === "imported") return "Used in implementation";
+  if (raw === "declared") return "Added as a project dependency";
+  if (raw === "mentioned") return "Referenced in project files";
+  return "Found in project";
+}
+
+/** "INAURA found this skill across N source files." — count-driven only. */
+export function getFilesSummaryLine(fileCount: number): string | null {
+  if (!Number.isFinite(fileCount) || fileCount <= 0) return null;
+  return fileCount === 1
+    ? "INAURA found this skill in 1 source file."
+    : `INAURA found this skill across ${fileCount} source files.`;
+}
+
+export function getOwnershipLabel(fork: unknown): string | null {
+  if (fork === true) return "Forked repository";
+  if (fork === false) return "Your repository";
+  return null;
+}
+
+/** Concise filename: "frontend/src/services/api.ts" -> "api.ts". */
+export function formatFileName(path: unknown): string {
+  if (typeof path !== "string" || !path) return "file";
+  const cleaned = path.replace(/\\/g, "/");
+  const parts = cleaned.split("/").filter(Boolean);
+  return parts.length > 0 ? (parts[parts.length - 1] as string) : path;
+}
+
+/**
+ * "Why this counts" — strictly gated on the repo's own depth so a Mention
+ * can never render as active implementation.
+ */
+export function getWhyCountsText(
+  depth: unknown,
+  isFork: boolean,
+  fileCount: number,
+): string {
+  const category = getEvidenceCategory(depth);
+  if (category === "strong") {
+    const multi =
+      fileCount > 1
+        ? " It was found across multiple implementation files."
+        : " It was found in your source code.";
+    return `This skill was found being used in your actual source code.${isFork ? "" : multi}` +
+      (isFork
+        ? " This is a forked repository, so INAURA treats its evidence more cautiously."
+        : "");
+  }
+  if (category === "supporting") {
+    return (
+      "This skill was found configured in the project, but configuration " +
+      "alone is not treated as proof of active implementation." +
+      (isFork
+        ? " This is a forked repository, so INAURA treats its evidence more cautiously."
+        : "")
+    );
+  }
+  if (category === "limited") {
+    return (
+      "This skill was mentioned in the project, but INAURA found limited implementation evidence." +
+      (isFork
+        ? " This is a forked repository, so INAURA treats its evidence more cautiously."
+        : "")
+    );
+  }
+  return (
+    "INAURA found a reference to this skill in this project." +
+    (isFork
+      ? " This is a forked repository, so INAURA treats its evidence more cautiously."
+      : "")
+  );
+}
+
+/**
+ * "What INAURA observed" checklist — only claims supported by the repo's
+ * own coerced usage_status. Never invents Imported/Used signals.
+ */
+export function getObservedChecks(
+  usageStatus: unknown,
+  depth: unknown,
+  fileCount: number,
+): string[] {
+  const raw = typeof usageStatus === "string" ? usageStatus.toLowerCase() : "";
+  const category = getEvidenceCategory(depth);
+  if (category === "strong" && (raw === "substantial" || raw === "used" || raw === "imported")) {
+    const checks = ["Imported in source code", "Used in source code"];
+    if (raw === "substantial" || fileCount > 1) checks.push("Found across multiple files");
+    return checks;
+  }
+  if (category === "strong") return ["Used in source code"];
+  if (category === "supporting") return ["Declared as a dependency", "Found in project configuration"];
+  if (category === "limited") return ["Mentioned in project"];
+  return ["Referenced in project"];
+}
+
+export interface RepoEvidenceSummary {
+  total: number;
+  strong: number;
+  supporting: number;
+  limited: number;
+}
+
+/** Count repos by their OWN depth for the "found in N repositories" summary. */
+export function summarizeRepoEvidence(depths: unknown[]): RepoEvidenceSummary {
+  let strong = 0;
+  let supporting = 0;
+  let limited = 0;
+  for (const d of depths) {
+    const c = getEvidenceCategory(d);
+    if (c === "strong") strong += 1;
+    else if (c === "supporting") supporting += 1;
+    else if (c === "limited") limited += 1;
+  }
+  return { total: depths.length, strong, supporting, limited };
+}
+
 /**
  * Concise "why" bullets derived strictly from present evidence fields.
  * Returns [] when there is nothing to describe (caller states the absence).
