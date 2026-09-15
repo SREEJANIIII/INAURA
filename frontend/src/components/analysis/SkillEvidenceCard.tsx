@@ -53,87 +53,163 @@ function sourceScoreLine(source: EvidenceSource): string | null {
   return `${Math.round(value <= 1 ? value * 100 : value)}%`;
 }
 
+const STATUS_DEPTH: Record<string, number> = {
+  mentioned: 1,
+  declared: 2,
+  imported: 3,
+  used: 3,
+  substantial: 4,
+};
+
+function statusDepth(status: unknown): number | null {
+  if (typeof status !== "string") return null;
+  const d = STATUS_DEPTH[status.toLowerCase()];
+  return typeof d === "number" ? d : null;
+}
+
+function coerceUsageForDepth(status: unknown, depth: unknown): string {
+  const raw = typeof status === "string" ? status.toLowerCase() : "";
+  const sDepth = statusDepth(raw);
+  const d = typeof depth === "number" ? depth : null;
+  if (sDepth === null || d === null) return raw;
+  if (sDepth <= d) return raw;
+  if (d <= 1) return "mentioned";
+  if (d === 2) return "declared";
+  if (d === 3) return "used";
+  return "substantial";
+}
+
 function GithubSourceBlock({ source }: { source: EvidenceSource }) {
   const repos = detailRepos(source);
   const files = detailFiles(source);
   const details = isRecord(source.details) ? source.details : {};
-  const depth = details["evidence_depth"];
-  const usage = usageStatusLabel(details["usage_status"]);
+  const sourceDepth = details["evidence_depth"];
+  const sourceUsageRaw = details["usage_status"];
+  // Coerce source-level usage to not outrank source depth (defensive)
+  const sourceUsageCoerced = coerceUsageForDepth(sourceUsageRaw, sourceDepth);
+  const sourceUsage = usageStatusLabel(sourceUsageCoerced);
+  const sourceDepthLabel = typeof sourceDepth === "number" ? depthName(sourceDepth) : null;
+
+  const repoCount = typeof details["repo_count"] === "number" ? (details["repo_count"] as number) : repos.length;
+  const ownedCount = typeof details["owned_count"] === "number" ? (details["owned_count"] as number) : null;
+  const forkCount = typeof details["fork_count"] === "number" ? (details["fork_count"] as number) : null;
+
   return (
     <div className="evcard__source">
       <div className="evcard__source-head">
-        <strong>{source.source_label || "GitHub"}</strong>
+        <strong>{source.source_label || `GitHub · ${repoCount} ${repoCount === 1 ? "repository" : "repositories"}`}</strong>
         <span className="evcard__source-type">{source.source_type}</span>
         {source.is_ai_assisted && (
           <span className="evcard__badge evcard__badge--ai">AI-assisted</span>
         )}
       </div>
+
+      {/* Overall evidence – source-level accepted signal */}
       <div className="evcard__source-meta">
-        <span>Strength: {Math.round(source.strength * 100)}%</span>
+        <span>Overall evidence: Strength {Math.round(source.strength * 100)}%</span>
         <span aria-hidden="true">·</span>
-        <span>Reliability: {Math.round(source.reliability * 100)}%</span>
-        {typeof depth === "number" && (
+        <span>Reliability {Math.round(source.reliability * 100)}%</span>
+        {sourceDepthLabel && (
           <>
             <span aria-hidden="true">·</span>
-            <span>Depth: {depthName(depth)}</span>
+            <span>{sourceDepthLabel} evidence</span>
           </>
         )}
       </div>
+      {(ownedCount !== null || forkCount !== null) && (
+        <div className="evcard__source-meta" style={{ fontSize: "0.85em", opacity: 0.8 }}>
+          {ownedCount !== null && <span>{ownedCount} owned</span>}
+          {forkCount !== null && forkCount > 0 && (
+            <>
+              {ownedCount !== null && <span aria-hidden="true"> · </span>}
+              <span>{forkCount} forked</span>
+            </>
+          )}
+        </div>
+      )}
       {source.explanation && (
         <div className="evcard__explanation">{source.explanation}</div>
       )}
+
+      {/* Repository details – per-repository accepted evidence, never flattened */}
       {repos.length > 0 ? (
-        <ul className="evcard__repos">
-          {repos.slice(0, 4).map((repo, idx) => {
-            const name =
-              typeof repo["full_name"] === "string"
-                ? repo["full_name"]
-                : typeof repo["name"] === "string"
-                  ? repo["name"]
-                  : "repository";
-            const url = typeof repo["url"] === "string" ? repo["url"] : null;
-            const repoFiles = Array.isArray(repo["files"])
-              ? repo["files"].filter(
-                  (f): f is string => typeof f === "string",
-                )
-              : [];
-            const shown = repoFiles.slice(0, 3);
-            const extra = repoFiles.length - shown.length;
-            return (
-              <li key={idx} className="evcard__repo">
-                <div className="evcard__repo-name">
-                  →{" "}
-                  {url ? (
-                    <a href={url} target="_blank" rel="noreferrer">
-                      {name}
-                    </a>
-                  ) : (
-                    <strong>{name}</strong>
-                  )}
-                </div>
-                {shown.length > 0 && (
-                  <div className="evcard__repo-files">
-                    {shown.join(", ")}
-                    {extra > 0 ? ` (+${extra} more)` : ""}
+        <>
+          <div className="evcard__repo-section-label" style={{ marginTop: "0.75rem", fontWeight: 600, fontSize: "0.9em" }}>
+            Repository details:
+          </div>
+          <ul className="evcard__repos">
+            {repos.slice(0, 6).map((repo, idx) => {
+              const name =
+                typeof repo["full_name"] === "string"
+                  ? repo["full_name"]
+                  : typeof repo["name"] === "string"
+                    ? repo["name"]
+                    : "repository";
+              const url = typeof repo["url"] === "string" ? repo["url"] : null;
+              const repoFiles = Array.isArray(repo["files"])
+                ? repo["files"].filter((f): f is string => typeof f === "string")
+                : [];
+              const shown = repoFiles.slice(0, 3);
+              const extra = repoFiles.length - shown.length;
+              const repoDepth = repo["depth"];
+              const repoDepthLabel = typeof repoDepth === "number" ? depthName(repoDepth) : null;
+              // Per-repo usage must not outrank its own depth
+              const repoUsageRaw = repo["usage_status"];
+              const repoUsageCoerced = coerceUsageForDepth(repoUsageRaw, repoDepth);
+              const repoUsageLabel = usageStatusLabel(repoUsageCoerced);
+              const isFork = repo["fork"] === true;
+              const isArchived = repo["archived"] === true;
+              return (
+                <li key={idx} className="evcard__repo">
+                  <div className="evcard__repo-name">
+                    →{" "}
+                    {url ? (
+                      <a href={url} target="_blank" rel="noreferrer">
+                        {name}
+                      </a>
+                    ) : (
+                      <strong>{name}</strong>
+                    )}
+                    {isFork && <span style={{ marginLeft: "0.4em", fontSize: "0.8em", opacity: 0.7 }}>(forked)</span>}
+                    {isArchived && <span style={{ marginLeft: "0.4em", fontSize: "0.8em", opacity: 0.7 }}>(archived)</span>}
                   </div>
-                )}
-                <div className="evcard__repo-meta">
-                  {typeof repo["depth"] === "number" && (
-                    <span>{depthName(repo["depth"])} evidence</span>
+                  {repoDepthLabel && (
+                    <div className="evcard__repo-meta">
+                      <span>
+                        {repoDepthLabel} evidence
+                        {typeof repoUsageCoerced === "string" && repoUsageCoerced ? ` · ${repoUsageCoerced}` : ""}
+                      </span>
+                    </div>
                   )}
-                  {typeof repo["usage_status"] === "string" &&
-                    repo["usage_status"] && (
-                      <span>· {repo["usage_status"]}</span>
-                    )}
-                  {typeof repo["classification"] === "string" &&
-                    repo["classification"] && (
-                      <span>· {repo["classification"]}</span>
-                    )}
-                </div>
-              </li>
-            );
-          })}
-        </ul>
+                  {shown.length > 0 && (
+                    <div className="evcard__repo-files">
+                      {shown.join(", ")}
+                      {extra > 0 ? ` (+${extra} more)` : ""}
+                    </div>
+                  )}
+                  {/* Show capped usage only when supported by repo depth */}
+                  {repoUsageLabel && typeof repoDepth === "number" && statusDepth(repoUsageCoerced) !== null && (statusDepth(repoUsageCoerced) as number) <= (repoDepth as number) && (
+                    <div className="evcard__repo-usage" style={{ fontSize: "0.85em", opacity: 0.85 }}>
+                      {repoUsageLabel}
+                    </div>
+                  )}
+                  {!repoDepthLabel && repoUsageLabel && (
+                    <div className="evcard__repo-usage" style={{ fontSize: "0.85em", opacity: 0.85 }}>
+                      {repoUsageLabel}
+                    </div>
+                  )}
+                </li>
+              );
+            })}
+          </ul>
+          {/* Fallback for source-level files when no per-repo files shown – only when source depth supports */}
+          {files.length > 0 && repos.every((r) => !Array.isArray(r["files"]) || (r["files"] as unknown[]).length === 0) && (
+            <div className="evcard__repo-files" style={{ marginTop: "0.5rem" }}>
+              → {files.slice(0, 3).join(", ")}
+              {files.length > 3 ? ` (+${files.length - 3} more)` : ""}
+            </div>
+          )}
+        </>
       ) : (
         files.length > 0 && (
           <div className="evcard__repo-files">
@@ -142,7 +218,12 @@ function GithubSourceBlock({ source }: { source: EvidenceSource }) {
           </div>
         )
       )}
-      {usage && <div className="evcard__usage">Observed usage: {usage}</div>}
+
+      {/* Source-level observed usage – only when supported by final accepted depth */}
+      {sourceUsage && typeof sourceDepth === "number" && statusDepth(sourceUsageCoerced) !== null && (statusDepth(sourceUsageCoerced) as number) <= (sourceDepth as number) && (
+        <div className="evcard__usage">Observed usage: {sourceUsage}</div>
+      )}
+      {/* If source-level usage was coerced away due to contradiction, do not render a stronger claim */}
     </div>
   );
 }

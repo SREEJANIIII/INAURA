@@ -4,7 +4,7 @@ from datetime import datetime, timezone
 
 from ..core.supabase import get_supabase_client
 from .skill_taxonomy import normalize_skill, normalize_skill_slug, extract_known_skills_from_text
-from .evidence.base import EvidenceDepth, VerificationStatus
+from .evidence.base import EVIDENCE_PIPELINE_VERSION, EvidenceDepth, VerificationStatus
 from .evidence.github import GitHubProvider, parse_github_url
 from .evidence.manager import evidence_manager, get_evidence_dedup_key
 
@@ -198,6 +198,18 @@ def extract_signals(
                     inspected_github_repos.add(f"{owner.lower()}/{repo.lower()}")
 
             if v_status in (VerificationStatus.VERIFIED, VerificationStatus.PARTIALLY_VERIFIED) and isinstance(verified_signals, list):
+                # Do not trust stale cached signals from an older pipeline version.
+                # Missing version is treated as legacy – still emitted for backward
+                # compatibility (tests) but will be refreshed by the analysis
+                # orchestrator on a real run. Only an explicit old version is skipped
+                # here to avoid serving contradictory provenance that predates the
+                # current coherence contract.
+                stored_version = meta.get("evidence_pipeline_version")
+                if stored_version is not None and stored_version != EVIDENCE_PIPELINE_VERSION:
+                    # Stale – treat as needing re-verification, do not emit old signals
+                    # The orchestrator (analysis_run_service) will force a fresh inspection
+                    # before scoring; here we simply avoid emitting contradictory stale data
+                    continue
                 for sig in verified_signals:
                     signals.append(
                         _make_signal(

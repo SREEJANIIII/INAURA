@@ -919,6 +919,122 @@ def adjust_github_signals_for_repo_settings(signals: List[dict], repo_settings: 
         if ai_count:
             new_meta["ai_assisted_repo_count"] = ai_count
             new_meta["is_ai_assisted"] = True
+
+        # If the strongest repository was excluded, recompute source-level
+        # accepted evidence from the remaining repositories so depth,
+        # usage_status, relevant_files, etc. stay coherent (never show
+        # substantial multi-file usage alongside Mention depth).
+        if len(remaining) != total:
+            try:
+                from .evidence.base import EvidenceDepth as _ED
+                from .evidence.usage_status import STATUS_ORDER as _SO, STATUS_TO_DEPTH as _STD
+                # Recompute evidence_depth as max depth among remaining
+                rem_depths = []
+                for r in remaining:
+                    try:
+                        d = int(r.get("depth", 1))
+                        rem_depths.append(d)
+                    except:
+                        pass
+                if rem_depths:
+                    new_depth = max(rem_depths)
+                    # Cap fork-only case (should already be capped but enforce)
+                    has_owned = any(not r.get("fork") for r in remaining)
+                    if not has_owned:
+                        new_depth = min(new_depth, _ED.LEVEL_2_CONFIG)
+                    # Update signal strength to match new depth
+                    old_strength = float(sig.get("signal_strength", sig.get("signal_value", 0.5)) or 0.5)
+                    new_strength = _ED.get_strength_for_depth(new_depth)
+                    # Preserve is_fork discount already applied in per-repo depths; for aggregated
+                    # fork-only, strength already includes discount, so keep min
+                    new_meta["evidence_depth"] = new_depth
+                    # Recompute usage_status from remaining (max rank, then coerce)
+                    try:
+                        rank = {str(s): i for i, s in enumerate(_SO)}
+                        seen = [str(r.get("usage_status") or "").lower() for r in remaining if str(r.get("usage_status") or "").lower() in rank]
+                        if seen:
+                            raw = max(seen, key=lambda s: rank[s])
+                            # coerce to new_depth
+                            sd = _STD.get(raw, 0)
+                            if sd > new_depth:
+                                if new_depth <= 1:
+                                    raw = "mentioned"
+                                elif new_depth == 2:
+                                    raw = "declared"
+                                elif new_depth == 3:
+                                    raw = "used"
+                                else:
+                                    raw = "substantial"
+                            new_meta["usage_status"] = raw
+                        else:
+                            new_meta["usage_status"] = "declared" if new_depth <= 2 else ("used" if new_depth == 3 else "substantial")
+                    except Exception:
+                        pass
+                    # Recompute relevant_files union from remaining only
+                    agg_files: list = []
+                    for r in remaining:
+                        for f in (list(r.get("files") or [])[:6]):
+                            if f not in agg_files:
+                                agg_files.append(str(f))
+                            if len(agg_files) >= 10:
+                                break
+                        if len(agg_files) >= 10:
+                            break
+                    if agg_files:
+                        # For L1, keep only doc-like
+                        if new_depth <= 1:
+                            filt = [f for f in agg_files if f.lower().endswith((".md",".txt",".rst")) or "readme" in f.lower()]
+                            new_meta["relevant_files"] = filt[:3] if filt else agg_files[:3]
+                            new_meta["detected_usage_patterns"] = []
+                        else:
+                            new_meta["relevant_files"] = agg_files
+                            if new_depth <= 2 and new_meta.get("detected_usage_patterns"):
+                                # keep infra patterns? For simplicity clear impl patterns at L2 but keep config text patterns
+                                # Here remaining patterns are from per-repo, if all L2 they are config patterns (Docker) which are valid
+                                pass
+                    # Recompute file_importance as max among remaining coerced to depth
+                    try:
+                        imp_rank = ["ignore", "low", "medium", "high", "very_high"]
+                        seen_imp = [str(r.get("file_importance") or "").lower() for r in remaining if str(r.get("file_importance") or "").lower() in imp_rank]
+                        if seen_imp:
+                            raw_imp = max(seen_imp, key=lambda v: imp_rank.index(v))
+                            # coerce
+                            rank_map = {"ignore": 0, "low": 1, "medium": 2, "high": 3, "very_high": 4}
+                            depth_to_label = {0: "ignore", 1: "low", 2: "medium", 3: "high", 4: "very_high"}
+                            expected = depth_to_label.get(new_depth, "low")
+                            if rank_map.get(raw_imp, 1) > rank_map.get(expected, 1):
+                                raw_imp = expected
+                            new_meta["file_importance"] = raw_imp
+                    except Exception:
+                        pass
+                    new_meta["evidence_count"] = len(remaining)
+                    # Update signal strength
+                    # Need to keep fork discount if fork-only
+                    new_sig_tmp_strength = new_strength
+                    # If fork-only, apply discount as in github provider
+                    if not has_owned:
+                        new_sig_tmp_strength = round(min(0.55, new_strength * 0.70), 2) if new_strength > 0 else new_strength
+                    # Only downgrade, never upgrade
+                    if new_sig_tmp_strength < old_strength:
+                        new_sig_signal_strength = new_sig_tmp_strength
+                    else:
+                        new_sig_signal_strength = old_strength
+                    # Use new depth/strength
+                    new_sig = dict(sig)
+                    new_sig["signal_strength"] = new_sig_signal_strength
+                    new_sig["signal_value"] = new_sig_signal_strength
+                    new_sig["depth"] = new_depth
+                    new_sig["metadata"] = new_meta
+                    # Adjust reliability for AI below
+                    if ai_count:
+                        ai_ratio = ai_count / len(remaining) if remaining else 0
+                        factor = 1.0 - 0.5 * ai_ratio
+                        new_sig["source_reliability"] = max(0.05, float(sig.get("source_reliability", 0.40)) * factor)
+                        new_sig["is_ai_assisted"] = True
+                    adjusted.append(new_sig)
+                    continue
+            except Exception:
+                pass
         new_sig = dict(sig)
         new_sig["metadata"] = new_meta
         # Adjust reliability for AI: centralized heuristic, halve if any AI repo contributes

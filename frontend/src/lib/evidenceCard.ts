@@ -144,6 +144,20 @@ function repoWord(count: number): string {
   return pluralize(count, "repository", "repositories");
 }
 
+const STATUS_TO_DEPTH: Record<string, number> = {
+  mentioned: 1,
+  declared: 2,
+  imported: 3,
+  used: 3,
+  substantial: 4,
+};
+
+function statusDepth(status: unknown): number | null {
+  if (typeof status !== "string") return null;
+  const d = STATUS_TO_DEPTH[status.toLowerCase()];
+  return typeof d === "number" ? d : null;
+}
+
 function githubBullets(
   skill: string,
   details: Record<string, unknown>,
@@ -154,25 +168,38 @@ function githubBullets(
     : [];
   const files = asStringArray(details["relevant_files"]);
   const importance = details["file_importance"];
-  const usage = usageStatusLabel(details["usage_status"]);
+  const rawUsage = details["usage_status"];
+  const usage = usageStatusLabel(rawUsage);
+  const evidenceDepth = asNumber(details["evidence_depth"]);
+  const evidenceCount = asNumber(details["evidence_count"]);
+  const repoCount = asNumber(details["repo_count"]);
 
+  // Source-level depth is the single coherent provenance contract.
+  // Repository-level differences are shown in the detailed card, not flattened here.
+  const sourceDepth = evidenceDepth;
+
+  // Repository count bullet: distinguish overall vs accepted evidence count
   if (repos.length > 0) {
-    const implCount = repos.filter((r) => {
-      const depth = r["depth"];
-      return typeof depth === "number" && depth >= 3;
-    }).length;
-    if (implCount > 0) {
+    // Prefer accepted evidence count (winning bucket) for implementation claims
+    const acceptedCount = evidenceCount !== null ? evidenceCount : repos.length;
+    const implDepth = sourceDepth !== null ? sourceDepth >= 3 : false;
+    if (implDepth && acceptedCount > 0) {
+      // Only claim implementation when source depth supports it
       bullets.push(
-        `${implCount} ${repoWord(implCount)} ` +
-          `${implCount === 1 ? "contains" : "contain"} ${skill} implementation`,
+        `${acceptedCount} ${repoWord(acceptedCount)} ` +
+          `${acceptedCount === 1 ? "contains" : "contain"} ${skill} implementation`,
       );
     } else {
+      const total = repoCount !== null ? repoCount : repos.length;
       bullets.push(
-        `${repos.length} ${repoWord(repos.length)} reference ${skill}`,
+        `${total} ${repoWord(total)} reference ${skill}`,
       );
+      if (sourceDepth !== null && sourceDepth >= 3 && acceptedCount > 0) {
+        // Fallback: if repos show impl but source depth is impl, still mention
+        // (defensive – backend now guarantees coherence)
+      }
     }
   } else {
-    const repoCount = asNumber(details["repo_count"]);
     if (repoCount !== null && repoCount > 0) {
       bullets.push(
         `${repoCount} ${repoWord(repoCount)} evidence ${skill}`,
@@ -180,17 +207,36 @@ function githubBullets(
     }
   }
 
+  // Relevant files: only claim "implementation files" when source depth
+  // and importance together support it; otherwise generic "relevant files".
   if (files.length > 0) {
     const shown = Math.min(files.length, 99);
+    const isImplDepth = sourceDepth !== null ? sourceDepth >= 3 : false;
     const kind =
-      importance === "high" || importance === "very_high"
+      isImplDepth && (importance === "high" || importance === "very_high")
         ? "relevant implementation files"
         : "relevant files";
-    bullets.push(`${shown} ${kind} detected`);
+    // Coherence guard: never claim substantial multi-file impl alongside Mention
+    if (sourceDepth !== null && sourceDepth <= 1 && kind.includes("implementation")) {
+      bullets.push(`${shown} relevant files detected`);
+    } else {
+      bullets.push(`${shown} ${kind} detected`);
+    }
   }
 
+  // Observed usage: only display when it is supported by final accepted depth.
+  // Never show "substantial multi-file usage" alongside Mention evidence.
   if (usage) {
-    bullets.push(`Observed usage: ${usage}`);
+    const sDepth = statusDepth(rawUsage);
+    const depthOk =
+      sourceDepth === null || sDepth === null ? true : sDepth <= sourceDepth;
+    if (depthOk) {
+      bullets.push(`Observed usage: ${usage}`);
+    } else {
+      // Downgraded or censored to avoid contradiction – show capped label or omit
+      // For depth 1, show only mentioned; for depth 2, declared, etc.
+      // Here we simply omit the contradictory stronger claim.
+    }
   }
   return bullets;
 }

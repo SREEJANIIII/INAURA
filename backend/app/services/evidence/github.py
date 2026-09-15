@@ -33,6 +33,8 @@ from .usage_status import (
     USED as _US_USED,
     SUBSTANTIAL as _US_SUBSTANTIAL,
     STATUS_ORDER as _STATUS_ORDER,
+    STATUS_TO_DEPTH as _STATUS_TO_DEPTH,
+    status_to_depth as _status_to_depth,
     classify_usage_status as _classify_usage_status,
     strip_string_literals as _strip_string_literals,
 )
@@ -57,6 +59,51 @@ logger = logging.getLogger(__name__)
 # coursework (0.80) outrank it; resume/LinkedIn (0.50/0.40) rank below.
 # Value is owned by services.evidence_weights (single source of truth).
 GITHUB_RELIABILITY = source_reliability("github")
+
+# ---------------------------------------------------------------------------
+# Provenance coherence helpers – enforce a single consistent contract for the
+# final accepted signal. A repository must never display substantial
+# implementation while its depth is only Mention, and usage_status must not
+# claim stronger evidence than the final accepted depth supports.
+# ---------------------------------------------------------------------------
+def _coerce_status_to_depth(status: str, depth: int) -> str:
+    """Cap a usage_status so its implied depth never exceeds the accepted depth."""
+    try:
+        d = int(depth)
+    except (TypeError, ValueError):
+        d = 1
+    s = str(status or "").lower()
+    s_depth = _STATUS_TO_DEPTH.get(s, 0)
+    if s_depth <= d:
+        return s if s in _STATUS_TO_DEPTH else s
+    # downgrade to the strongest status that fits within depth
+    if d <= 0:
+        return "none"
+    if d == 1:
+        return _US_MENTIONED
+    if d == 2:
+        return _US_DECLARED
+    if d == 3:
+        # imported and used both map to 3; downgrade substantial -> used
+        return _US_USED
+    return _US_SUBSTANTIAL
+
+def _coerce_importance_to_depth(label: str, depth: int) -> str:
+    """Ensure file_importance label does not imply stronger evidence than depth."""
+    # Map depth to minimal required tier: 0 ignore,1 low,2 medium,3 high,4 very_high
+    depth_to_label = {0: "ignore", 1: "low", 2: "medium", 3: "high", 4: "very_high"}
+    expected = depth_to_label.get(int(depth) if isinstance(depth, int) else 0, "low")
+    rank = {"ignore": 0, "low": 1, "medium": 2, "high": 3, "very_high": 4}
+    cur = str(label or "").lower()
+    if rank.get(cur, 1) <= rank.get(expected, 1):
+        return cur  # keep weaker or equal – never upgrade
+    return expected
+
+def _status_rank(status: str) -> int:
+    try:
+        return _STATUS_ORDER.index(str(status or "").lower())
+    except ValueError:
+        return -1
 
 # Cap on extra raw manifest fetches per repository inspection (rate-limit safety).
 MAX_EXTRA_MANIFEST_FETCHES = 4
@@ -2060,12 +2107,26 @@ class GitHubProvider(EvidenceProvider):
                     f"{total_repos} forked repositories (e.g., {sample_names})."
                 )
 
+            # Determine the winning bucket that defines the source-level accepted
+            # evidence. Per spec: owned active > owned (archived) > fork-only.
+            # Source-level aggregates (relevant_files, patterns, usage_status,
+            # file_importance, evidence_count, evidence_kinds) are derived ONLY
+            # from this bucket so a fork's substantial files never inflate a
+            # source whose final accepted depth is Mention.
+            if active_owned:
+                _winning_items = active_owned
+            elif owned_items:
+                _winning_items = owned_items
+            else:
+                _winning_items = fork_items
+
             # Preserve which kinds of repository evidence backed this skill
-            # (documentation / configuration / dependency / source usage).
+            # (documentation / configuration / dependency / source usage) – but
+            # only from the winning bucket (accepted evidence).
             evidence_kinds = sorted(
                 {
                     str(s.metadata.get("evidence_kind"))
-                    for s, _ in unique_items
+                    for s, _ in _winning_items
                     if s.metadata.get("evidence_kind")
                 }
             )
@@ -2086,23 +2147,19 @@ class GitHubProvider(EvidenceProvider):
                 metadata["archived"] = True
                 metadata["historical_only"] = True
 
-            # Phase 3: propagate the strongest per-repository usage status.
-            # Still one aggregated signal per skill (no double counting); the
-            # max status describes the strongest demonstration observed.
+            # Phase 3: propagate the strongest per-repository usage status
+            # within the winning bucket only (no cross-bucket leakage).
             try:
                 _status_rank = {str(s): i for i, s in enumerate(_STATUS_ORDER)}
                 _seen_statuses = [
                     str((s.metadata or {}).get("usage_status") or "").lower()
-                    for s, _ in unique_items
+                    for s, _ in _winning_items
                     if str((s.metadata or {}).get("usage_status") or "").lower() in _status_rank
                 ]
                 if _seen_statuses:
-                    metadata["usage_status"] = max(
-                        _seen_statuses, key=lambda s: _status_rank[s]
-                    )
+                    _raw_status = max(_seen_statuses, key=lambda s: _status_rank[s])
+                    metadata["usage_status"] = _coerce_status_to_depth(_raw_status, final_depth)
                 else:
-                    # Legacy signals without status: conservative depth
-                    # equivalent that never overclaims usage.
                     _agg_depth = int(final_depth)
                     metadata["usage_status"] = (
                         _US_SUBSTANTIAL if _agg_depth >= 4
@@ -2111,10 +2168,9 @@ class GitHubProvider(EvidenceProvider):
             except Exception:
                 pass
 
-            # Phase 4: traceability provenance on the aggregated signal.
-            # Union of contributing repositories' file/pattern evidence
-            # (capped, paths and labels only -- never source contents), plus
-            # profile URL and observation timestamp. Still one signal/skill.
+            # Phase 4: traceability provenance on the aggregated signal – union
+            # only from the winning bucket (accepted evidence), plus profile
+            # URL and observation timestamp. Still one signal per skill.
             try:
                 metadata.setdefault("provider", self.provider_name)
                 metadata.setdefault("source_url", f"https://github.com/{owner}")
@@ -2124,7 +2180,7 @@ class GitHubProvider(EvidenceProvider):
                 except Exception:
                     pass
                 _agg_files: List[str] = []
-                for _s, _ in unique_items:
+                for _s, _ in _winning_items:
                     for _f in (list((_s.metadata or {}).get("relevant_files") or [])[:6]):
                         if _f not in _agg_files:
                             _agg_files.append(str(_f))
@@ -2132,36 +2188,58 @@ class GitHubProvider(EvidenceProvider):
                             break
                     if len(_agg_files) >= 10:
                         break
-                metadata["relevant_files"] = _agg_files
-                _agg_patterns: List[str] = []
-                for _s, _ in unique_items:
-                    for _p in (list((_s.metadata or {}).get("detected_usage_patterns") or [])[:6]):
-                        if _p not in _agg_patterns:
-                            _agg_patterns.append(str(_p))
+                # Coherence: if final depth is Mention, do not expose impl files
+                if int(final_depth) <= 1:
+                    # Keep only documentation-like files for L1
+                    _filtered = [f for f in _agg_files if f.lower().endswith((".md", ".txt", ".rst")) or "readme" in f.lower()]
+                    metadata["relevant_files"] = _filtered[:3] if _filtered else _agg_files[:3]
+                    # L1 must not claim patterns
+                    metadata["detected_usage_patterns"] = []
+                else:
+                    metadata["relevant_files"] = _agg_files
+                    _agg_patterns: List[str] = []
+                    for _s, _ in _winning_items:
+                        for _p in (list((_s.metadata or {}).get("detected_usage_patterns") or [])[:6]):
+                            if _p not in _agg_patterns:
+                                _agg_patterns.append(str(_p))
+                            if len(_agg_patterns) >= 8:
+                                break
                         if len(_agg_patterns) >= 8:
                             break
-                    if len(_agg_patterns) >= 8:
-                        break
-                metadata["detected_usage_patterns"] = _agg_patterns
+                    metadata["detected_usage_patterns"] = _agg_patterns
                 _imp_rank = ["ignore", "low", "medium", "high", "very_high"]
                 _seen_imp = [
                     str((s.metadata or {}).get("file_importance") or "").lower()
-                    for s, _ in unique_items
+                    for s, _ in _winning_items
                     if str((s.metadata or {}).get("file_importance") or "").lower() in _imp_rank
                 ]
                 if _seen_imp:
-                    metadata["file_importance"] = max(
-                        _seen_imp, key=lambda v: _imp_rank.index(v)
-                    )
+                    _raw_imp = max(_seen_imp, key=lambda v: _imp_rank.index(v))
+                    metadata["file_importance"] = _coerce_importance_to_depth(_raw_imp, final_depth)
                 else:
-                    # Legacy signals without importance: conservative depth
-                    # equivalent (never claims very_high for old data).
                     _agg_d = int(final_depth)
                     metadata["file_importance"] = (
                         "high" if _agg_d >= 3
                         else ("medium" if _agg_d == 2 else ("low" if _agg_d == 1 else "ignore"))
                     )
-                metadata["evidence_count"] = int(total_repos)
+                # evidence_count reflects accepted (winning) evidence, not total
+                metadata["evidence_count"] = int(len(_winning_items))
+                # keep original total for audit trail
+                metadata["total_repo_count"] = int(total_repos)
+            except Exception:
+                pass
+
+            # Final coherence enforcement for aggregated signal: ensure usage_status,
+            # file_importance and patterns do not outrank final_depth.
+            # Config-level (L2) infra patterns (Docker/Kubernetes/CI) are valid
+            # so we only clear impl patterns for pure documentation (L1).
+            try:
+                if "usage_status" in metadata:
+                    metadata["usage_status"] = _coerce_status_to_depth(str(metadata.get("usage_status") or ""), final_depth)
+                    if int(final_depth) <= 1 and metadata.get("detected_usage_patterns"):
+                        metadata["detected_usage_patterns"] = []
+                if "file_importance" in metadata:
+                    metadata["file_importance"] = _coerce_importance_to_depth(str(metadata.get("file_importance") or ""), final_depth)
             except Exception:
                 pass
 
@@ -3825,6 +3903,78 @@ class GitHubProvider(EvidenceProvider):
                 )
             sig.metadata.setdefault("reason", sig.reason)
             signals.append(sig)
+
+        # --- Provenance coherence enforcement (per-repository final signal) ---
+        # The final accepted signal must have internally consistent depth,
+        # usage_status, file_importance, relevant_files and detected patterns.
+        # This is a defensive fix for any path where capping or fork discounts
+        # left behind stronger metadata than the final depth supports.
+        try:
+            for _sig in signals:
+                try:
+                    _d = int(_sig.depth)
+                except (TypeError, ValueError):
+                    _d = 1
+                # Re-derive cap from final relevant_files – if depth still exceeds
+                # what its files can support, downgrade depth (never upgrade).
+                _rel_final = list(_sig.metadata.get("relevant_files") or [])
+                if _rel_final:
+                    try:
+                        _capped, _c_tier, _c_label = _cap_depth_by_importance(_d, _rel_final[:6])
+                        if int(_capped) != _d:
+                            _d = int(_capped)
+                            _sig.depth = _d
+                            _sig.metadata["evidence_depth"] = _d
+                            # recompute strength for new depth (preserve fork discount)
+                            _raw = EvidenceDepth.get_strength_for_depth(_d)
+                            if bool(_sig.metadata.get("is_fork")):
+                                _raw = round(min(0.55, _raw * 0.70), 2)
+                            _sig.signal_strength = _raw
+                    except Exception:
+                        pass
+                # Coerce file_importance to not outrank depth
+                try:
+                    _cur_imp = str(_sig.metadata.get("file_importance") or "medium").lower()
+                    _coerced_imp = _coerce_importance_to_depth(_cur_imp, _d)
+                    if _coerced_imp != _cur_imp:
+                        _sig.metadata["file_importance"] = _coerced_imp
+                        _tier_map = {"ignore": _FI_IGNORE, "low": _FI_LOW, "medium": _FI_MEDIUM, "high": _FI_HIGH, "very_high": _FI_VERY_HIGH}
+                        _sig.metadata["file_importance_score"] = round(float(_importance_weight(_tier_map.get(_coerced_imp, _FI_MEDIUM))), 3)
+                except Exception:
+                    pass
+                # Coerce usage_status to not outrank depth; clear impl-specific metadata when downgraded
+                try:
+                    _cur_st = str(_sig.metadata.get("usage_status") or "").lower()
+                    if _cur_st:
+                        _coerced_st = _coerce_status_to_depth(_cur_st, _d)
+                        if _coerced_st != _cur_st:
+                            _sig.metadata["usage_status"] = _coerced_st
+                        # Depth 1 (mention) must not retain impl files or patterns
+                        if _d <= 1:
+                            if _sig.metadata.get("detected_usage_patterns"):
+                                _sig.metadata["detected_usage_patterns"] = []
+                            # Ensure relevant_files is documentation only
+                            _doc_fb = ([inspection.get("readme_path")] if inspection.get("readme_path") else ["README.md"])
+                            # If current files look like impl (contain src/ or high tier), replace
+                            _has_impl_file = any("src/" in str(f).lower() or "app/" in str(f).lower() for f in _rel_final)
+                            if _has_impl_file or not _rel_final or any(str(f).lower().endswith((".py",".js",".ts",".tsx",".java",".go",".rs")) for f in _rel_final):
+                                # Keep only doc-like files for L1; fall back to README
+                                _sig.metadata["relevant_files"] = [str(x) for x in _doc_fb if x][:3]
+                        elif _d == 2:
+                            if str(_sig.metadata.get("usage_status") or "").lower() in (_US_SUBSTANTIAL, _US_USED, _US_IMPORTED):
+                                # L2 can be at most declared – keep config-level status
+                                _sig.metadata["usage_status"] = _coerce_status_to_depth(_sig.metadata.get("usage_status"), 2)
+                            # Keep infra config patterns (Docker/Kubernetes/CI) – they are
+                            # valid configuration evidence even at L2, so do not clear.
+                        elif _d == 3:
+                            if str(_sig.metadata.get("usage_status") or "").lower() == _US_SUBSTANTIAL:
+                                _sig.metadata["usage_status"] = _US_USED
+                except Exception:
+                    pass
+                _sig.metadata["evidence_depth"] = int(_sig.depth)
+                _sig.metadata["reason"] = _sig.reason
+        except Exception:
+            pass
 
         # Phase 2 audit trail: per-file importance and repository aggregate.
         try:
