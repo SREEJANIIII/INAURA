@@ -198,6 +198,9 @@ export type GithubRepo = {
   is_excluded: boolean;
   is_ai_assisted: boolean;
   classification?: string;
+  status?: "discovered" | "inspected" | "failed" | "skipped_low_evidence" | "skipped_rate_limited" | string;
+  error?: string | null;
+  error_category?: string | null;
   fork: boolean;
   archived: boolean;
   pushed_at?: string | null;

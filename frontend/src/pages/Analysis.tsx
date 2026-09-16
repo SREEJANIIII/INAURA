@@ -492,6 +492,9 @@ export default function Analysis() {
               const detectedSkills = (
                 (existing?.metadata as Record<string, unknown> | null)?.verified_signals as Array<{ skill?: string; canonical_name?: string }> | undefined
               )?.map((sig) => sig.skill || sig.canonical_name).filter(Boolean) as string[] | undefined;
+              const githubInspection = s.type === "github"
+                ? ((existing?.metadata as Record<string, unknown> | null)?.inspection as Record<string, unknown> | undefined)
+                : undefined;
 
               let badgeText = "Not added";
               let badgeClass = "analysis__badge--muted";
@@ -500,8 +503,9 @@ export default function Analysis() {
                   badgeText = "Verifying…";
                   badgeClass = "analysis__badge--verifying";
                 } else if (vStatus === "verified") {
-                  badgeText = "✓ Verified";
-                  badgeClass = "analysis__badge--verified";
+                  const deepStatus = githubInspection?.deep_inspection_status;
+                  badgeText = s.type === "github" && deepStatus === "partial" ? "✓ Profile verified · partial inspection" : s.type === "github" && deepStatus === "failed" ? "⚠ Profile verified · inspection unavailable" : "✓ Verified";
+                  badgeClass = deepStatus === "failed" ? "analysis__badge--failed" : deepStatus === "partial" ? "analysis__badge--unverified" : "analysis__badge--verified";
                 } else if (vStatus === "failed") {
                   badgeText = "⚠ Failed";
                   badgeClass = "analysis__badge--failed";

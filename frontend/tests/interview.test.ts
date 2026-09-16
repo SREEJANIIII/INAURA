@@ -168,6 +168,13 @@ describe("2. Technical Transcription & Vocabulary Quality", () => {
       "we built a REST API using FastAPI with PostgreSQL and pgvector for RAG embeddings in Gemini"
     );
   });
+
+  it("keeps the raw transcript separate from optional technical normalization", () => {
+    const raw = "I used post gray SQL with pg vector";
+    const normalized = normalizeTechnicalTerms(raw);
+    assert.strictEqual(raw, "I used post gray SQL with pg vector");
+    assert.notStrictEqual(normalized, raw);
+  });
 });
 
 describe("3. Speech Recognition Silence Pipeline & Duplicate Guard", () => {

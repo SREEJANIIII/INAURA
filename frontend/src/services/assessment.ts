@@ -361,6 +361,10 @@ export type AnswerInterviewResponse = {
   answered_count: number;
   total_questions: number;
   note: string | null;
+  failure_category?: string | null;
+  provider_status?: number | null;
+  provider_code?: string | null;
+  retry_after?: string | null;
 };
 
 export function answerInterviewQuestion(session_id: string, question_id: string, transcript: string) {

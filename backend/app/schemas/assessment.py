@@ -208,6 +208,12 @@ class StartInterviewRequest(BaseModel):
     skill: str = Field(..., min_length=1, max_length=120)
 
 
+class InterviewTTSRequest(BaseModel):
+    text: str = Field(..., min_length=1, max_length=4000)
+    session_id: str = Field(default="", max_length=64)
+    question_id: str = Field(default="", max_length=120)
+
+
 class InterviewQuestionOut(BaseModel):
     id: str
     competency: str
@@ -326,3 +332,7 @@ class AnswerInterviewResponse(BaseModel):
     answered_count: int = 0
     total_questions: int = 0
     note: Optional[str] = None
+    failure_category: Optional[str] = None
+    provider_status: Optional[int] = None
+    provider_code: Optional[str] = None
+    retry_after: Optional[str] = None

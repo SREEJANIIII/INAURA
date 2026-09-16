@@ -1,5 +1,8 @@
-from fastapi import APIRouter, Depends
+from typing import Any, Dict
 
+from fastapi import APIRouter, Depends, HTTPException, Response
+
+from ....core.config import get_settings
 from ....core.security import get_current_user, CurrentUser
 from ....schemas.assessment import (
     AnswerInterviewRequest,
@@ -12,6 +15,7 @@ from ....schemas.assessment import (
     StartAssessmentResponse,
     StartInterviewRequest,
     StartInterviewResponse,
+    InterviewTTSRequest,
     StartPracticalRequest,
     StartPracticalResponse,
     SubmitAssessmentRequest,
@@ -25,8 +29,38 @@ from ....services.assessment import service as assessment_service
 from ....services.assessment import interview as interview_service
 from ....services.assessment import practical_service
 from ....services.assessment.question_bank import DEFAULT_QUESTION_COUNT
+from ....services import tts_service
 
 router = APIRouter(prefix="/analysis/assessment", tags=["assessment"])
+
+
+@router.post("/interview/tts")
+async def interview_tts(payload: InterviewTTSRequest, current_user: CurrentUser = Depends(get_current_user)):
+    """Voice the exact Gemini-generated question text via NVIDIA TTS.
+
+    Called only AFTER the answer endpoint has produced the next question.
+    NVIDIA_API_KEY stays server-side; failures never touch the interview.
+    Provider (502) failures surface here as 503: generic in production,
+    with safe provider facts when TTS_DEBUG=true for local development.
+    """
+    try:
+        result = await tts_service.synthesize(payload.text, payload.session_id, payload.question_id)
+    except HTTPException as exc:
+        if exc.status_code != 502:
+            raise
+        detail = exc.detail if isinstance(exc.detail, dict) else {}
+        response: Dict[str, Any] = {
+            "message": "NVIDIA TTS request failed",
+            "provider": "nvidia",
+        }
+        if get_settings().tts_debug is True:
+            response.update({
+                "status": detail.get("status"),
+                "category": detail.get("error_category"),
+                "reason": detail.get("reason") or detail.get("message"),
+            })
+        raise HTTPException(status_code=503, detail=response) from exc
+    return Response(content=result.audio, media_type=result.media_type, headers={"Cache-Control": "no-store"})
 
 
 @router.get("/available", response_model=AvailableAssessmentsResponse)

@@ -3,7 +3,6 @@ import Button from "../ui/Button";
 import {
   answerInterviewQuestion,
   completeSkillInterview,
-  getSkillInterview,
   startSkillInterview,
   type CompleteInterviewResponse,
   type StartInterviewResponse,
@@ -52,9 +51,6 @@ export default function InterviewModal({ skill, onClose, onCompleted }: Props) {
   const [loading, setLoading] = useState(false);
 
   const [result, setResult] = useState<CompleteInterviewResponse | null>(null);
-  const [sessionId, setSessionId] = useState<string | null>(
-    () => sessionStorage.getItem("interview_session_id")
-  );
 
   const {
     videoRef,
@@ -96,7 +92,6 @@ export default function InterviewModal({ skill, onClose, onCompleted }: Props) {
     tts.stop();
     speech.stop();
     stopMedia();
-    sessionStorage.removeItem("interview_session_id");
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
@@ -108,14 +103,29 @@ export default function InterviewModal({ skill, onClose, onCompleted }: Props) {
   }, [phase, camState, setVideoRef, videoRef]);
 
   // ---- Speak then listen: guarded async transition ----
+  // Voice is strictly an enhancement: if TTS fails, the session, the current
+  // question, and speech recognition are preserved and the candidate answers
+  // from the on-screen question text. TTS never consumes evaluation traffic.
   const speakThenListen = useCallback(async (text: string) => {
     if (!interviewActiveRef.current) return;
     speechRef.current.stop();
     setAiText(text);
     setPhase("ai_speaking");
-    await ttsRef.current.speak(text);
+    let voiceOk = true;
+    try {
+      await ttsRef.current.speak(text);
+    } catch {
+      // Preserve the session and continue with the existing speech /
+      // typed-answer flow instead of invalidating the turn.
+      voiceOk = false;
+      setError("Voice playback is unavailable. You can continue by speaking or typing your answer.");
+    }
     if (!interviewActiveRef.current) return;
-    setAiText("");
+    // On voice failure the question text stays on screen so it can still be
+    // read and answered; on success it is cleared as before.
+    if (voiceOk) {
+      setAiText("");
+    }
     if (phaseRef.current === "ai_speaking" && interviewActiveRef.current) {
       speechRef.current.reset();
       isSubmittingRef.current = false;
@@ -157,13 +167,16 @@ export default function InterviewModal({ skill, onClose, onCompleted }: Props) {
           res.spoken_response ||
           "Thank you. That concludes all questions for this interview. I am finalizing your evaluation now.";
         setPhase("ai_speaking");
-        await ttsRef.current.speak(closing);
+        try {
+          await ttsRef.current.speak(closing);
+        } catch {
+          setError("Voice playback is unavailable. Finalizing your interview.");
+        }
         if (!interviewActiveRef.current) return;
 
         setPhase("completing");
         const graded = await completeSkillInterview(sess.session_id);
         if (!interviewActiveRef.current) return;
-        sessionStorage.removeItem("interview_session_id");
         interviewActiveRef.current = false;
         stopMedia();
         setResult(graded);
@@ -195,7 +208,7 @@ export default function InterviewModal({ skill, onClose, onCompleted }: Props) {
       const msg = e instanceof Error ? e.message : "Could not submit answer";
       if (msg.includes("409") || msg.includes("not the current question")) {
         setError("Session out of sync. Recovering session...");
-        setSessionId(sessionRef.current?.session_id || null);
+        setPhase("error");
       } else {
         setError(msg);
         setPhase("error");
@@ -252,9 +265,11 @@ export default function InterviewModal({ skill, onClose, onCompleted }: Props) {
         setLoading(false);
         return;
       }
+      // Keep the authoritative session in a ref immediately. React state is
+      // intentionally asynchronous and must not decide whether this attempt
+      // creates a second session or which question is current.
+      sessionRef.current = data;
       setSession(data);
-      sessionStorage.setItem("interview_session_id", data.session_id);
-      setSessionId(data.session_id);
 
       const questions = data.plan?.questions || [];
       setTotalQuestions(questions.length);
@@ -286,67 +301,6 @@ export default function InterviewModal({ skill, onClose, onCompleted }: Props) {
     }
   }, [skill, requestMedia, speakThenListen]);
 
-  // ---- Session recovery on browser refresh ----
-  useEffect(() => {
-    if (!sessionId) return;
-    let active = true;
-    (async () => {
-      try {
-        const data = await getSkillInterview(sessionId);
-        if (!active) return;
-        if (["completed", "graded", "awaiting_review"].includes(data.status)) {
-          const graded = await completeSkillInterview(sessionId);
-          if (active) {
-            setResult(graded);
-            setPhase("completed");
-          }
-          return;
-        }
-        setSession({
-          session_id: data.session_id || sessionId,
-          skill: data.skill || skill,
-          skill_key: skill,
-          interview_version: "interview-v2",
-          status: data.status,
-          started_at: data.started_at || "",
-          plan: data.plan as StartInterviewResponse["plan"],
-          evaluated_dimensions: {},
-          privacy_notice: "",
-          disclaimer: "",
-        });
-        const plan = data.plan as Record<string, unknown>;
-        const questions = (plan?.questions ?? []) as Question[];
-        const idx = ((data as Record<string, unknown>).current_index as number) ?? 0;
-        setTotalQuestions(questions.length);
-        setAnsweredCount(
-          ((data.transcript as Array<Record<string, unknown>> | undefined) || []).filter(
-            (t) => t.answer
-          ).length
-        );
-        if (questions[idx]) {
-          setCurrentQuestion(questions[idx]);
-          if (active) {
-            setPhase("intro");
-          }
-        } else {
-          const graded = await completeSkillInterview(sessionId);
-          if (active) {
-            setResult(graded);
-            setPhase("completed");
-          }
-        }
-      } catch {
-        if (active) {
-          sessionStorage.removeItem("interview_session_id");
-          setSessionId(null);
-        }
-      }
-    })();
-    return () => {
-      active = false;
-    };
-  }, [sessionId, skill]);
-
   // ---- Manual typed submit (accessibility fallback) ----
   const submitTyped = useCallback(() => {
     if (typedAnswer.trim()) {
@@ -358,6 +312,7 @@ export default function InterviewModal({ skill, onClose, onCompleted }: Props) {
 
   // ---- End interview ----
   const endInterview = useCallback(async () => {
+    if (phaseRef.current === "processing" || phaseRef.current === "completing") return;
     interviewActiveRef.current = false;
     isSubmittingRef.current = false;
     tts.stop();
@@ -370,15 +325,12 @@ export default function InterviewModal({ skill, onClose, onCompleted }: Props) {
         setPhase("completing");
         const graded = await completeSkillInterview(sess.session_id);
         setResult(graded);
-        sessionStorage.removeItem("interview_session_id");
         setPhase("completed");
         onCompleted?.(graded);
       } catch {
-        sessionStorage.removeItem("interview_session_id");
         setPhase("completed");
       }
     } else {
-      sessionStorage.removeItem("interview_session_id");
       setPhase("completed");
     }
   }, [tts, speech, stopMedia, onCompleted]);
@@ -392,6 +344,18 @@ export default function InterviewModal({ skill, onClose, onCompleted }: Props) {
     speech.reset();
     isSubmittingRef.current = false;
     void speakThenListen(`Let me repeat the question. ${q.prompt}`);
+  }, [tts, speech, speakThenListen]);
+
+  const retryVoice = useCallback(() => {
+    const q = currentQuestionRef.current;
+    if (!q) return;
+    interviewActiveRef.current = true;
+    isSubmittingRef.current = false;
+    setError(null);
+    tts.stop();
+    speech.stop();
+    speech.reset();
+    void speakThenListen(q.prompt);
   }, [tts, speech, speakThenListen]);
 
   // ---- Retry devices ----
@@ -500,6 +464,7 @@ export default function InterviewModal({ skill, onClose, onCompleted }: Props) {
           {phase === "error" && (
             <div className="iv__device-banner iv__device-banner--warn" style={{ flexWrap: "wrap", justifyContent: "center", padding: "12px 20px" }}>
               <span>{error || "An error occurred during the interview"}</span>
+              {currentQuestion && <Button onClick={retryVoice} variant="secondary" size="sm">Retry voice</Button>}
               <Button onClick={() => void beginInterview()} variant="primary" size="sm">Retry</Button>
               <Button onClick={() => void endInterview()} variant="ghost" size="sm">End</Button>
             </div>
@@ -527,7 +492,9 @@ export default function InterviewModal({ skill, onClose, onCompleted }: Props) {
                 </div>
               </div>
               <div className="iv__call-panel-label">INAURA AI</div>
-              {phase === "ai_speaking" && aiText && (
+              {/* The question stays visible while listening when voice failed,
+                  so it can still be read and answered. Cleared on success. */}
+              {(phase === "ai_speaking" || phase === "listening") && aiText && (
                 <div className="iv__call-bubble iv__call-bubble--ai" aria-live="polite">{aiText}</div>
               )}
               {phase === "processing" && (
@@ -642,6 +609,7 @@ export default function InterviewModal({ skill, onClose, onCompleted }: Props) {
               onClick={() => void endInterview()}
               variant="ghost"
               size="md"
+              disabled={phase === "processing" || phase === "completing"}
             >
               ⛔ End
             </Button>

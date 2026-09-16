@@ -10,6 +10,7 @@ import httpx
 from .base import EvidenceProvider, VerificationResult, ExtractedSignal, EvidenceDepth, VerificationStatus
 from .url_utils import validate_platform_url, GITHUB_HOSTS
 from ..evidence_weights import reliability as source_reliability
+from ...core.config import get_settings
 from ..skill_taxonomy import (
     normalize_skill,
     normalize_skill_slug,
@@ -131,6 +132,9 @@ MAX_CONFIG_TEXT_CHARS = 12000
 MAX_CONTENT_FETCHES_PER_REPO = 1 + MAX_SOURCE_FILES_PER_REPO + MAX_CONFIG_FILES_PER_REPO
 # Profile-wide ceiling on content reads (repository discovery is never capped).
 DEFAULT_PROFILE_CONTENT_BUDGET = 600
+MAX_GITHUB_RETRIES = 2
+MIN_SAFE_REMAINING_REQUESTS = 2
+_INSPECTION_CACHE: Dict[str, Tuple[Dict[str, Any], List[ExtractedSignal]]] = {}
 
 # Vendored / generated / dependency directories that carry no authorship
 # evidence and must never be downloaded.
@@ -948,10 +952,118 @@ def _get_github_headers() -> Dict[str, str]:
         "User-Agent": "INAURA-Evidence-Intelligence/1.0",
         "Accept": "application/vnd.github.v3+json",
     }
-    token = os.environ.get("GITHUB_TOKEN") or os.environ.get("GH_TOKEN")
+    settings = get_settings()
+    token = settings.github_token or os.environ.get("GITHUB_TOKEN") or os.environ.get("GH_TOKEN")
     if token and token.strip():
         headers["Authorization"] = f"Bearer {token.strip()}"
     return headers
+
+
+def _response_diagnostics(res: httpx.Response) -> Dict[str, Any]:
+    remaining_header = res.headers.get("x-ratelimit-remaining")
+    limit_header = res.headers.get("x-ratelimit-limit")
+    reset_header = res.headers.get("x-ratelimit-reset")
+    try:
+        remaining = int(remaining_header) if remaining_header is not None else None
+    except ValueError:
+        remaining = None
+    try:
+        limit = int(limit_header) if limit_header is not None else None
+    except ValueError:
+        limit = None
+    reset_time = None
+    if reset_header and reset_header.isdigit():
+        reset_time = datetime.fromtimestamp(int(reset_header), tz=timezone.utc).isoformat()
+    api_message = ""
+    try:
+        body = res.json()
+        if isinstance(body, dict):
+            api_message = str(body.get("message") or "")[:160]
+    except Exception:
+        pass
+    if res.status_code in (429,) or (res.status_code == 403 and remaining == 0):
+        category = "rate_limited"
+    elif res.status_code == 401:
+        category = "authentication"
+    elif res.status_code == 403:
+        category = "forbidden"
+    elif res.status_code == 404:
+        category = "not_found"
+    elif res.status_code >= 500:
+        category = "upstream_error"
+    else:
+        category = "http_error"
+    return {"status_code": res.status_code, "limit": limit, "remaining": remaining, "reset_time": reset_time, "category": category, "message": api_message}
+
+
+def _safe_failure_message(owner: str, repo: str, diagnostics: Dict[str, Any]) -> str:
+    category = diagnostics.get("category")
+    target = f"'{owner}/{repo}'" if repo else f"'{owner}'"
+    if category == "authentication":
+        return f"GitHub authentication failed while inspecting {target}. Reconnect GitHub access or configure a valid server token."
+    if category == "rate_limited":
+        suffix = f" Reset at {diagnostics['reset_time']}." if diagnostics.get("reset_time") else ""
+        return f"GitHub API rate limited (quota exhausted) while inspecting {target}.{suffix}"
+    if category == "forbidden":
+        return f"GitHub denied access while inspecting {target}; the token lacks permission or GitHub policy blocked the request."
+    if category == "not_found":
+        return f"GitHub resource {target} was not found or is not accessible."
+    return f"GitHub returned HTTP {diagnostics.get('status_code', 'error')} while inspecting {target}."
+
+
+async def _github_get(client: httpx.AsyncClient, url: str, *, headers: Optional[dict] = None, **kwargs: Any) -> httpx.Response:
+    """GET with bounded retries for network/5xx/429 failures only."""
+    hdrs = headers or _get_github_headers()
+    track_quota = bool(kwargs.pop("track_quota", True))
+    prior_quota = getattr(client, "_inaura_github_quota", None)
+    if track_quota and isinstance(prior_quota, dict) and prior_quota.get("remaining") is not None and prior_quota["remaining"] < MIN_SAFE_REMAINING_REQUESTS:
+        logger.warning(
+            "GitHub quota is too low for another inspection request: remaining=%s limit=%s",
+            prior_quota.get("remaining"), prior_quota.get("limit"),
+        )
+        return httpx.Response(
+            403,
+            json={"message": "GitHub API quota is too low for additional inspection requests"},
+            headers={
+                "x-ratelimit-remaining": str(prior_quota.get("remaining", 0)),
+                "x-ratelimit-limit": str(prior_quota.get("limit", "")),
+                "x-ratelimit-reset": str(prior_quota.get("reset_epoch", "")),
+            },
+            request=httpx.Request("GET", url),
+        )
+    last_error: Optional[Exception] = None
+    for attempt in range(MAX_GITHUB_RETRIES + 1):
+        try:
+            response = await client.get(url, headers=hdrs, **kwargs)
+            diagnostics = _response_diagnostics(response)
+            if track_quota and diagnostics.get("remaining") is not None:
+                try:
+                    reset_epoch = int(response.headers.get("x-ratelimit-reset", "0") or 0)
+                except ValueError:
+                    reset_epoch = 0
+                setattr(client, "_inaura_github_quota", {**diagnostics, "reset_epoch": reset_epoch})
+                logger.debug(
+                    "GitHub authentication: %s; rate limit remaining=%s/%s",
+                    "configured" if "Authorization" in hdrs else "not configured",
+                    diagnostics.get("remaining"), diagnostics.get("limit"),
+                )
+            retryable = response.status_code >= 500 or response.status_code == 429
+            if not retryable or attempt >= MAX_GITHUB_RETRIES:
+                return response
+            retry_after = response.headers.get("retry-after")
+            try:
+                delay = min(3.0, max(0.1, float(retry_after))) if retry_after else 0.25 * (2 ** attempt)
+            except ValueError:
+                delay = 0.25 * (2 ** attempt)
+            await asyncio.sleep(delay)
+        except httpx.RequestError as exc:
+            last_error = exc
+            if attempt >= MAX_GITHUB_RETRIES:
+                raise
+            await asyncio.sleep(0.25 * (2 ** attempt))
+    if last_error:
+        raise last_error
+    raise RuntimeError("GitHub request failed")
 
 
 def _check_rate_limit(res: httpx.Response) -> Tuple[bool, int, Optional[str]]:
@@ -959,20 +1071,9 @@ def _check_rate_limit(res: httpx.Response) -> Tuple[bool, int, Optional[str]]:
     Check if response indicates rate limiting.
     Returns: (is_limited, remaining, reset_time_iso)
     """
-    remaining_header = res.headers.get("x-ratelimit-remaining")
-    reset_header = res.headers.get("x-ratelimit-reset")
-    remaining = int(remaining_header) if remaining_header and remaining_header.isdigit() else 100
-
-    reset_time = None
-    if reset_header and reset_header.isdigit():
-        try:
-            reset_dt = datetime.fromtimestamp(int(reset_header), tz=timezone.utc)
-            reset_time = reset_dt.isoformat()
-        except Exception:
-            pass
-
-    is_limited = res.status_code in (403, 429) or remaining <= 0
-    return is_limited, remaining, reset_time
+    diagnostics = _response_diagnostics(res)
+    remaining = diagnostics.get("remaining")
+    return diagnostics["category"] == "rate_limited", int(remaining if remaining is not None else 100), diagnostics.get("reset_time")
 
 
 def _classify_repository(repo_data: dict, profile_owner: str, now: datetime) -> Dict[str, Any]:
@@ -1161,7 +1262,7 @@ class GitHubProvider(EvidenceProvider):
         try:
             # 1. Fetch repo metadata if not provided
             if repo_data is None:
-                res = await client.get(repo_url, headers=headers)
+                res = await _github_get(client, repo_url, headers=headers)
                 if res.status_code == 404:
                     return VerificationResult(
                         status="failed",
@@ -1170,12 +1271,13 @@ class GitHubProvider(EvidenceProvider):
                         raw_metadata={"owner": owner, "repo": repo, "http_status": 404},
                         verified_at=verified_at,
                     )
-                if res.status_code in (403, 429):
+                if res.status_code in (401, 403, 429):
+                    diagnostics = _response_diagnostics(res)
                     return VerificationResult(
                         status="failed",
-                        message=f"GitHub API access rate limited or forbidden for '{owner}/{repo}'.",
+                        message=_safe_failure_message(owner, repo, diagnostics),
                         provider=self.provider_name,
-                        raw_metadata={"owner": owner, "repo": repo, "http_status": res.status_code},
+                        raw_metadata={"owner": owner, "repo": repo, "http_status": res.status_code, "github_error": diagnostics},
                         verified_at=verified_at,
                     )
                 if res.status_code != 200:
@@ -1199,13 +1301,14 @@ class GitHubProvider(EvidenceProvider):
             # 2. Fetch languages breakdown
             languages = {}
             try:
-                lang_res = await client.get(f"{repo_url}/languages", headers=headers)
-                if lang_res.status_code in (403, 429):
+                lang_res = await _github_get(client, f"{repo_url}/languages", headers=headers)
+                if lang_res.status_code in (401, 403, 429):
+                    diagnostics = _response_diagnostics(lang_res)
                     return VerificationResult(
                         status="failed",
-                        message=f"GitHub API access rate limited or forbidden for '{owner}/{repo}'.",
+                        message=_safe_failure_message(owner, repo, diagnostics),
                         provider=self.provider_name,
-                        raw_metadata={"owner": owner, "repo": repo, "http_status": lang_res.status_code},
+                        raw_metadata={"owner": owner, "repo": repo, "http_status": lang_res.status_code, "github_error": diagnostics},
                         verified_at=verified_at,
                     )
                 if lang_res.status_code >= 500:
@@ -1226,13 +1329,14 @@ class GitHubProvider(EvidenceProvider):
             # 3. Fetch root contents list
             root_files = []
             try:
-                contents_res = await client.get(f"{repo_url}/contents", headers=headers)
-                if contents_res.status_code in (403, 429):
+                contents_res = await _github_get(client, f"{repo_url}/contents", headers=headers)
+                if contents_res.status_code in (401, 403, 429):
+                    diagnostics = _response_diagnostics(contents_res)
                     return VerificationResult(
                         status="failed",
-                        message=f"GitHub API access rate limited or forbidden for '{owner}/{repo}'.",
+                        message=_safe_failure_message(owner, repo, diagnostics),
                         provider=self.provider_name,
-                        raw_metadata={"owner": owner, "repo": repo, "http_status": contents_res.status_code},
+                        raw_metadata={"owner": owner, "repo": repo, "http_status": contents_res.status_code, "github_error": diagnostics},
                         verified_at=verified_at,
                     )
                 if contents_res.status_code >= 500:
@@ -1252,7 +1356,7 @@ class GitHubProvider(EvidenceProvider):
             package_json_deps = []
             if "package.json" in root_files:
                 try:
-                    pkg_res = await client.get(
+                    pkg_res = await _github_get(client,
                         f"https://raw.githubusercontent.com/{owner}/{repo}/{default_branch}/package.json",
                         headers=_get_github_headers(),
                         timeout=4.0,
@@ -1268,7 +1372,7 @@ class GitHubProvider(EvidenceProvider):
             py_deps = []
             if "requirements.txt" in root_files:
                 try:
-                    req_res = await client.get(
+                    req_res = await _github_get(client,
                         f"https://raw.githubusercontent.com/{owner}/{repo}/{default_branch}/requirements.txt",
                         headers=_get_github_headers(),
                         timeout=4.0,
@@ -1285,7 +1389,7 @@ class GitHubProvider(EvidenceProvider):
             has_workflows = False
             if ".github" in root_files:
                 try:
-                    wf_res = await client.get(f"{repo_url}/contents/.github/workflows", headers=headers)
+                    wf_res = await _github_get(client, f"{repo_url}/contents/.github/workflows", headers=headers)
                     has_workflows = wf_res.status_code == 200 and isinstance(wf_res.json(), list) and len(wf_res.json()) > 0
                 except Exception:
                     pass
@@ -1308,7 +1412,7 @@ class GitHubProvider(EvidenceProvider):
             test_file_count = 0
             total_tree_files = 0
             try:
-                tree_res = await client.get(
+                tree_res = await _github_get(client,
                     f"{repo_url}/git/trees/{default_branch}?recursive=1", headers=headers
                 )
                 if tree_res.status_code == 200 and isinstance(tree_res.json().get("tree"), list):
@@ -1387,7 +1491,7 @@ class GitHubProvider(EvidenceProvider):
             manifest_text = ""
             for candidate in manifest_candidates[:2]:
                 try:
-                    raw_res = await client.get(
+                    raw_res = await _github_get(client,
                         f"https://raw.githubusercontent.com/{owner}/{repo}/{default_branch}/{candidate}",
                         headers=_get_github_headers(),
                         timeout=4.0,
@@ -1418,7 +1522,7 @@ class GitHubProvider(EvidenceProvider):
 
             async def _fetch_raw(path: str) -> str:
                 try:
-                    r = await client.get(
+                    r = await _github_get(client,
                         f"https://raw.githubusercontent.com/{owner}/{repo}/{default_branch}/{path}",
                         headers=_get_github_headers(),
                         timeout=4.0,
@@ -1678,7 +1782,11 @@ class GitHubProvider(EvidenceProvider):
             "sort": "updated",
         }
         try:
-            res = await client.get(url, headers=hdrs, params=params)
+            # Repository discovery may return a partial page before quota is
+            # exhausted. Do not let that discovery response prevent the
+            # already-discovered repositories from being classified/inspected;
+            # deep-inspection requests still share the quota guard.
+            res = await _github_get(client, url, headers=hdrs, params=params, track_quota=False)
             is_limited, remaining, reset_time = _check_rate_limit(res)
             meta = {
                 "status_code": res.status_code,
@@ -1810,6 +1918,11 @@ class GitHubProvider(EvidenceProvider):
             primary_lang = repo_meta.get("language")
 
             classification_info = _classify_repository(repo_meta, owner, verified_at)
+            cache_key = "github:" + ":".join([
+                full_name.lower(),
+                str(repo_meta.get("pushed_at") or repo_meta.get("updated_at") or ""),
+                str(repo_meta.get("default_branch") or "main"),
+            ])
 
             # Check for pre-injected test mock inspection inside repository dict
             mock_insp = repo_meta.get("mock_inspection") or repo_meta.get("inspection")
@@ -1840,6 +1953,11 @@ class GitHubProvider(EvidenceProvider):
                     "inspection": compact_inspection(res.raw_metadata),
                 }
                 return summary, res.signals, None
+
+            cached = _INSPECTION_CACHE.get(cache_key)
+            if cached:
+                cached_summary, cached_signals = cached
+                return {**cached_summary, "cache": "revision"}, list(cached_signals), None
 
             # Skip network inspection for low evidence (empty / disabled) repos
             if classification_info["is_low_evidence"]:
@@ -1924,6 +2042,7 @@ class GitHubProvider(EvidenceProvider):
                             "status": "inspected",
                             "inspection": compact_inspection(result.raw_metadata),
                         }
+                        _INSPECTION_CACHE[cache_key] = (summary, list(result.signals))
                         return summary, result.signals, None
                     else:
                         logger.debug(f"GitHub profile @{owner}: repository inspection failed for {owner}/{repo_name}: {result.message}")
@@ -1945,6 +2064,8 @@ class GitHubProvider(EvidenceProvider):
                             "classification_details": classification_info,
                             "status": "failed",
                             "error": result.message,
+                            "error_category": (result.raw_metadata.get("github_error") or {}).get("category"),
+                            "inspection": compact_inspection(result.raw_metadata),
                         }
                         return summary, [], f"Inspection failed for '{owner}/{repo_name}': {result.message}"
                 except Exception as e:
@@ -1960,6 +2081,7 @@ class GitHubProvider(EvidenceProvider):
                         "classification": classification_info["classification"],
                         "status": "failed",
                         "error": str(e),
+                        "error_category": "network_or_internal",
                     }
                     return summary, [], f"Inspection exception for '{owner}/{repo_name}': {str(e)[:100]}"
 
@@ -2280,6 +2402,10 @@ class GitHubProvider(EvidenceProvider):
         headers = _get_github_headers()
         profile_url = f"https://api.github.com/users/{owner}"
         all_warnings: List[str] = []
+        if "Authorization" not in headers:
+            logger.warning("GitHub token is not configured; requests are unauthenticated.")
+        else:
+            logger.info("GitHub authentication: configured")
 
         mock_repos = None
         if evidence and isinstance(evidence, dict):
@@ -2295,7 +2421,7 @@ class GitHubProvider(EvidenceProvider):
                     logger.debug(f"GitHub profile @{owner}: loaded {len(all_repos)} repositories from mock evidence")
                 else:
                     # Verify user existence via /users/{owner}
-                    res = await client.get(profile_url, headers=headers)
+                    res = await _github_get(client, profile_url, headers=headers)
                     if res.status_code == 404:
                         return VerificationResult(
                             status="failed",
@@ -2304,12 +2430,13 @@ class GitHubProvider(EvidenceProvider):
                             raw_metadata={"owner": owner, "http_status": 404},
                             verified_at=verified_at,
                         )
-                    if res.status_code in (403, 429):
+                    if res.status_code in (401, 403, 429):
+                        diagnostics = _response_diagnostics(res)
                         return VerificationResult(
                             status="failed",
-                            message=f"GitHub API access rate limited or forbidden for user '{owner}'.",
+                            message=_safe_failure_message(owner, "", diagnostics),
                             provider=self.provider_name,
-                            raw_metadata={"owner": owner, "http_status": res.status_code},
+                            raw_metadata={"owner": owner, "http_status": res.status_code, "github_error": diagnostics},
                             verified_at=verified_at,
                         )
 
@@ -2414,6 +2541,13 @@ class GitHubProvider(EvidenceProvider):
                     "repositories_inspected": repos_inspected,
                     "repositories_failed": repos_failed,
                     "repositories_skipped": repos_skipped,
+                    "deep_inspection_status": "complete" if repos_failed == 0 and repos_skipped == 0 else ("partial" if repos_inspected > 0 else "failed"),
+                    "github_authentication_configured": "Authorization" in headers,
+                    "rate_limit_diagnostics": next((
+                        (r.get("inspection") or {}).get("github_error")
+                        for r in inspected_repos
+                        if isinstance((r.get("inspection") or {}).get("github_error"), dict)
+                    ), None),
                     "owned_repositories": owned_repos,
                     "forked_repositories": forked_repos,
                     "archived_repositories": archived_repos,

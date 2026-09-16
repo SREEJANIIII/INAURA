@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
+import { fetchTtsAudio } from "../services/tts";
 
-export type TTSState = "idle" | "speaking" | "unsupported" | "error";
+export type TTSState = "idle" | "speaking" | "error";
 
 export type UseTextToSpeechResult = {
   state: TTSState;
@@ -9,147 +10,105 @@ export type UseTextToSpeechResult = {
   isSupported: boolean;
 };
 
-function getSynthesis(): SpeechSynthesis | null {
-  if (typeof window === "undefined") return null;
-  return window.speechSynthesis || null;
-}
-
+/**
+ * NVIDIA voice via our FastAPI backend (`/interview/tts` → audio bytes →
+ * browser Audio). Resolves when playback ends so the modal transitions
+ * SPEAKING → LISTENING from completion; rejects on failure so the fallback
+ * UI appears. The browser never contacts NVIDIA directly.
+ */
 export function useTextToSpeech(): UseTextToSpeechResult {
   const [state, setState] = useState<TTSState>("idle");
-  const resolveRef = useRef<(() => void) | null>(null);
-  const speakingRef = useRef(false);
-  const activeUtteranceRef = useRef<SpeechSynthesisUtterance | null>(null);
-  const watchdogTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const audioRef = useRef<HTMLAudioElement | null>(null);
+  const urlRef = useRef<string | null>(null);
+  const requestRef = useRef(0);
+  const stopRef = useRef(false);
+  const pendingTextRef = useRef<string | null>(null);
+  const pendingDoneRef = useRef<(() => void) | null>(null);
+  const isSupported = typeof window !== "undefined" && typeof Audio !== "undefined";
 
-  const isSupported =
-    typeof window !== "undefined" && Boolean(window.speechSynthesis);
-
-  const clearWatchdog = useCallback(() => {
-    if (watchdogTimerRef.current !== null) {
-      clearTimeout(watchdogTimerRef.current);
-      watchdogTimerRef.current = null;
-    }
-  }, []);
-
-  const stop = useCallback(() => {
-    clearWatchdog();
-    const synth = getSynthesis();
-    if (synth) {
+  const release = useCallback(() => {
+    const audio = audioRef.current;
+    if (audio) {
+      audio.onended = null;
+      audio.onerror = null;
       try {
-        synth.cancel();
+        audio.pause();
+      } catch {
+        /* ignore */
+      }
+      try {
+        audio.src = "";
       } catch {
         /* ignore */
       }
     }
-    speakingRef.current = false;
-    activeUtteranceRef.current = null;
+    audioRef.current = null;
+    if (urlRef.current) URL.revokeObjectURL(urlRef.current);
+    urlRef.current = null;
+  }, []);
+
+  const stop = useCallback(() => {
+    stopRef.current = true;
+    requestRef.current += 1;
+    pendingTextRef.current = null;
+    pendingDoneRef.current?.();
+    pendingDoneRef.current = null;
+    release();
     setState("idle");
-    if (resolveRef.current) {
-      const r = resolveRef.current;
-      resolveRef.current = null;
-      r();
-    }
-  }, [clearWatchdog]);
+  }, [release]);
 
   useEffect(() => stop, [stop]);
 
   const speak = useCallback(
-    (text: string): Promise<void> => {
-      return new Promise((resolve) => {
-        clearWatchdog();
-        const synth = getSynthesis();
-        if (!synth || !text.trim()) {
-          if (!synth) setState("unsupported");
-          resolve();
-          return;
+    async (text: string) => {
+      if (!text.trim()) return;
+      if (!isSupported) throw new Error("Audio playback is not supported in this browser.");
+      // React re-renders can re-enter the same logical transition: an
+      // identical in-flight request joins instead of fetching/playing twice.
+      // An intentional Repeat after completion still creates a new request.
+      // NOTE: no frontend retry — the backend owns the single controlled
+      // retry; rate-limit/auth failures fail fast.
+      if (pendingTextRef.current === text) {
+        return new Promise<void>((resolve) => {
+          const previous = pendingDoneRef.current;
+          pendingDoneRef.current = () => {
+            previous?.();
+            resolve();
+          };
+        });
+      }
+      pendingTextRef.current = text;
+      pendingDoneRef.current = null;
+      stopRef.current = false;
+      const requestId = ++requestRef.current;
+      release();
+      setState("speaking");
+      try {
+        const blob = await fetchTtsAudio({ text });
+        if (stopRef.current || requestId !== requestRef.current) return;
+        const url = URL.createObjectURL(blob);
+        urlRef.current = url;
+        const audio = new Audio(url);
+        audioRef.current = audio;
+        await new Promise<void>((resolve, reject) => {
+          audio.onended = () => resolve();
+          audio.onerror = () => reject(new Error("AI voice playback failed."));
+          void audio.play().catch(reject);
+        });
+        if (requestId === requestRef.current) setState("idle");
+      } catch (error) {
+        if (!stopRef.current && requestId === requestRef.current) setState("error");
+        if (!stopRef.current) throw (error instanceof Error ? error : new Error("AI voice could not be generated."));
+      } finally {
+        if (pendingTextRef.current === text) {
+          pendingTextRef.current = null;
+          const done = pendingDoneRef.current as (() => void) | null;
+          pendingDoneRef.current = null;
+          done?.();
         }
-
-        try {
-          synth.cancel();
-        } catch {
-          /* ignore */
-        }
-
-        const utterance = new SpeechSynthesisUtterance(text);
-        activeUtteranceRef.current = utterance; // Prevent garbage collection in Chrome
-
-        utterance.lang = "en-US";
-        utterance.rate = 1.0;
-        utterance.pitch = 1.0;
-
-        try {
-          const voices = synth.getVoices() || [];
-          const preferred = voices.find(
-            (v) =>
-              v.lang.startsWith("en") &&
-              (v.name.includes("Google") ||
-                v.name.includes("Natural") ||
-                v.name.includes("Samantha") ||
-                v.name.includes("Karen") ||
-                v.name.includes("Daniel"))
-          );
-          if (preferred) utterance.voice = preferred;
-        } catch {
-          /* best-effort voice selection */
-        }
-
-        speakingRef.current = true;
-        setState("speaking");
-
-        const finish = () => {
-          clearWatchdog();
-          speakingRef.current = false;
-          activeUtteranceRef.current = null;
-          setState("idle");
-          if (resolveRef.current) {
-            const r = resolveRef.current;
-            resolveRef.current = null;
-            r();
-          }
-        };
-
-        resolveRef.current = resolve;
-
-        utterance.onend = () => {
-          finish();
-        };
-
-        utterance.onerror = (ev: SpeechSynthesisErrorEvent) => {
-          if (ev.error === "canceled" || ev.error === "interrupted") {
-            finish();
-            return;
-          }
-          console.warn("Speech synthesis error:", ev.error);
-          setState("error");
-          finish();
-        };
-
-        // Watchdog: If browser drops onend or hangs, automatically finish
-        const estimatedMs = Math.max(8000, text.length * 120);
-        watchdogTimerRef.current = setTimeout(() => {
-          if (speakingRef.current) {
-            console.warn("Speech synthesis watchdog triggered after", estimatedMs, "ms");
-            finish();
-          }
-        }, estimatedMs);
-
-        try {
-          if (synth.paused) {
-            synth.resume();
-          }
-          synth.speak(utterance);
-          if (synth.paused) {
-            synth.resume();
-          }
-        } catch {
-          speakingRef.current = false;
-          activeUtteranceRef.current = null;
-          setState("error");
-          finish();
-        }
-      });
-    },
-    [clearWatchdog]
+        if (requestId === requestRef.current) release();
+      }
+    }, [isSupported, release]
   );
 
   return { state, speak, stop, isSupported };
