@@ -1,14 +1,11 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 
-<<<<<<< HEAD
-export type MediaDeviceState = "idle" | "requesting" | "live" | "denied" | "unavailable" | "off" | "muted";
-=======
 export type MediaDeviceState = "idle" | "requesting" | "live" | "denied" | "unavailable" | "off" | "muted" | "skipped";
->>>>>>> cd816cd7af05b78146197492a0c4f6a7d6cd19d9
 
 export type MediaResult = {
   camera: "live" | "denied" | "unavailable";
   microphone: "live" | "denied" | "unavailable";
+  /** At least one device is usable for the interview. */
   usable: boolean;
 };
 
@@ -20,9 +17,11 @@ export type UseMediaDevicesResult = {
   micLevel: number;
   cameraEnabled: boolean;
   micEnabled: boolean;
-  stream: MediaStream | null;
+  /** Request both camera + mic. Returns structured result. */
   requestMedia: () => Promise<MediaResult>;
+  /** Retry only the camera. */
   requestCamera: () => Promise<"live" | "denied" | "unavailable">;
+  /** Retry only the microphone. */
   requestMicrophone: () => Promise<"live" | "denied" | "unavailable">;
   toggleCamera: () => void;
   toggleMic: () => void;
@@ -32,27 +31,20 @@ export type UseMediaDevicesResult = {
 
 function stopTracks(stream: MediaStream | null) {
   stream?.getTracks().forEach((t) => {
-    try {
-      t.stop();
-    } catch {
-      /* ignore */
-    }
+    try { t.stop(); } catch { /* ignore */ }
   });
 }
 
 function kindFromError(e: unknown): "denied" | "unavailable" {
-  const name = e instanceof DOMException ? e.name : (e as Error)?.name || "";
-  if (name === "NotAllowedError" || name === "SecurityError" || name === "PermissionDeniedError") return "denied";
-  return "unavailable";
+  const name = e instanceof DOMException ? e.name : "";
+  return name === "NotAllowedError" || name === "SecurityError" ? "denied" : "unavailable";
 }
 
 export function useMediaDevices(): UseMediaDevicesResult {
   const videoRef = useRef<HTMLVideoElement | null>(null);
   const streamRef = useRef<MediaStream | null>(null);
   const audioCtxRef = useRef<AudioContext | null>(null);
-  const analyserRef = useRef<AnalyserNode | null>(null);
   const rafRef = useRef<number | null>(null);
-  const attachedStreamRef = useRef<MediaStream | null>(null);
 
   const [camState, setCamState] = useState<MediaDeviceState>("idle");
   const [micState, setMicState] = useState<MediaDeviceState>("idle");
@@ -60,28 +52,9 @@ export function useMediaDevices(): UseMediaDevicesResult {
   const [cameraEnabled, setCameraEnabled] = useState(true);
   const [micEnabled, setMicEnabled] = useState(true);
   const [error, setError] = useState<string | null>(null);
-  const [streamVersion, setStreamVersion] = useState(0);
-  const [stream, setStream] = useState<MediaStream | null>(null);
 
   const startMicMeter = useCallback((stream: MediaStream) => {
     try {
-      if (audioCtxRef.current) {
-        try {
-          audioCtxRef.current.close();
-        } catch {
-          /* ignore */
-        }
-        audioCtxRef.current = null;
-      }
-      if (rafRef.current !== null) {
-        cancelAnimationFrame(rafRef.current);
-        rafRef.current = null;
-      }
-      const hasAudio = stream.getAudioTracks().length > 0 && stream.getAudioTracks().some((t) => t.enabled);
-      if (!hasAudio) {
-        setMicLevel(0);
-        return;
-      }
       const Ctx = window.AudioContext || (window as unknown as { webkitAudioContext: typeof AudioContext }).webkitAudioContext;
       if (!Ctx) return;
       const ctx: AudioContext = new Ctx();
@@ -89,19 +62,16 @@ export function useMediaDevices(): UseMediaDevicesResult {
       const src = ctx.createMediaStreamSource(stream);
       const analyser = ctx.createAnalyser();
       analyser.fftSize = 256;
-      analyserRef.current = analyser;
       src.connect(analyser);
       const buf = new Uint8Array(analyser.frequencyBinCount);
       const tick = () => {
-        if (!audioCtxRef.current || !analyserRef.current) return;
         analyser.getByteTimeDomainData(buf);
         let sum = 0;
         for (let i = 0; i < buf.length; i++) {
           const v = (buf[i] - 128) / 128;
           sum += v * v;
         }
-        const level = Math.min(1, Math.sqrt(sum / buf.length) * 3.5);
-        setMicLevel(level);
+        setMicLevel(Math.min(1, Math.sqrt(sum / buf.length) * 3));
         rafRef.current = requestAnimationFrame(tick);
       };
       tick();
@@ -110,18 +80,26 @@ export function useMediaDevices(): UseMediaDevicesResult {
     }
   }, []);
 
-  const stopMicMeter = useCallback(() => {
+  const attachVideo = useCallback(async (stream: MediaStream) => {
+    const el = videoRef.current;
+    if (!el) return;
+    const hasVideo = stream.getVideoTracks().length > 0;
+    if (hasVideo) {
+      el.srcObject = stream;
+      try { await el.play(); } catch { /* autoplay blocked */ }
+    }
+  }, []);
+
+  const stopAll = useCallback(() => {
     if (rafRef.current !== null) {
       cancelAnimationFrame(rafRef.current);
       rafRef.current = null;
     }
-    try {
-      audioCtxRef.current?.close();
-    } catch {
-      /* ignore */
-    }
+    try { audioCtxRef.current?.close(); } catch { /* ignore */ }
     audioCtxRef.current = null;
-    analyserRef.current = null;
+    stopTracks(streamRef.current);
+    streamRef.current = null;
+    if (videoRef.current) videoRef.current.srcObject = null;
     setMicLevel(0);
     setCamState("idle");
     setMicState("idle");
@@ -129,90 +107,23 @@ export function useMediaDevices(): UseMediaDevicesResult {
     setMicEnabled(true);
   }, []);
 
-  const attachVideo = useCallback(async (stream: MediaStream | null) => {
-    const el = videoRef.current;
-    if (!el || !stream) return;
-    const hasVideo = stream.getVideoTracks().length > 0;
-    if (!hasVideo) return;
-    if (attachedStreamRef.current === stream && el.srcObject === stream) return;
-    try {
-      el.srcObject = stream;
-      attachedStreamRef.current = stream;
-      // playsInline + muted + autoPlay are set in JSX
-      const playPromise = el.play();
-      if (playPromise) await playPromise.catch(() => {});
-    } catch {
-      /* autoplay blocked is ok, still attached */
-    }
-  }, []);
+  // Cleanup on unmount
+  useEffect(() => stopAll, [stopAll]);
 
-  // Keep video attached when stream changes or when video element mounts
-  // This effect handles the case where stream is acquired before <video> exists
-  useEffect(() => {
-    if (streamRef.current && videoRef.current) {
-      void attachVideo(streamRef.current);
+  const mergeStream = useCallback((existing: MediaStream | null, patch: MediaStream | null): MediaStream => {
+    const tracks: MediaStreamTrack[] = [];
+    if (existing) {
+      tracks.push(...existing.getVideoTracks());
+      tracks.push(...existing.getAudioTracks());
     }
-  }, [streamVersion, camState, attachVideo]);
-
-  const stopAll = useCallback(() => {
-    stopMicMeter();
-    stopTracks(streamRef.current);
-    streamRef.current = null;
-    setStream(null);
-    attachedStreamRef.current = null;
-    if (videoRef.current) {
-      try {
-        videoRef.current.srcObject = null;
-      } catch {
-        /* ignore */
+    if (patch) {
+      // Add tracks from patch that don't already exist (by kind)
+      for (const track of patch.getTracks()) {
+        const alreadyHas = tracks.some((t) => t.kind === track.kind);
+        if (!alreadyHas) tracks.push(track);
       }
     }
-    setStreamVersion((v) => v + 1);
-  }, [stopMicMeter]);
-
-  useEffect(() => {
-    return () => {
-      stopAll();
-    };
-  }, [stopAll]);
-
-  const mergeTracks = useCallback((existing: MediaStream | null, incoming: MediaStream): MediaStream => {
-    if (!existing) return incoming;
-    // Create a new stream that contains latest tracks for each kind
-    const existingTracks = existing.getTracks();
-    const incomingTracks = incoming.getTracks();
-
-    // Map incoming by kind
-    const incomingByKind = new Map<string, MediaStreamTrack>();
-    incomingTracks.forEach((t) => incomingByKind.set(t.kind, t));
-
-    const finalTracks: MediaStreamTrack[] = [];
-
-    // For each kind, prefer incoming if present, else keep existing
-    const kinds = new Set<string>([...existingTracks.map((t) => t.kind), ...incomingTracks.map((t) => t.kind)]);
-    kinds.forEach((kind) => {
-      const incomingTrack = incomingByKind.get(kind);
-      if (incomingTrack) {
-        // Stop old track of same kind
-        existingTracks
-          .filter((t) => t.kind === kind)
-          .forEach((t) => {
-            try {
-              t.stop();
-            } catch {
-              /* ignore */
-            }
-          });
-        finalTracks.push(incomingTrack);
-      } else {
-        // Keep existing tracks of this kind
-        existingTracks
-          .filter((t) => t.kind === kind)
-          .forEach((t) => finalTracks.push(t));
-      }
-    });
-
-    return new MediaStream(finalTracks);
+    return new MediaStream(tracks);
   }, []);
 
   const requestMedia = useCallback(async (): Promise<MediaResult> => {
@@ -229,9 +140,8 @@ export function useMediaDevices(): UseMediaDevicesResult {
 
     let camResult: "live" | "denied" | "unavailable";
     let micResult: "live" | "denied" | "unavailable";
-    let combinedStream: MediaStream | null = streamRef.current;
 
-    // Try joint request first (user gesture)
+    // Request both together first
     try {
       const stream = await navigator.mediaDevices.getUserMedia({ video: true, audio: true });
       const hasVideo = stream.getVideoTracks().length > 0;
@@ -239,181 +149,116 @@ export function useMediaDevices(): UseMediaDevicesResult {
       camResult = hasVideo ? "live" : "unavailable";
       micResult = hasAudio ? "live" : "unavailable";
 
-      if (combinedStream) {
-        // Merge existing with new joint stream
-        combinedStream = mergeTracks(combinedStream, stream);
-        // If merge created a new stream, the old joint stream's tracks that were not merged are already stopped inside mergeTracks
-        // But if we didn't use mergeTracks correctly for joint, we need to handle
-        // For joint, we just replace entirely to avoid duplication
-        // Actually for joint success, we can just use the new stream plus any existing that wasn't in new?
-        // Simpler: if we had existing, merge; else use new
-      } else {
-        combinedStream = stream;
-      }
-
-      // If joint succeeded but had only one kind, we still have that kind
-      if (camResult === "live") setCamState("live");
-      else setCamState("unavailable");
-      if (micResult === "live") setMicState("live");
-      else setMicState("unavailable");
-    } catch (jointErr) {
-      const jointKind = kindFromError(jointErr);
-      camResult = jointKind;
-      micResult = jointKind;
-      // Don't set states yet, will try individually
-    }
-
-    // If joint didn't give us both, try individually
-    if (camResult !== "live") {
-      try {
-        const camStream = await navigator.mediaDevices.getUserMedia({ video: true, audio: false });
-        const hasVideo = camStream.getVideoTracks().length > 0;
-        if (hasVideo) {
-          camResult = "live";
-          if (combinedStream) {
-            combinedStream = mergeTracks(combinedStream, camStream);
-          } else {
-            combinedStream = camStream;
-          }
-          setCamState("live");
-        } else {
-          camResult = "unavailable";
-          setCamState("unavailable");
-          camStream.getTracks().forEach((t) => t.stop());
+      // Merge with existing tracks
+      const merged = mergeStream(streamRef.current, stream);
+      // Stop the old tracks we just replaced
+      if (streamRef.current) {
+        for (const old of streamRef.current.getTracks()) {
+          if (!merged.getTracks().includes(old)) old.stop();
         }
-      } catch (e) {
-        camResult = kindFromError(e);
-        setCamState(camResult);
       }
+      streamRef.current = merged;
+      setCamState(camResult === "live" ? "live" : "unavailable");
+      setMicState(micResult === "live" ? "live" : "unavailable");
+      if (micResult === "live") startMicMeter(merged);
+      await attachVideo(merged);
+    } catch (jointErr) {
+      // Joint request failed — try individually
+      camResult = kindFromError(jointErr);
+      micResult = kindFromError(jointErr);
+      setCamState(camResult === "denied" ? "denied" : "unavailable");
+      setMicState(micResult === "denied" ? "denied" : "unavailable");
     }
 
+    // If mic specifically failed, try mic alone (camera may be working from old stream)
     if (micResult !== "live") {
       try {
         const micStream = await navigator.mediaDevices.getUserMedia({ video: false, audio: true });
-        const hasAudio = micStream.getAudioTracks().length > 0;
-        if (hasAudio) {
-          micResult = "live";
-          if (combinedStream) {
-            combinedStream = mergeTracks(combinedStream, micStream);
-          } else {
-            combinedStream = micStream;
-          }
+        micResult = micStream.getAudioTracks().length > 0 ? "live" : "unavailable";
+        if (micResult === "live") {
+          const merged = mergeStream(streamRef.current, micStream);
+          streamRef.current = merged;
           setMicState("live");
-        } else {
-          micResult = "unavailable";
-          setMicState("unavailable");
-          micStream.getTracks().forEach((t) => t.stop());
+          startMicMeter(merged);
         }
-      } catch (e) {
-        micResult = kindFromError(e);
-        setMicState(micResult);
+      } catch {
+        micResult = kindFromError(new Error());
+        setMicState(micResult === "denied" ? "denied" : "unavailable");
       }
     }
 
-    // Update stream ref
-    if (combinedStream) {
-      streamRef.current = combinedStream;
-      setStream(combinedStream);
-      // Sync enabled flags
-      const vTrack = combinedStream.getVideoTracks()[0];
-      const aTrack = combinedStream.getAudioTracks()[0];
-      setCameraEnabled(vTrack ? vTrack.enabled : false);
-      setMicEnabled(aTrack ? aTrack.enabled : false);
-      if (micResult === "live") startMicMeter(combinedStream);
-      await attachVideo(combinedStream);
-      setStreamVersion((v) => v + 1);
+    // If cam specifically failed, try camera alone
+    if (camResult !== "live") {
+      try {
+        const camStream = await navigator.mediaDevices.getUserMedia({ video: true, audio: false });
+        camResult = camStream.getVideoTracks().length > 0 ? "live" : "unavailable";
+        if (camResult === "live") {
+          const merged = mergeStream(streamRef.current, camStream);
+          streamRef.current = merged;
+          setCamState("live");
+          await attachVideo(merged);
+        }
+      } catch {
+        camResult = kindFromError(new Error());
+        setCamState(camResult === "denied" ? "denied" : "unavailable");
+      }
     }
 
     const usable = camResult === "live" || micResult === "live";
     if (!usable) {
-      if (camResult === "denied" || micResult === "denied") {
-        setError("Camera and microphone permission denied. Please allow access in your browser and try again.");
-      } else {
-        setError("Camera and microphone are both unavailable. Please check your devices and browser permissions.");
-      }
-    } else if (camResult !== "live" && micResult === "live") {
-      setError("Camera unavailable — continuing with microphone only. You can recheck camera anytime.");
-      // Keep error but allow interview
-      setTimeout(() => setError(null), 4000);
-    } else if (micResult !== "live" && camResult === "live") {
-      setError("Microphone unavailable — interview will continue with camera only. You can recheck microphone or type answers.");
-      setTimeout(() => setError(null), 4000);
-    } else {
-      setError(null);
+      setError("Camera and microphone are both unavailable. Please check your browser permissions.");
+    } else if (camResult !== "live") {
+      setError("Camera unavailable — continuing with microphone only.");
+    } else if (micResult !== "live") {
+      setError("Microphone unavailable — you can still see the interviewer but may need to type answers.");
     }
 
     return { camera: camResult, microphone: micResult, usable };
-  }, [attachVideo, mergeTracks, startMicMeter]);
+  }, [mergeStream, attachVideo, startMicMeter]);
 
   const requestCamera = useCallback(async (): Promise<"live" | "denied" | "unavailable"> => {
-    if (!navigator.mediaDevices?.getUserMedia) {
-      setCamState("unavailable");
-      return "unavailable";
-    }
+    if (!navigator.mediaDevices?.getUserMedia) return "unavailable";
     setCamState("requesting");
-    setError(null);
     try {
       const stream = await navigator.mediaDevices.getUserMedia({ video: true, audio: false });
       const hasVideo = stream.getVideoTracks().length > 0;
-      if (!hasVideo) {
-        setCamState("unavailable");
-        stream.getTracks().forEach((t) => t.stop());
-        setError("No camera found on this device.");
-        return "unavailable";
+      if (!hasVideo) { setCamState("unavailable"); return "unavailable"; }
+      const merged = mergeStream(streamRef.current, stream);
+      if (streamRef.current) {
+        for (const old of streamRef.current.getVideoTracks()) old.stop();
       }
-      const merged = streamRef.current ? mergeTracks(streamRef.current, stream) : stream;
       streamRef.current = merged;
-      setStream(merged);
-      const vTrack = merged.getVideoTracks()[0];
-      setCameraEnabled(vTrack ? vTrack.enabled : true);
       setCamState("live");
       await attachVideo(merged);
-      setStreamVersion((v) => v + 1);
-      setError(null);
       return "live";
     } catch (e) {
       const r = kindFromError(e);
-      setCamState(r);
-      if (r === "denied") setError("Camera permission denied. Please allow camera access in your browser settings and try again.");
-      else setError("Camera unavailable — no camera found or it is in use by another app.");
+      setCamState(r === "denied" ? "denied" : "unavailable");
       return r;
     }
-  }, [attachVideo, mergeTracks]);
+  }, [mergeStream, attachVideo]);
 
   const requestMicrophone = useCallback(async (): Promise<"live" | "denied" | "unavailable"> => {
-    if (!navigator.mediaDevices?.getUserMedia) {
-      setMicState("unavailable");
-      return "unavailable";
-    }
+    if (!navigator.mediaDevices?.getUserMedia) return "unavailable";
     setMicState("requesting");
-    setError(null);
     try {
       const stream = await navigator.mediaDevices.getUserMedia({ video: false, audio: true });
       const hasAudio = stream.getAudioTracks().length > 0;
-      if (!hasAudio) {
-        setMicState("unavailable");
-        stream.getTracks().forEach((t) => t.stop());
-        setError("No microphone found on this device.");
-        return "unavailable";
+      if (!hasAudio) { setMicState("unavailable"); return "unavailable"; }
+      const merged = mergeStream(streamRef.current, stream);
+      if (streamRef.current) {
+        for (const old of streamRef.current.getAudioTracks()) old.stop();
       }
-      const merged = streamRef.current ? mergeTracks(streamRef.current, stream) : stream;
       streamRef.current = merged;
-      setStream(merged);
-      const aTrack = merged.getAudioTracks()[0];
-      setMicEnabled(aTrack ? aTrack.enabled : true);
       setMicState("live");
       startMicMeter(merged);
-      setStreamVersion((v) => v + 1);
-      setError(null);
       return "live";
     } catch (e) {
       const r = kindFromError(e);
-      setMicState(r);
-      if (r === "denied") setError("Microphone permission denied. Please allow microphone access and try again.");
-      else setError("Microphone unavailable — no microphone found or it is in use.");
+      setMicState(r === "denied" ? "denied" : "unavailable");
       return r;
     }
-  }, [mergeTracks, startMicMeter]);
+  }, [mergeStream, startMicMeter]);
 
   const setVideoRef = useCallback((el: HTMLVideoElement | null) => {
     videoRef.current = el;
@@ -427,47 +272,17 @@ export function useMediaDevices(): UseMediaDevicesResult {
     const stream = streamRef.current;
     if (!stream) return;
     const videoTrack = stream.getVideoTracks()[0];
-<<<<<<< HEAD
-    if (!videoTrack) {
-      // Try to request camera if none exists
-      void requestCamera();
-      return;
-    }
-    videoTrack.enabled = !videoTrack.enabled;
-    setCameraEnabled(videoTrack.enabled);
-    setCamState(videoTrack.enabled ? "live" : "off");
-    if (videoTrack.enabled) {
-      void attachVideo(stream);
-    }
-  }, [requestCamera, attachVideo]);
-=======
     if (!videoTrack) return;
     const next = !videoTrack.enabled;
     videoTrack.enabled = next;
     setCameraEnabled(next);
     setCamState(next ? "live" : "off");
   }, []);
->>>>>>> cd816cd7af05b78146197492a0c4f6a7d6cd19d9
 
   const toggleMic = useCallback(() => {
     const stream = streamRef.current;
     if (!stream) return;
     const audioTrack = stream.getAudioTracks()[0];
-<<<<<<< HEAD
-    if (!audioTrack) {
-      void requestMicrophone();
-      return;
-    }
-    audioTrack.enabled = !audioTrack.enabled;
-    setMicEnabled(audioTrack.enabled);
-    setMicState(audioTrack.enabled ? "live" : "muted");
-    if (audioTrack.enabled) {
-      startMicMeter(stream);
-    } else {
-      setMicLevel(0);
-      stopMicMeter();
-      // Restart meter after? No, muted means disabled
-=======
     if (!audioTrack) return;
     const next = !audioTrack.enabled;
     audioTrack.enabled = next;
@@ -483,29 +298,8 @@ export function useMediaDevices(): UseMediaDevicesResult {
         videoRef.current.srcObject = streamRef.current;
         videoRef.current.play().catch(() => {});
       }
->>>>>>> cd816cd7af05b78146197492a0c4f6a7d6cd19d9
     }
-  }, [requestMicrophone, startMicMeter, stopMicMeter]);
-
-  // Attach video when camState becomes live or stream changes
-  useEffect(() => {
-    if (camState === "live" && streamRef.current && videoRef.current) {
-      void attachVideo(streamRef.current);
-    }
-  }, [camState, streamVersion, attachVideo]);
-
-  // Polling fallback: stream may be acquired before video element mounts (core Let's Begin bug)
-  // This ensures attachment once video element exists, even if camState hasn't changed
-  useEffect(() => {
-    if (camState !== "live") return;
-    const interval = setInterval(() => {
-      if (videoRef.current && streamRef.current && videoRef.current.srcObject !== streamRef.current) {
-        const hasVideo = streamRef.current.getVideoTracks().length > 0;
-        if (hasVideo) void attachVideo(streamRef.current);
-      }
-    }, 150);
-    return () => clearInterval(interval);
-  }, [camState, attachVideo]);
+  }, [camState]);
 
   return {
     videoRef,
@@ -515,7 +309,6 @@ export function useMediaDevices(): UseMediaDevicesResult {
     micLevel,
     cameraEnabled,
     micEnabled,
-    stream,
     requestMedia,
     requestCamera,
     requestMicrophone,

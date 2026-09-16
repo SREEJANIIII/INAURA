@@ -3,30 +3,22 @@ import { useCallback, useEffect, useRef, useState } from "react";
 export type SpeechState = "idle" | "listening" | "error" | "unsupported";
 
 export type UseSpeechRecognitionOptions = {
-<<<<<<< HEAD
-  /** Ms of silence after meaningful speech before auto-submitting. 0 = disabled. */
-=======
   /** Ms of silence after speech before auto-stopping. Defaults to 2800ms. */
->>>>>>> cd816cd7af05b78146197492a0c4f6a7d6cd19d9
   silenceTimeout?: number;
-  /** Minimum characters to consider speech meaningful */
-  minChars?: number;
 };
 
 export type UseSpeechRecognitionResult = {
   state: SpeechState;
   interimTranscript: string;
   finalTranscript: string;
+  /** Combined final + interim for live display. */
   liveTranscript: string;
   start: () => void;
   stop: () => string;
   reset: () => void;
   isSupported: boolean;
-<<<<<<< HEAD
-=======
   hasSpoken: boolean;
   /** Wire the silence callback. Call this to connect your handler. */
->>>>>>> cd816cd7af05b78146197492a0c4f6a7d6cd19d9
   setOnSilence: (cb: (transcript: string) => void) => void;
 };
 
@@ -96,18 +88,11 @@ function normalizeTechnicalTerms(text: string): string {
 export function useSpeechRecognition(
   opts: UseSpeechRecognitionOptions = {}
 ): UseSpeechRecognitionResult {
-<<<<<<< HEAD
-  const { silenceTimeout = 2600, minChars = 2 } = opts;
-  const [state, setState] = useState<SpeechState>("idle");
-  const [interimTranscript, setInterimTranscript] = useState("");
-  const [finalTranscript, setFinalTranscript] = useState("");
-=======
   const { silenceTimeout = 2800 } = opts;
   const [state, setState] = useState<SpeechState>("idle");
   const [interimTranscript, setInterimTranscript] = useState("");
   const [finalTranscript, setFinalTranscript] = useState("");
   const [hasSpoken, setHasSpoken] = useState(false);
->>>>>>> cd816cd7af05b78146197492a0c4f6a7d6cd19d9
 
   const recogRef = useRef<SpeechRecognitionInstance | null>(null);
   const activeRef = useRef(false);
@@ -115,15 +100,9 @@ export function useSpeechRecognition(
   const silenceTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const onSilenceRef = useRef<((t: string) => void) | null>(null);
   const finalTranscriptRef = useRef("");
-<<<<<<< HEAD
-  const interimRef = useRef("");
-  const lastSubmittedRef = useRef("");
-  const submittedRef = useRef(false);
-=======
   const interimTranscriptRef = useRef("");
   const isSubmittedRef = useRef(false);
   const restartAttemptsRef = useRef(0);
->>>>>>> cd816cd7af05b78146197492a0c4f6a7d6cd19d9
 
   const isSupported =
     typeof window !== "undefined" &&
@@ -136,49 +115,6 @@ export function useSpeechRecognition(
     }
   }, []);
 
-<<<<<<< HEAD
-  const submitIfNeeded = useCallback((transcript: string) => {
-    const trimmed = transcript.trim();
-    if (!trimmed) return false;
-    if (trimmed.length < minChars) return false;
-    if (submittedRef.current) return false;
-    if (trimmed === lastSubmittedRef.current) return false;
-    if (trimmed.split(/\s+/).filter(Boolean).length === 0) return false;
-    submittedRef.current = true;
-    lastSubmittedRef.current = trimmed;
-    onSilenceRef.current?.(trimmed);
-    return true;
-  }, [minChars]);
-
-  const resetSilenceTimer = useCallback((currentCombined: string) => {
-    if (silenceTimeout <= 0) return;
-    if (!hasSpokenRef.current) return;
-    clearSilenceTimer();
-    const snapshot = currentCombined.trim();
-    if (!snapshot) return;
-    silenceTimerRef.current = setTimeout(() => {
-      if (!activeRef.current || submittedRef.current) return;
-      // Stop recognition first to get final flush, then submit
-      try {
-        recogRef.current?.stop();
-      } catch {
-        /* ignore */
-      }
-      // Give onend a moment to fire, but also submit directly with snapshot as fallback
-      // Use finalTranscriptRef as source of truth
-      setTimeout(() => {
-        if (submittedRef.current) return;
-        const final = finalTranscriptRef.current.trim() || snapshot;
-        if (final && hasSpokenRef.current) {
-          activeRef.current = false;
-          setState("idle");
-          setInterimTranscript("");
-          submitIfNeeded(final);
-        }
-      }, 250);
-    }, silenceTimeout);
-  }, [silenceTimeout, clearSilenceTimer, submitIfNeeded]);
-=======
   const submitTranscript = useCallback((transcript: string) => {
     const cleaned = normalizeTechnicalTerms(transcript.trim());
     if (!cleaned || isSubmittedRef.current) return;
@@ -209,7 +145,6 @@ export function useSpeechRecognition(
       }
     }, silenceTimeout);
   }, [silenceTimeout, clearSilenceTimer, submitTranscript]);
->>>>>>> cd816cd7af05b78146197492a0c4f6a7d6cd19d9
 
   const cleanup = useCallback(() => {
     clearSilenceTimer();
@@ -219,16 +154,9 @@ export function useSpeechRecognition(
       } catch {
         /* ignore */
       }
-<<<<<<< HEAD
-      recogRef.current.onresult = null;
-      recogRef.current.onend = null;
-      recogRef.current.onerror = null;
-=======
->>>>>>> cd816cd7af05b78146197492a0c4f6a7d6cd19d9
       recogRef.current = null;
     }
     activeRef.current = false;
-    hasSpokenRef.current = false;
   }, [clearSilenceTimer]);
 
   useEffect(() => cleanup, [cleanup]);
@@ -240,16 +168,6 @@ export function useSpeechRecognition(
     }
     if (activeRef.current) return;
 
-<<<<<<< HEAD
-    // Reset per-question state BEFORE starting new recognition
-    clearSilenceTimer();
-    hasSpokenRef.current = false;
-    submittedRef.current = false;
-    finalTranscriptRef.current = "";
-    interimRef.current = "";
-    setFinalTranscript("");
-    setInterimTranscript("");
-=======
     // Reset cycle tracking
     clearSilenceTimer();
     isSubmittedRef.current = false;
@@ -259,7 +177,6 @@ export function useSpeechRecognition(
     interimTranscriptRef.current = "";
     // Note: finalTranscriptRef is preserved unless reset() was called,
     // but in normal question cycle reset() is called before start().
->>>>>>> cd816cd7af05b78146197492a0c4f6a7d6cd19d9
 
     try {
       const Impl = window.SpeechRecognition || window.webkitSpeechRecognition;
@@ -275,16 +192,6 @@ export function useSpeechRecognition(
       recog.maxAlternatives = 1;
 
       recog.onresult = (ev: SpeechRecognitionEvent) => {
-<<<<<<< HEAD
-        // Rebuild full final transcript from all results (prevents duplication)
-        let fullFinal = "";
-        let currentInterim = "";
-        for (let i = 0; i < ev.results.length; i++) {
-          const res = ev.results[i];
-          const txt = res[0]?.transcript || "";
-          if (res.isFinal) {
-            fullFinal += txt + " ";
-=======
         let interim = "";
         let newFinal = "";
         for (let i = ev.resultIndex; i < ev.results.length; i++) {
@@ -292,32 +199,10 @@ export function useSpeechRecognition(
           const t = res[0].transcript;
           if (res.isFinal) {
             newFinal += t;
->>>>>>> cd816cd7af05b78146197492a0c4f6a7d6cd19d9
           } else {
-            currentInterim += txt + " ";
+            interim += t;
           }
         }
-<<<<<<< HEAD
-        fullFinal = fullFinal.trim();
-        currentInterim = currentInterim.trim();
-
-        // Update refs and state
-        finalTranscriptRef.current = fullFinal;
-        interimRef.current = currentInterim;
-        setFinalTranscript(fullFinal);
-        setInterimTranscript(currentInterim);
-
-        const combined = [fullFinal, currentInterim].filter(Boolean).join(" ").trim();
-
-        // Detect meaningful speech
-        if (combined && combined.length >= minChars && !hasSpokenRef.current) {
-          hasSpokenRef.current = true;
-        }
-
-        // Only start/refresh silence timer after meaningful speech
-        if (hasSpokenRef.current && combined) {
-          resetSilenceTimer(combined);
-=======
 
         if (newFinal) {
           const updated = finalTranscriptRef.current
@@ -340,37 +225,14 @@ export function useSpeechRecognition(
           hasSpokenRef.current = true;
           setHasSpoken(true);
           scheduleSilenceTimer();
->>>>>>> cd816cd7af05b78146197492a0c4f6a7d6cd19d9
         }
       };
 
       recog.onend = () => {
-<<<<<<< HEAD
-        clearSilenceTimer();
-        if (!activeRef.current) {
-          // Already handled via silence timer or manual stop
-          setState("idle");
-          return;
-        }
-        activeRef.current = false;
-        const transcript = finalTranscriptRef.current.trim() || interimRef.current.trim();
-        setInterimTranscript("");
-        if (transcript && hasSpokenRef.current && !submittedRef.current) {
-          setState("idle");
-          submitIfNeeded(transcript);
-        } else {
-          // No meaningful speech: don't submit, just idle. InterviewModal will handle empty prompt.
-          setState("idle");
-          if (!transcript || !hasSpokenRef.current) {
-            // Signal empty via onSilence with empty? No, let modal detect idle with no submission and reprompt
-            // We do not auto-submit empty
-          }
-=======
         // If intentionally stopped or submitted, exit
         if (!activeRef.current || isSubmittedRef.current) {
           setState("idle");
           return;
->>>>>>> cd816cd7af05b78146197492a0c4f6a7d6cd19d9
         }
 
         // If candidate spoke and browser closed recognition before silence timer:
@@ -402,37 +264,6 @@ export function useSpeechRecognition(
       };
 
       recog.onerror = (ev: SpeechRecognitionErrorEvent) => {
-<<<<<<< HEAD
-        const err = ev.error;
-        if (err === "no-speech") {
-          // No speech detected for a while – treat as idle, not error. Modal will reprompt if needed.
-          clearSilenceTimer();
-          // Keep activeRef true? No, recognition ends on no-speech, we should go idle
-          activeRef.current = false;
-          setState("idle");
-          setInterimTranscript("");
-          return;
-        }
-        if (err === "aborted") {
-          clearSilenceTimer();
-          activeRef.current = false;
-          setState("idle");
-          setInterimTranscript("");
-          return;
-        }
-        if (err === "not-allowed" || err === "service-not-allowed") {
-          clearSilenceTimer();
-          activeRef.current = false;
-          setState("error");
-          setInterimTranscript("");
-          return;
-        }
-        console.warn("Speech recognition error:", err);
-        clearSilenceTimer();
-        activeRef.current = false;
-        setState("error");
-        setInterimTranscript("");
-=======
         if (ev.error === "no-speech") {
           // Normal: user was quiet. If candidate hasn't spoken, keep listening!
           if (activeRef.current && !hasSpokenRef.current && !isSubmittedRef.current) {
@@ -448,30 +279,12 @@ export function useSpeechRecognition(
           clearSilenceTimer();
           setState("error");
         }
->>>>>>> cd816cd7af05b78146197492a0c4f6a7d6cd19d9
       };
 
       recog.start();
       activeRef.current = true;
       restartAttemptsRef.current = 0;
       setState("listening");
-<<<<<<< HEAD
-      // Do NOT start silence timer here – wait for hasSpoken
-    } catch {
-      setState("error");
-    }
-  }, [isSupported, minChars, clearSilenceTimer, resetSilenceTimer, submitIfNeeded]);
-
-  const stop = useCallback(() => {
-    clearSilenceTimer();
-    if (recogRef.current && activeRef.current) {
-      try {
-        recogRef.current.stop();
-      } catch {
-        /* ignore */
-      }
-    }
-=======
       // CRITICAL: Do NOT start silence timer here! We wait until candidate actually speaks!
     } catch {
       setState("error");
@@ -480,7 +293,6 @@ export function useSpeechRecognition(
 
   const stop = useCallback(() => {
     clearSilenceTimer();
->>>>>>> cd816cd7af05b78146197492a0c4f6a7d6cd19d9
     activeRef.current = false;
     if (recogRef.current) {
       try {
@@ -490,11 +302,6 @@ export function useSpeechRecognition(
       }
     }
     setInterimTranscript("");
-<<<<<<< HEAD
-    const combined = finalTranscriptRef.current.trim() || interimRef.current.trim();
-    // Do not auto-submit via stop() – caller decides. Just return transcript.
-    return combined;
-=======
     interimTranscriptRef.current = "";
     const combined = [finalTranscriptRef.current, interimTranscriptRef.current]
       .filter(Boolean)
@@ -502,7 +309,6 @@ export function useSpeechRecognition(
       .trim();
     setState("idle");
     return normalizeTechnicalTerms(combined);
->>>>>>> cd816cd7af05b78146197492a0c4f6a7d6cd19d9
   }, [clearSilenceTimer]);
 
   const reset = useCallback(() => {
@@ -511,17 +317,10 @@ export function useSpeechRecognition(
     setFinalTranscript("");
     setHasSpoken(false);
     finalTranscriptRef.current = "";
-<<<<<<< HEAD
-    interimRef.current = "";
-    lastSubmittedRef.current = "";
-    submittedRef.current = false;
-    hasSpokenRef.current = false;
-=======
     interimTranscriptRef.current = "";
     hasSpokenRef.current = false;
     isSubmittedRef.current = false;
     restartAttemptsRef.current = 0;
->>>>>>> cd816cd7af05b78146197492a0c4f6a7d6cd19d9
     setState("idle");
   }, [cleanup]);
 
