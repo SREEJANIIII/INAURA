@@ -15,13 +15,12 @@ export default function Button({
   size = "md",
   children,
   className,
+  type = "button",
   ...props
 }: Props) {
-  const cls = ["btn", `btn--${variant}`, `btn--${size}`, className]
-    .filter(Boolean)
-    .join(" ");
+  const cls = ["btn", `btn--${variant}`, `btn--${size}`, className].filter(Boolean).join(" ");
   return (
-    <button className={cls} {...props}>
+    <button className={cls} type={type} {...props}>
       <span className="btn__label">{children}</span>
     </button>
   );
