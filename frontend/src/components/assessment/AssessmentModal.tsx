@@ -83,7 +83,7 @@ export default function AssessmentModal({
       <div className="assess__modal">
         <header className="assess__header">
           <div>
-            <div className="assess__eyebrow">INAURA Skill Assessment</div>
+            <div className="assess__eyebrow">🧠 Knowledge Assessment</div>
             <h2 className="assess__title">{skill}</h2>
           </div>
           <button className="assess__close" onClick={onClose} aria-label="Close assessment">

@@ -579,6 +579,16 @@ export default function SkillEvidenceCard({ gap }: { gap: SkillGap }) {
             }
             if (source.source_type === "assessment") {
               const scoreLine = sourceScoreLine(source);
+              const layerDetails = isRecord(source.details) ? source.details : {};
+              const layerRaw = layerDetails["assessment_layer"];
+              const layerLabel =
+                layerRaw === "practical"
+                  ? "Practical"
+                  : layerRaw === "interview"
+                    ? "AI Interview"
+                    : layerRaw === "knowledge"
+                      ? "Knowledge"
+                      : null;
               return (
                 <div
                   key={idx}
@@ -586,6 +596,7 @@ export default function SkillEvidenceCard({ gap }: { gap: SkillGap }) {
                 >
                   <div className="evcard__source-head">
                     <strong>{source.source_label || "INAURA Assessment"}</strong>
+                    {layerLabel && <span className="evcard__badge">{layerLabel}</span>}
                     <span className="evcard__badge">Validated</span>
                   </div>
                   {scoreLine && <div>Score: {scoreLine}</div>}

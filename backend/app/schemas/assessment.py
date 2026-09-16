@@ -56,6 +56,30 @@ class LastAssessment(BaseModel):
     total_attempts: int = 1
 
 
+class LayerCapability(BaseModel):
+    """Which assessment layers apply to one skill (additive, optional)."""
+
+    skill: str = ""
+    skill_key: str = ""
+    knowledge_assessment: bool = False
+    practical_assessment: bool = False
+    interview_assessment: bool = False
+    practical_kind: Optional[str] = None
+    layers: List[str] = []
+
+
+class LayerResult(BaseModel):
+    """Completion state of one layer for one skill (additive, optional)."""
+
+    status: str = "not_started"
+    score: Optional[float] = None
+    attempt_id: Optional[str] = None
+    session_id: Optional[str] = None
+    completed_at: Optional[str] = None
+    validity: Optional[str] = None
+    communication_score: Optional[float] = None
+
+
 class AvailableAssessment(BaseModel):
     skill: str
     skill_key: str
@@ -71,6 +95,9 @@ class AvailableAssessment(BaseModel):
     already_assessed: bool = False
     question_count: int = 0
     last_assessment: Optional[LastAssessment] = None
+    # 3-layer assessment (additive): applicable layers + per-layer progress.
+    capabilities: Optional[LayerCapability] = None
+    layers: Optional[Dict[str, LayerResult]] = None
 
 
 class AvailableAssessmentsResponse(BaseModel):
@@ -105,3 +132,147 @@ class SubmitAssessmentResponse(BaseModel):
     feedback: List[QuestionFeedback] = []
     analysis: Optional[dict] = None
     disclaimer: str
+
+
+# ---------------------------------------------------------------------------
+# Layer 2 — practical assessment
+# ---------------------------------------------------------------------------
+
+class PracticalTaskDimension(BaseModel):
+    id: str
+    label: str
+
+
+class PracticalTaskOut(BaseModel):
+    id: str
+    skill: str
+    task_type: str
+    title: str
+    prompt: str
+    starter_code: str = ""
+    language: str = ""
+    estimated_minutes: int = 20
+    dimensions: List[PracticalTaskDimension] = []
+    check_count: int = 0
+    version: str
+
+
+class StartPracticalRequest(BaseModel):
+    skill: str = Field(..., min_length=1, max_length=120)
+
+
+class StartPracticalResponse(BaseModel):
+    attempt_id: str
+    skill: str
+    skill_key: str
+    task_version: str
+    started_at: str
+    task: PracticalTaskOut
+    disclaimer: str
+
+
+class PracticalCheckResult(BaseModel):
+    check_id: str
+    dimension: str
+    description: str
+    passed: bool
+
+
+class SubmitPracticalRequest(BaseModel):
+    attempt_id: str = Field(..., min_length=8, max_length=64)
+    code: str = Field(default="", max_length=20000)
+    duration_seconds: Optional[int] = Field(None, ge=0, le=86400)
+
+
+class SubmitPracticalResponse(BaseModel):
+    attempt_id: str
+    skill: str
+    task_id: str
+    task_version: str
+    score: float
+    validity: str
+    counts_as_evidence: bool
+    completed_at: str
+    source_reliability: float
+    dimensions: Dict[str, float] = {}
+    checks: List[PracticalCheckResult] = []
+    analysis: Optional[dict] = None
+    disclaimer: str
+
+
+# ---------------------------------------------------------------------------
+# Layer 3 — AI skill interview
+# ---------------------------------------------------------------------------
+
+class StartInterviewRequest(BaseModel):
+    skill: str = Field(..., min_length=1, max_length=120)
+
+
+class InterviewQuestionOut(BaseModel):
+    id: str
+    competency: str
+    prompt: str
+    follow_ups: List[str] = []
+
+
+class InterviewCompetencyOut(BaseModel):
+    id: str
+    label: str
+
+
+class StartInterviewResponse(BaseModel):
+    session_id: str
+    skill: str
+    skill_key: str
+    interview_version: str
+    status: str
+    started_at: str
+    plan: dict
+    evaluated_dimensions: Dict[str, List[str]] = {}
+    privacy_notice: str
+    disclaimer: str
+
+
+class InterviewSessionOut(BaseModel):
+    session_id: Optional[str] = None
+    skill: Optional[str] = None
+    status: str = "in_progress"
+    plan: dict = {}
+    transcript: List[dict] = []
+    technical_scores: Optional[dict] = None
+    communication_scores: Optional[dict] = None
+    started_at: Optional[str] = None
+    completed_at: Optional[str] = None
+
+
+class SubmitInterviewResponsesRequest(BaseModel):
+    session_id: str = Field(..., min_length=8, max_length=64)
+    responses: Dict[str, str] = Field(
+        default_factory=dict,
+        description="Map of question_id -> written answer text",
+    )
+
+
+class SubmitInterviewResponsesResponse(BaseModel):
+    session_id: str
+    skill: Optional[str] = None
+    answered: int = 0
+    total: int = 0
+
+
+class CompleteInterviewRequest(BaseModel):
+    session_id: str = Field(..., min_length=8, max_length=64)
+
+
+class CompleteInterviewResponse(BaseModel):
+    session_id: str
+    skill: str
+    status: str
+    validity: str
+    counts_as_evidence: bool
+    completed_at: Optional[str] = None
+    source_reliability: Optional[float] = None
+    technical_scores: Optional[dict] = None
+    communication_scores: Optional[dict] = None
+    analysis: Optional[dict] = None
+    note: Optional[str] = None

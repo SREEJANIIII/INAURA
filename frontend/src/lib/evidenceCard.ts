@@ -259,20 +259,31 @@ function performanceBullets(
 
 function assessmentBullets(source: EvidenceSource): string[] {
   const details = isRecord(source.details) ? source.details : {};
+  // Layer-aware label (additive): knowledge/practical/interview stay
+  // distinguishable; sources without a layer marker keep the legacy wording.
+  const layer = typeof details["assessment_layer"] === "string" ? details["assessment_layer"] : "";
+  const kind =
+    layer === "practical"
+      ? "practical assessment"
+      : layer === "interview"
+        ? "skill interview"
+        : layer === "knowledge"
+          ? "knowledge assessment"
+          : "assessment";
   const score =
     asNumber(details["score"]) ?? asNumber(details["assessment_score"]);
   if (score !== null) {
     const pct = Math.round(score <= 1 ? score * 100 : score);
-    return [`INAURA assessment score ${pct}% (validated)`];
+    return [`INAURA ${kind} score ${pct}% (validated)`];
   }
   const correct = asNumber(details["correct_count"]);
   const total = asNumber(details["question_count"]);
   if (correct !== null && total !== null && total > 0) {
     return [
-      `INAURA assessment ${correct}/${total} correct (validated)`,
+      `INAURA ${kind} ${correct}/${total} correct (validated)`,
     ];
   }
-  return [`INAURA assessment completed (validated)`];
+  return [`INAURA ${kind} completed (validated)`];
 }
 
 /* =====================================================================

@@ -8,6 +8,7 @@ import {
   type AvailableAssessment,
 } from "../services/assessment";
 import AssessmentModal from "../components/assessment/AssessmentModal";
+import SkillAssessmentLayers from "../components/assessment/SkillAssessmentLayers";
 import SkillEvidenceCard from "../components/analysis/SkillEvidenceCard";
 import Button from "../components/ui/Button";
 import "./AnalysisResults.css";
@@ -432,6 +433,21 @@ export default function AnalysisResults() {
             </div>
           </div>
         </section>
+
+        {assessable.length > 0 && (
+          <section className="results__section">
+            <h2>Skill Assessments</h2>
+            <p>
+              Show INAURA what you actually know — validate each skill with the layers that apply
+              to it. Results feed back into your skill profile and roadmap.
+            </p>
+            <SkillAssessmentLayers
+              items={assessable}
+              onStartKnowledge={(item) => setActiveAssessment(item)}
+              onCompleted={refreshAfterAssessment}
+            />
+          </section>
+        )}
 
         {strengths.length > 0 && (
           <section className="results__section">

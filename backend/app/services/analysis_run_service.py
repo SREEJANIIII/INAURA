@@ -268,16 +268,33 @@ def build_evidence_sources(signals: List[dict]) -> List[dict]:
         elif src_type == "assessment":
             correct = meta.get("correct_count")
             total = meta.get("question_count")
-            if correct is not None and total:
+            # Layer marker (knowledge/practical/interview) passes through so
+            # the UI can keep layers distinguishable. Signals without a
+            # marker keep the exact legacy label/shape (knowledge default).
+            layer = str(meta.get("assessment_layer") or "")
+            if layer == "practical":
+                score_pct = meta.get("assessment_score")
+                try:
+                    score_txt = f" {int(round(float(score_pct) * 100))}%" if score_pct is not None else ""
+                except (TypeError, ValueError):
+                    score_txt = ""
+                label = f"INAURA Practical Assessment \u00b7{score_txt}".rstrip(" \u00b7")
+            elif layer == "interview":
+                label = "INAURA Skill Interview"
+            elif correct is not None and total:
                 label = f"INAURA Assessment \u00b7 {correct}/{total}"
             else:
                 label = "INAURA Assessment"
             details = {
                 "assessment_attempt_id": meta.get("assessment_attempt_id"),
                 "score": meta.get("assessment_score"),
-                "version": meta.get("assessment_version"),
+                "version": meta.get("assessment_version") or meta.get("task_version") or meta.get("interview_version"),
                 "completed_at": meta.get("completed_at") or meta.get("source_created_at"),
             }
+            if layer:
+                details["assessment_layer"] = layer
+            if meta.get("interview_session_id") is not None:
+                details["interview_session_id"] = meta.get("interview_session_id")
             if meta.get("evidence_depth") is not None:
                 details["evidence_depth"] = meta["evidence_depth"]
         elif src_type in ("certification", "certification_file"):

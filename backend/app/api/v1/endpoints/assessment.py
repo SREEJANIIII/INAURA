@@ -3,12 +3,25 @@ from fastapi import APIRouter, Depends
 from ....core.security import get_current_user, CurrentUser
 from ....schemas.assessment import (
     AvailableAssessmentsResponse,
+    CompleteInterviewRequest,
+    CompleteInterviewResponse,
+    InterviewSessionOut,
     StartAssessmentRequest,
     StartAssessmentResponse,
+    StartInterviewRequest,
+    StartInterviewResponse,
+    StartPracticalRequest,
+    StartPracticalResponse,
     SubmitAssessmentRequest,
     SubmitAssessmentResponse,
+    SubmitInterviewResponsesRequest,
+    SubmitInterviewResponsesResponse,
+    SubmitPracticalRequest,
+    SubmitPracticalResponse,
 )
 from ....services.assessment import service as assessment_service
+from ....services.assessment import interview as interview_service
+from ....services.assessment import practical_service
 from ....services.assessment.question_bank import DEFAULT_QUESTION_COUNT
 
 router = APIRouter(prefix="/analysis/assessment", tags=["assessment"])
@@ -46,4 +59,89 @@ async def submit_assessment(
         attempt_id=payload.attempt_id,
         responses=payload.responses,
         duration_seconds=payload.duration_seconds,
+    )
+
+
+# ---------------------------------------------------------------------------
+# Layer 2 — practical (work-sample) assessment
+# ---------------------------------------------------------------------------
+
+@router.post("/practical/start", response_model=StartPracticalResponse)
+async def start_practical_assessment(
+    payload: StartPracticalRequest, current_user: CurrentUser = Depends(get_current_user)
+):
+    """Begin a practical work-sample attempt for one skill (where applicable)."""
+    return practical_service.start_practical_attempt(
+        user_id=current_user.id,
+        skill=payload.skill,
+    )
+
+
+@router.post("/practical/submit", response_model=SubmitPracticalResponse)
+async def submit_practical_assessment(
+    payload: SubmitPracticalRequest, current_user: CurrentUser = Depends(get_current_user)
+):
+    """
+    Grade a practical submission deterministically and recalculate the
+    analysis so the skill profile incorporates the new signal immediately.
+    """
+    return await practical_service.submit_practical_attempt(
+        user_id=current_user.id,
+        attempt_id=payload.attempt_id,
+        code=payload.code,
+        duration_seconds=payload.duration_seconds,
+    )
+
+
+# ---------------------------------------------------------------------------
+# Layer 3 — AI skill interview (one session validates exactly one skill)
+# ---------------------------------------------------------------------------
+
+@router.post("/interview/start", response_model=StartInterviewResponse)
+async def start_skill_interview(
+    payload: StartInterviewRequest, current_user: CurrentUser = Depends(get_current_user)
+):
+    """Create a skill-specific interview session with its adaptive plan."""
+    return interview_service.start_interview_session(
+        user_id=current_user.id,
+        skill=payload.skill,
+    )
+
+
+@router.get("/interview/{session_id}", response_model=InterviewSessionOut)
+async def get_skill_interview(
+    session_id: str, current_user: CurrentUser = Depends(get_current_user)
+):
+    """Load an interview session (plan + transcript)."""
+    return interview_service.get_interview_session(
+        user_id=current_user.id,
+        session_id=session_id,
+    )
+
+
+@router.post("/interview/respond", response_model=SubmitInterviewResponsesResponse)
+async def submit_interview_responses(
+    payload: SubmitInterviewResponsesRequest, current_user: CurrentUser = Depends(get_current_user)
+):
+    """Save written answers onto an in-progress interview session."""
+    return interview_service.submit_interview_responses(
+        user_id=current_user.id,
+        session_id=payload.session_id,
+        responses=payload.responses,
+    )
+
+
+@router.post("/interview/complete", response_model=CompleteInterviewResponse)
+async def complete_skill_interview(
+    payload: CompleteInterviewRequest, current_user: CurrentUser = Depends(get_current_user)
+):
+    """
+    Finish an interview: grade against the fixed rubric when grading is
+    configured, otherwise keep the transcript as awaiting review. Either way
+    the existing skill profile is never overwritten — at most one new
+    interview signal flows through the standard pipeline.
+    """
+    return await interview_service.complete_interview_session(
+        user_id=current_user.id,
+        session_id=payload.session_id,
     )

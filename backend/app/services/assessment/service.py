@@ -311,18 +311,40 @@ def list_attempts(user_id: str, skill: Optional[str] = None) -> List[dict]:
 
 def load_assessment_signals(user_id: str) -> List[dict]:
     """
-    Assessment evidence signals for the analysis pipeline.
+    Assessment evidence signals for the analysis pipeline — all layers.
+
+    Knowledge signals come first so the aggregate ``assessment_score`` the
+    pipeline derives from the first assessment signal keeps its existing
+    meaning; practical and interview signals follow with their own
+    ``assessment_layer`` markers. Missing/partial layers degrade to "no
+    signal" and never break the pipeline.
 
     Never raises: a missing assessment table simply means no assessment
     evidence yet, and analysis must continue with the other sources.
     """
     try:
-        return build_assessment_signals(list_attempts(user_id))
+        signals = build_assessment_signals(list_attempts(user_id))
     except HTTPException:
-        return []
+        signals = []
     except Exception as e:
         logger.debug("Assessment signals unavailable for %s: %s", user_id, e)
-        return []
+        signals = []
+
+    try:
+        from .practical_service import load_practical_signals
+
+        signals = list(signals) + load_practical_signals(user_id)
+    except Exception as e:
+        logger.debug("Practical signals unavailable for %s: %s", user_id, e)
+
+    try:
+        from .interview import load_interview_signals
+
+        signals = list(signals) + load_interview_signals(user_id)
+    except Exception as e:
+        logger.debug("Interview signals unavailable for %s: %s", user_id, e)
+
+    return signals
 
 
 def _skill_id_for(c, canonical: str) -> Optional[str]:
@@ -439,6 +461,40 @@ def list_available_assessments(user_id: str) -> dict:
             if attempt
             else None
         )
+
+    # 3-layer overview (additive): applicable layers + per-layer progress.
+    # Any failure degrades to "not started" so the overview keeps working
+    # before migration 019 is applied or when a layer has no data.
+    try:
+        from .layers import INTERVIEW, KNOWLEDGE, PRACTICAL, capability_for_skill, layer_status_summary
+        from .interview import interview_status_for_skills
+        from .practical_service import practical_status_for_skills
+
+        skill_names = [item["skill"] for item in available]
+        practical_by_skill = practical_status_for_skills(user_id, skill_names)
+        interview_by_skill = interview_status_for_skills(user_id, skill_names)
+        for item in available:
+            cap = capability_for_skill(item["skill"])
+            item["capabilities"] = cap.to_dict() if cap is not None else None
+            knowledge_result = None
+            attempt = effective.get(item["skill"])
+            if attempt is not None:
+                knowledge_result = {
+                    "status": "completed",
+                    "score": float(attempt.get("score", 0.0) or 0.0),
+                    "attempt_id": attempt.get("id"),
+                    "completed_at": attempt.get("completed_at"),
+                }
+            item["layers"] = layer_status_summary({
+                KNOWLEDGE: knowledge_result,
+                PRACTICAL: practical_by_skill.get(item["skill"]),
+                INTERVIEW: interview_by_skill.get(item["skill"]),
+            })
+    except Exception as e:
+        logger.debug("Layer overview unavailable: %s", e)
+        for item in available:
+            item.setdefault("capabilities", None)
+            item.setdefault("layers", None)
 
     return {
         "assessment_version": ASSESSMENT_VERSION,
