@@ -1011,10 +1011,22 @@ async def answer_interview_question(
                 "follow_ups": nq.get("follow_ups", []),
             }
 
+    # Build natural spoken transition for AI interviewer
+    spoken_response = None
+    if action == "follow_up" and follow_up_question is not None:
+        fu_prompt = follow_up_question.get("prompt", "")
+        spoken_response = f"I see. {fu_prompt}"
+    elif action == "next" and next_question is not None:
+        spoken_response = "Thank you for explaining that. Let's move on to the next question."
+    elif action == "complete":
+        spoken_response = "Thank you. That concludes all questions for this interview. I'm finalizing your evaluation now."
+
     return {
         "session_id": session_id,
         "question_id": question_id,
         "next_action": action,
+        "action": action.upper(),
+        "spoken_response": spoken_response,
         "ai_available": ai_available,
         "evaluation": evaluation,
         "evaluation_pending": evaluation_pending,

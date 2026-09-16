@@ -3,7 +3,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 export type SpeechState = "idle" | "listening" | "error" | "unsupported";
 
 export type UseSpeechRecognitionOptions = {
-  /** Ms of silence before auto-stopping. 0 = disabled. */
+  /** Ms of silence after speech before auto-stopping. Defaults to 2800ms. */
   silenceTimeout?: number;
 };
 
@@ -17,6 +17,7 @@ export type UseSpeechRecognitionResult = {
   stop: () => string;
   reset: () => void;
   isSupported: boolean;
+  hasSpoken: boolean;
   /** Wire the silence callback. Call this to connect your handler. */
   setOnSilence: (cb: (transcript: string) => void) => void;
 };
@@ -50,19 +51,58 @@ declare global {
   }
 }
 
+/**
+ * Normalizes common casing/formatting for technical terms from speech recognition
+ * without altering candidate meaning or inventing words.
+ */
+function normalizeTechnicalTerms(text: string): string {
+  if (!text) return "";
+  let s = text;
+  const terms: Array<[RegExp, string]> = [
+    [/\b(fast\s*api|fastapi)\b/gi, "FastAPI"],
+    [/\b(post\s*gres|postgres|postgresql)\b/gi, "PostgreSQL"],
+    [/\b(pg\s*vector|pgvector)\b/gi, "pgvector"],
+    [/\b(type\s*script|typescript)\b/gi, "TypeScript"],
+    [/\b(java\s*script|javascript)\b/gi, "JavaScript"],
+    [/\b(rest\s*api|restful\s*api)\b/gi, "REST API"],
+    [/\b(rag)\b/gi, "RAG"],
+    [/\b(gemini)\b/gi, "Gemini"],
+    [/\b(docker)\b/gi, "Docker"],
+    [/\b(kubernetes|k8s)\b/gi, "Kubernetes"],
+    [/\b(oop)\b/gi, "OOP"],
+    [/\b(sql)\b/gi, "SQL"],
+    [/\b(lang\s*chain|langchain)\b/gi, "LangChain"],
+    [/\b(supabase)\b/gi, "Supabase"],
+    [/\b(react)\b/gi, "React"],
+    [/\b(graphql)\b/gi, "GraphQL"],
+    [/\b(mongodb|mongo)\b/gi, "MongoDB"],
+    [/\b(redis)\b/gi, "Redis"],
+    [/\b(pytorch)\b/gi, "PyTorch"],
+  ];
+  for (const [regex, replacement] of terms) {
+    s = s.replace(regex, replacement);
+  }
+  return s;
+}
+
 export function useSpeechRecognition(
   opts: UseSpeechRecognitionOptions = {}
 ): UseSpeechRecognitionResult {
-  const { silenceTimeout = 0 } = opts;
+  const { silenceTimeout = 2800 } = opts;
   const [state, setState] = useState<SpeechState>("idle");
   const [interimTranscript, setInterimTranscript] = useState("");
   const [finalTranscript, setFinalTranscript] = useState("");
+  const [hasSpoken, setHasSpoken] = useState(false);
+
   const recogRef = useRef<SpeechRecognitionInstance | null>(null);
   const activeRef = useRef(false);
+  const hasSpokenRef = useRef(false);
   const silenceTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const onSilenceRef = useRef<((t: string) => void) | null>(null);
   const finalTranscriptRef = useRef("");
-  const lastSubmittedRef = useRef("");
+  const interimTranscriptRef = useRef("");
+  const isSubmittedRef = useRef(false);
+  const restartAttemptsRef = useRef(0);
 
   const isSupported =
     typeof window !== "undefined" &&
@@ -76,33 +116,44 @@ export function useSpeechRecognition(
   }, []);
 
   const submitTranscript = useCallback((transcript: string) => {
-    const trimmed = transcript.trim();
-    if (!trimmed || trimmed === lastSubmittedRef.current) return;
-    lastSubmittedRef.current = trimmed;
-    onSilenceRef.current?.(trimmed);
-  }, []);
+    const cleaned = normalizeTechnicalTerms(transcript.trim());
+    if (!cleaned || isSubmittedRef.current) return;
+    isSubmittedRef.current = true;
+    clearSilenceTimer();
+    activeRef.current = false;
+    try {
+      recogRef.current?.stop();
+    } catch {
+      /* ignore */
+    }
+    setState("idle");
+    onSilenceRef.current?.(cleaned);
+  }, [clearSilenceTimer]);
 
-  const resetSilenceTimer = useCallback(
-    (currentFinal: string) => {
-      if (silenceTimeout <= 0) return;
-      clearSilenceTimer();
-      silenceTimerRef.current = setTimeout(() => {
-        if (activeRef.current) {
-          try { recogRef.current?.stop(); } catch { /* ignore */ }
-          activeRef.current = false;
-          setState("idle");
-          setInterimTranscript("");
-          submitTranscript(currentFinal);
+  const scheduleSilenceTimer = useCallback(() => {
+    if (silenceTimeout <= 0) return;
+    clearSilenceTimer();
+    silenceTimerRef.current = setTimeout(() => {
+      if (activeRef.current && hasSpokenRef.current && !isSubmittedRef.current) {
+        const full = [finalTranscriptRef.current, interimTranscriptRef.current]
+          .filter(Boolean)
+          .join(" ")
+          .trim();
+        if (full) {
+          submitTranscript(full);
         }
-      }, silenceTimeout);
-    },
-    [silenceTimeout, clearSilenceTimer, submitTranscript]
-  );
+      }
+    }, silenceTimeout);
+  }, [silenceTimeout, clearSilenceTimer, submitTranscript]);
 
   const cleanup = useCallback(() => {
     clearSilenceTimer();
     if (recogRef.current) {
-      try { recogRef.current.abort(); } catch { /* ignore */ }
+      try {
+        recogRef.current.abort();
+      } catch {
+        /* ignore */
+      }
       recogRef.current = null;
     }
     activeRef.current = false;
@@ -117,9 +168,22 @@ export function useSpeechRecognition(
     }
     if (activeRef.current) return;
 
+    // Reset cycle tracking
+    clearSilenceTimer();
+    isSubmittedRef.current = false;
+    hasSpokenRef.current = false;
+    setHasSpoken(false);
+    setInterimTranscript("");
+    interimTranscriptRef.current = "";
+    // Note: finalTranscriptRef is preserved unless reset() was called,
+    // but in normal question cycle reset() is called before start().
+
     try {
       const Impl = window.SpeechRecognition || window.webkitSpeechRecognition;
-      if (!Impl) { setState("unsupported"); return; }
+      if (!Impl) {
+        setState("unsupported");
+        return;
+      }
       const recog = new Impl();
       recogRef.current = recog;
       recog.lang = "en-US";
@@ -129,89 +193,134 @@ export function useSpeechRecognition(
 
       recog.onresult = (ev: SpeechRecognitionEvent) => {
         let interim = "";
-        let final_ = "";
+        let newFinal = "";
         for (let i = ev.resultIndex; i < ev.results.length; i++) {
-          const t = ev.results[i][0].transcript;
-          if (ev.results[i].isFinal) {
-            final_ += t;
+          const res = ev.results[i];
+          const t = res[0].transcript;
+          if (res.isFinal) {
+            newFinal += t;
           } else {
             interim += t;
           }
         }
-        if (final_) {
-          setFinalTranscript((prev) => {
-            const next = prev ? `${prev} ${final_}`.trim() : final_.trim();
-            finalTranscriptRef.current = next;
-            return next;
-          });
+
+        if (newFinal) {
+          const updated = finalTranscriptRef.current
+            ? `${finalTranscriptRef.current} ${newFinal}`.trim()
+            : newFinal.trim();
+          finalTranscriptRef.current = updated;
+          setFinalTranscript(updated);
         }
+
+        interimTranscriptRef.current = interim;
         setInterimTranscript(interim);
-        // Reset silence timer on any speech activity
-        if (interim || final_) {
-          setFinalTranscript((prev) => {
-            const combined = [prev, interim].filter(Boolean).join(" ").trim();
-            resetSilenceTimer(combined);
-            return prev;
-          });
+
+        const currentCombined = [finalTranscriptRef.current, interim]
+          .filter(Boolean)
+          .join(" ")
+          .trim();
+
+        // Speech detected: ONLY start silence timer if candidate actually spoke
+        if (currentCombined.length > 0) {
+          hasSpokenRef.current = true;
+          setHasSpoken(true);
+          scheduleSilenceTimer();
         }
       };
 
       recog.onend = () => {
-        if (!activeRef.current) return;
-        activeRef.current = false;
-        clearSilenceTimer();
-        const transcript = finalTranscriptRef.current.trim();
-        setInterimTranscript("");
-        // If recognition ended with meaningful content, submit it
-        if (transcript && transcript !== lastSubmittedRef.current) {
+        // If intentionally stopped or submitted, exit
+        if (!activeRef.current || isSubmittedRef.current) {
           setState("idle");
-          submitTranscript(transcript);
-        } else {
-          setState("idle");
+          return;
         }
+
+        // If candidate spoke and browser closed recognition before silence timer:
+        if (hasSpokenRef.current) {
+          const full = [finalTranscriptRef.current, interimTranscriptRef.current]
+            .filter(Boolean)
+            .join(" ")
+            .trim();
+          if (full && !isSubmittedRef.current) {
+            submitTranscript(full);
+            return;
+          }
+        }
+
+        // If recognition closed unexpectedly (e.g. Chrome 15s idle timeout) without speech,
+        // automatically restart continuous listening up to 5 times.
+        if (activeRef.current && !isSubmittedRef.current && restartAttemptsRef.current < 5) {
+          restartAttemptsRef.current += 1;
+          try {
+            recog.start();
+            return;
+          } catch {
+            /* ignore restart failure */
+          }
+        }
+
+        activeRef.current = false;
+        setState("idle");
       };
 
       recog.onerror = (ev: SpeechRecognitionErrorEvent) => {
-        if (ev.error === "no-speech" || ev.error === "aborted") {
-          activeRef.current = false;
-          clearSilenceTimer();
-          setState("idle");
-          setInterimTranscript("");
+        if (ev.error === "no-speech") {
+          // Normal: user was quiet. If candidate hasn't spoken, keep listening!
+          if (activeRef.current && !hasSpokenRef.current && !isSubmittedRef.current) {
+            return;
+          }
+        }
+        if (ev.error === "aborted") {
           return;
         }
         console.warn("Speech recognition error:", ev.error);
-        activeRef.current = false;
-        clearSilenceTimer();
-        setState("error");
-        setInterimTranscript("");
+        if (ev.error === "not-allowed" || ev.error === "service-not-allowed") {
+          activeRef.current = false;
+          clearSilenceTimer();
+          setState("error");
+        }
       };
 
       recog.start();
       activeRef.current = true;
+      restartAttemptsRef.current = 0;
       setState("listening");
-      resetSilenceTimer("");
+      // CRITICAL: Do NOT start silence timer here! We wait until candidate actually speaks!
     } catch {
       setState("error");
     }
-  }, [isSupported, resetSilenceTimer, clearSilenceTimer, submitTranscript]);
+  }, [isSupported, scheduleSilenceTimer, clearSilenceTimer, submitTranscript]);
 
   const stop = useCallback(() => {
     clearSilenceTimer();
-    if (recogRef.current && activeRef.current) {
-      try { recogRef.current.stop(); } catch { /* ignore */ }
-    }
     activeRef.current = false;
+    if (recogRef.current) {
+      try {
+        recogRef.current.stop();
+      } catch {
+        /* ignore */
+      }
+    }
     setInterimTranscript("");
-    const combined = finalTranscriptRef.current.trim();
-    return combined;
+    interimTranscriptRef.current = "";
+    const combined = [finalTranscriptRef.current, interimTranscriptRef.current]
+      .filter(Boolean)
+      .join(" ")
+      .trim();
+    setState("idle");
+    return normalizeTechnicalTerms(combined);
   }, [clearSilenceTimer]);
 
   const reset = useCallback(() => {
     cleanup();
     setInterimTranscript("");
     setFinalTranscript("");
+    setHasSpoken(false);
     finalTranscriptRef.current = "";
-    lastSubmittedRef.current = "";
+    interimTranscriptRef.current = "";
+    hasSpokenRef.current = false;
+    isSubmittedRef.current = false;
+    restartAttemptsRef.current = 0;
     setState("idle");
   }, [cleanup]);
 
@@ -219,13 +328,17 @@ export function useSpeechRecognition(
     onSilenceRef.current = cb;
   }, []);
 
-  const liveTranscript = [finalTranscript, interimTranscript].filter(Boolean).join(" ").trim();
+  const liveTranscript = [finalTranscript, interimTranscript]
+    .filter(Boolean)
+    .join(" ")
+    .trim();
 
   return {
     state,
     interimTranscript,
     finalTranscript,
     liveTranscript,
+    hasSpoken,
     start,
     stop,
     reset,

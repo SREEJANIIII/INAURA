@@ -350,6 +350,8 @@ export type AnswerInterviewResponse = {
   session_id: string;
   question_id: string;
   next_action: string;
+  action?: string | null;
+  spoken_response?: string | null;
   ai_available: boolean;
   evaluation: AnswerInterviewEvaluation | null;
   evaluation_pending: boolean;

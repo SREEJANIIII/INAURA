@@ -27,6 +27,7 @@ type Phase =
   | "processing"
   | "completing"
   | "completed"
+  | "device_error"
   | "error";
 
 type Question = {
@@ -36,7 +37,7 @@ type Question = {
   follow_ups: string[];
 };
 
-const SILENCE_TIMEOUT_MS = 4000;
+const SILENCE_TIMEOUT_MS = 2800;
 
 export default function InterviewModal({ skill, onClose, onCompleted }: Props) {
   const [phase, setPhase] = useState<Phase>("intro");
@@ -57,6 +58,7 @@ export default function InterviewModal({ skill, onClose, onCompleted }: Props) {
 
   const {
     videoRef,
+    setVideoRef,
     camState,
     micState,
     micLevel,
@@ -77,6 +79,7 @@ export default function InterviewModal({ skill, onClose, onCompleted }: Props) {
   const currentQuestionRef = useRef(currentQuestion);
   const sessionRef = useRef(session);
   const interviewActiveRef = useRef(false);
+  const isSubmittingRef = useRef(false);
   const ttsRef = useRef(tts);
   const speechRef = useRef(speech);
 
@@ -89,6 +92,7 @@ export default function InterviewModal({ skill, onClose, onCompleted }: Props) {
   // Cleanup on unmount
   useEffect(() => () => {
     interviewActiveRef.current = false;
+    isSubmittingRef.current = false;
     tts.stop();
     speech.stop();
     stopMedia();
@@ -96,15 +100,25 @@ export default function InterviewModal({ skill, onClose, onCompleted }: Props) {
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
+  // Sync video element srcObject when mounted or camera state becomes active
+  useEffect(() => {
+    if (phase !== "intro" && phase !== "completed" && videoRef.current) {
+      setVideoRef(videoRef.current);
+    }
+  }, [phase, camState, setVideoRef, videoRef]);
+
   // ---- Speak then listen: guarded async transition ----
   const speakThenListen = useCallback(async (text: string) => {
     if (!interviewActiveRef.current) return;
+    speechRef.current.stop();
     setAiText(text);
     setPhase("ai_speaking");
     await ttsRef.current.speak(text);
     if (!interviewActiveRef.current) return;
     setAiText("");
     if (phaseRef.current === "ai_speaking" && interviewActiveRef.current) {
+      speechRef.current.reset();
+      isSubmittingRef.current = false;
       setPhase("listening");
       speechRef.current.start();
     }
@@ -112,19 +126,40 @@ export default function InterviewModal({ skill, onClose, onCompleted }: Props) {
 
   // ---- Submit answer to backend ----
   const submitAnswer = useCallback(async (transcript: string) => {
-    if (!interviewActiveRef.current) return;
+    if (!interviewActiveRef.current || isSubmittingRef.current) return;
+    isSubmittingRef.current = true;
+
     const sess = sessionRef.current;
     const q = currentQuestionRef.current;
-    if (!sess || !q || !transcript.trim()) return;
+    if (!sess || !q) {
+      isSubmittingRef.current = false;
+      return;
+    }
 
+    const trimmed = transcript.trim();
+    // Guard against empty speech: prompt candidate conversationally instead of submitting empty evidence
+    if (!trimmed) {
+      isSubmittingRef.current = false;
+      await speakThenListen("I didn't catch that. Take your time and explain it in your own words.");
+      return;
+    }
+
+    speechRef.current.stop();
     setPhase("processing");
 
     try {
-      const res = await answerInterviewQuestion(sess.session_id, q.id, transcript.trim());
+      const res = await answerInterviewQuestion(sess.session_id, q.id, trimmed);
       if (!interviewActiveRef.current) return;
       setAnsweredCount(res.answered_count);
 
-      if (res.completed || res.next_action === "complete" || !res.current_question) {
+      if (res.completed || res.next_action === "complete" || res.action === "COMPLETE" || !res.current_question) {
+        const closing =
+          res.spoken_response ||
+          "Thank you. That concludes all questions for this interview. I am finalizing your evaluation now.";
+        setPhase("ai_speaking");
+        await ttsRef.current.speak(closing);
+        if (!interviewActiveRef.current) return;
+
         setPhase("completing");
         const graded = await completeSkillInterview(sess.session_id);
         if (!interviewActiveRef.current) return;
@@ -138,21 +173,28 @@ export default function InterviewModal({ skill, onClose, onCompleted }: Props) {
       }
 
       const nextQ = res.current_question;
+      setCurrentQuestion(nextQ);
+
       let spokenText = "";
-      if (res.evaluation?.follow_up_needed && res.evaluation.suggested_follow_up) {
+      if (res.spoken_response) {
+        // Natural transition: acknowledge previous answer, then state next question
+        spokenText =
+          (res.next_action === "next" || res.action === "NEXT") && nextQ
+            ? `${res.spoken_response} ${nextQ.prompt}`
+            : res.spoken_response;
+      } else if (res.evaluation?.follow_up_needed && res.evaluation.suggested_follow_up) {
         spokenText = res.evaluation.suggested_follow_up;
       } else if (nextQ) {
         spokenText = nextQ.prompt;
       }
 
-      setCurrentQuestion(nextQ);
-      speechRef.current.reset();
       await speakThenListen(spokenText);
     } catch (e) {
       if (!interviewActiveRef.current) return;
+      isSubmittingRef.current = false;
       const msg = e instanceof Error ? e.message : "Could not submit answer";
       if (msg.includes("409") || msg.includes("not the current question")) {
-        setError("Session out of sync. Recovering...");
+        setError("Session out of sync. Recovering session...");
         setSessionId(sessionRef.current?.session_id || null);
       } else {
         setError(msg);
@@ -164,9 +206,81 @@ export default function InterviewModal({ skill, onClose, onCompleted }: Props) {
   // ---- Wire silence → submitAnswer ----
   useEffect(() => {
     speech.setOnSilence((transcript: string) => {
-      void submitAnswer(transcript);
+      if (phaseRef.current === "listening" && !isSubmittingRef.current) {
+        void submitAnswer(transcript);
+      }
     });
   }, [speech, submitAnswer]);
+
+  // ---- Start the interview ----
+  const beginInterview = useCallback(async () => {
+    if (interviewActiveRef.current) return;
+    interviewActiveRef.current = true;
+    isSubmittingRef.current = false;
+    setLoading(true);
+    setError(null);
+    // Immediately leave the intro screen to the live call screen
+    setPhase("initializing");
+
+    const mediaRes = await requestMedia();
+    if (!interviewActiveRef.current) {
+      setLoading(false);
+      return;
+    }
+
+    if (!mediaRes.usable) {
+      setError("Camera and microphone access are both unavailable. Please grant browser permissions to continue.");
+      setPhase("device_error");
+      setLoading(false);
+      interviewActiveRef.current = false;
+      return;
+    }
+
+    if (mediaRes.microphone !== "live") {
+      setError("Microphone is required for the live interview. Please grant microphone permission.");
+      setPhase("device_error");
+      setLoading(false);
+      interviewActiveRef.current = false;
+      return;
+    }
+
+    try {
+      const data = await startSkillInterview(skill);
+      if (!interviewActiveRef.current) {
+        setLoading(false);
+        return;
+      }
+      setSession(data);
+      sessionStorage.setItem("interview_session_id", data.session_id);
+      setSessionId(data.session_id);
+
+      const questions = data.plan?.questions || [];
+      setTotalQuestions(questions.length);
+      setAnsweredCount(0);
+
+      if (questions.length === 0) {
+        setError("No questions generated for this skill.");
+        setPhase("error");
+        setLoading(false);
+        interviewActiveRef.current = false;
+        return;
+      }
+
+      const firstQ = questions[0];
+      setCurrentQuestion(firstQ);
+      setLoading(false);
+      speechRef.current.reset();
+
+      const greeting = `Hi! I'm your INAURA AI interviewer. I've reviewed your profile and we'll focus on ${skill} today. Let's begin. ${firstQ.prompt}`;
+      await speakThenListen(greeting);
+    } catch (e) {
+      if (!interviewActiveRef.current) return;
+      setError(e instanceof Error ? e.message : "Could not start the interview");
+      setPhase("error");
+      setLoading(false);
+      interviewActiveRef.current = false;
+    }
+  }, [skill, requestMedia, speakThenListen]);
 
   // ---- Session recovery on browser refresh ----
   useEffect(() => {
@@ -178,7 +292,10 @@ export default function InterviewModal({ skill, onClose, onCompleted }: Props) {
         if (!active) return;
         if (["completed", "graded", "awaiting_review"].includes(data.status)) {
           const graded = await completeSkillInterview(sessionId);
-          if (active) { setResult(graded); setPhase("completed"); }
+          if (active) {
+            setResult(graded);
+            setPhase("completed");
+          }
           return;
         }
         setSession({
@@ -195,21 +312,24 @@ export default function InterviewModal({ skill, onClose, onCompleted }: Props) {
         });
         const plan = data.plan as Record<string, unknown>;
         const questions = (plan?.questions ?? []) as Question[];
-        const idx = (data as Record<string, unknown>).current_index as number ?? 0;
+        const idx = ((data as Record<string, unknown>).current_index as number) ?? 0;
         setTotalQuestions(questions.length);
         setAnsweredCount(
-          (data.transcript as Array<Record<string, unknown>> | undefined || [])
-            .filter((t) => t.answer).length
+          ((data.transcript as Array<Record<string, unknown>> | undefined) || []).filter(
+            (t) => t.answer
+          ).length
         );
         if (questions[idx]) {
           setCurrentQuestion(questions[idx]);
           if (active) {
             setPhase("intro");
-            void requestMedia();
           }
         } else {
           const graded = await completeSkillInterview(sessionId);
-          if (active) { setResult(graded); setPhase("completed"); }
+          if (active) {
+            setResult(graded);
+            setPhase("completed");
+          }
         }
       } catch {
         if (active) {
@@ -218,53 +338,12 @@ export default function InterviewModal({ skill, onClose, onCompleted }: Props) {
         }
       }
     })();
-    return () => { active = false; };
-  // eslint-disable-next-line react-hooks/exhaustive-deps
+    return () => {
+      active = false;
+    };
   }, [sessionId, skill]);
 
-  // ---- Start the interview ----
-  const beginInterview = useCallback(async () => {
-    if (interviewActiveRef.current) return;
-    interviewActiveRef.current = true;
-    setLoading(true);
-    setError(null);
-
-    await requestMedia();
-    if (!interviewActiveRef.current) { setLoading(false); return; }
-
-    try {
-      const data = await startSkillInterview(skill);
-      if (!interviewActiveRef.current) { setLoading(false); return; }
-      setSession(data);
-      sessionStorage.setItem("interview_session_id", data.session_id);
-      setSessionId(data.session_id);
-
-      const questions = data.plan.questions || [];
-      setTotalQuestions(questions.length);
-      setAnsweredCount(0);
-
-      if (questions.length === 0) {
-        setError("No questions generated for this skill.");
-        setLoading(false);
-        interviewActiveRef.current = false;
-        return;
-      }
-
-      const firstQ = questions[0];
-      setCurrentQuestion(firstQ);
-      setLoading(false);
-      speechRef.current.reset();
-
-      const greeting = `Hi! I'm your INAURA AI interviewer. I've reviewed your profile and we'll focus on ${skill} today. Let's begin. ${firstQ.prompt}`;
-      await speakThenListen(greeting);
-    } catch (e) {
-      if (!interviewActiveRef.current) return;
-      setError(e instanceof Error ? e.message : "Could not start the interview");
-      setLoading(false);
-    }
-  }, [skill, requestMedia, speakThenListen]);
-
-  // ---- Manual typed submit (fallback) ----
+  // ---- Manual typed submit (accessibility fallback) ----
   const submitTyped = useCallback(() => {
     if (typedAnswer.trim()) {
       speech.stop();
@@ -276,8 +355,11 @@ export default function InterviewModal({ skill, onClose, onCompleted }: Props) {
   // ---- End interview ----
   const endInterview = useCallback(async () => {
     interviewActiveRef.current = false;
+    isSubmittingRef.current = false;
     tts.stop();
     speech.stop();
+    speech.reset();
+    stopMedia();
     const sess = sessionRef.current;
     if (sess) {
       try {
@@ -285,15 +367,14 @@ export default function InterviewModal({ skill, onClose, onCompleted }: Props) {
         const graded = await completeSkillInterview(sess.session_id);
         setResult(graded);
         sessionStorage.removeItem("interview_session_id");
-        stopMedia();
         setPhase("completed");
         onCompleted?.(graded);
       } catch {
-        stopMedia();
+        sessionStorage.removeItem("interview_session_id");
         setPhase("completed");
       }
     } else {
-      stopMedia();
+      sessionStorage.removeItem("interview_session_id");
       setPhase("completed");
     }
   }, [tts, speech, stopMedia, onCompleted]);
@@ -305,19 +386,28 @@ export default function InterviewModal({ skill, onClose, onCompleted }: Props) {
     tts.stop();
     speech.stop();
     speech.reset();
-    void speakThenListen(q.prompt);
+    isSubmittingRef.current = false;
+    void speakThenListen(`Let me repeat the question. ${q.prompt}`);
   }, [tts, speech, speakThenListen]);
 
   // ---- Retry devices ----
   const recheckCamera = useCallback(async () => {
     setError(null);
-    await requestCamera();
-  }, [requestCamera]);
+    const res = await requestCamera();
+    if (res === "live" && phaseRef.current === "device_error") {
+      if (micState === "live") {
+        void beginInterview();
+      }
+    }
+  }, [requestCamera, micState, beginInterview]);
 
   const recheckMicrophone = useCallback(async () => {
     setError(null);
-    await requestMicrophone();
-  }, [requestMicrophone]);
+    const res = await requestMicrophone();
+    if (res === "live" && phaseRef.current === "device_error") {
+      void beginInterview();
+    }
+  }, [requestMicrophone, beginInterview]);
 
   const liveCaption = phase === "listening" ? speech.liveTranscript : "";
   const progress = totalQuestions > 0 ? Math.round((answeredCount / totalQuestions) * 100) : 0;
@@ -328,7 +418,6 @@ export default function InterviewModal({ skill, onClose, onCompleted }: Props) {
 
   return (
     <div className="iv__overlay" role="dialog" aria-modal="true" aria-label={`${skill} live AI interview`}>
-
       {/* ===== INTRO SCREEN ===== */}
       {phase === "intro" && (
         <div className="iv__intro">
@@ -337,11 +426,11 @@ export default function InterviewModal({ skill, onClose, onCompleted }: Props) {
             <h1 className="iv__intro-title">INAURA AI Interview</h1>
             <p className="iv__intro-skill">{skill}</p>
             <p className="iv__intro-desc">
-              This is a live AI interview. The interviewer will ask questions
-              verbally and adapt based on your answers.
+              This is a live AI interview. The interviewer will speak directly to you
+              and adapt questions based on your technical responses.
             </p>
             <p className="iv__intro-req">
-              Camera + microphone are required for the live interview experience.
+              Camera + microphone will be requested when you begin.
             </p>
             <Button
               onClick={() => void beginInterview()}
@@ -371,11 +460,12 @@ export default function InterviewModal({ skill, onClose, onCompleted }: Props) {
               {phase === "listening" && <span className="iv__status-dot iv__status-dot--mic" />}
               {phase === "processing" && <span className="iv__status-dot iv__status-dot--proc" />}
               <span className="iv__status-label">
-                {phase === "initializing" && "Connecting..."}
+                {phase === "initializing" && "Connecting camera and microphone..."}
                 {phase === "ai_speaking" && "AI is speaking"}
                 {phase === "listening" && "Listening..."}
                 {phase === "processing" && "Analyzing your response..."}
                 {phase === "completing" && "Building your report..."}
+                {phase === "device_error" && "Device error"}
                 {phase === "error" && "Error"}
               </span>
             </div>
@@ -391,6 +481,23 @@ export default function InterviewModal({ skill, onClose, onCompleted }: Props) {
             <div className="iv__error" role="alert">
               <span>{error}</span>
               <button className="iv__error-dismiss" onClick={() => setError(null)} aria-label="Dismiss">×</button>
+            </div>
+          )}
+
+          {phase === "device_error" && (
+            <div className="iv__device-banner iv__device-banner--warn" style={{ flexWrap: "wrap", justifyContent: "center", padding: "12px 20px" }}>
+              <span>{error || "Media device error"}</span>
+              <Button onClick={() => void recheckMicrophone()} variant="primary" size="sm">Recheck mic</Button>
+              <Button onClick={() => void recheckCamera()} variant="secondary" size="sm">Recheck camera</Button>
+              <Button onClick={() => void beginInterview()} variant="secondary" size="sm">Retry call</Button>
+            </div>
+          )}
+
+          {phase === "error" && (
+            <div className="iv__device-banner iv__device-banner--warn" style={{ flexWrap: "wrap", justifyContent: "center", padding: "12px 20px" }}>
+              <span>{error || "An error occurred during the interview"}</span>
+              <Button onClick={() => void beginInterview()} variant="primary" size="sm">Retry</Button>
+              <Button onClick={() => void endInterview()} variant="ghost" size="sm">End</Button>
             </div>
           )}
 
@@ -428,7 +535,14 @@ export default function InterviewModal({ skill, onClose, onCompleted }: Props) {
 
             <div className="iv__call-panel iv__call-panel--user">
               <div className="iv__call-camera">
-                <video ref={videoRef} autoPlay muted playsInline className="iv__call-video" aria-label="Your camera preview" />
+                <video
+                  ref={setVideoRef}
+                  autoPlay
+                  muted
+                  playsInline
+                  className="iv__call-video"
+                  aria-label="Your camera preview"
+                />
                 {camState !== "live" && (
                   <div className="iv__call-camera-off">
                     <span>📹</span>
@@ -470,7 +584,12 @@ export default function InterviewModal({ skill, onClose, onCompleted }: Props) {
                 className="iv__call-typed-input"
                 value={typedAnswer}
                 onChange={(e) => setTypedAnswer(e.target.value)}
-                onKeyDown={(e) => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); submitTyped(); } }}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter" && !e.shiftKey) {
+                    e.preventDefault();
+                    submitTyped();
+                  }
+                }}
                 placeholder="Type your answer here..."
                 autoFocus
                 aria-label="Type your answer"
@@ -489,47 +608,39 @@ export default function InterviewModal({ skill, onClose, onCompleted }: Props) {
               </div>
             )}
 
-            {isActive && (
-              <>
-                <Button onClick={toggleMic} variant={micEnabled ? "secondary" : "accent"} size="md"
-                  aria-label={micEnabled ? "Mute microphone" : "Unmute microphone"}>
-                  {micEnabled ? "🎙 Mute" : "🔇 Unmute"}
-                </Button>
-                <Button onClick={toggleCamera} variant={cameraEnabled ? "secondary" : "accent"} size="md"
-                  aria-label={cameraEnabled ? "Turn off camera" : "Turn on camera"}>
-                  {cameraEnabled ? "📷 Camera" : "📷 Camera off"}
-                </Button>
-                <Button onClick={repeatQuestion} variant="secondary" size="md">↻ Repeat</Button>
-                <Button onClick={() => void endInterview()} variant="ghost" size="md">End</Button>
-              </>
-            )}
-
-            {phase === "processing" && (
-              <>
-                <Button onClick={toggleMic} variant="secondary" size="md" disabled>Muted</Button>
-                <Button onClick={toggleCamera} variant={cameraEnabled ? "secondary" : "accent"} size="md">
-                  {cameraEnabled ? "📷 Camera" : "📷 Camera off"}
-                </Button>
-                <Button onClick={repeatQuestion} variant="secondary" size="md" disabled>↻ Repeat</Button>
-                <Button onClick={() => void endInterview()} variant="ghost" size="md">End</Button>
-              </>
-            )}
-
-            {phase === "completing" && (
-              <div className="iv__call-completing">
-                <div className="iv__spinner" />
-                <span>Building your interview report...</span>
-              </div>
-            )}
-
-            {phase === "error" && (
-              <>
-                <Button onClick={() => void recheckCamera()} variant="secondary" size="md">Recheck camera</Button>
-                <Button onClick={() => void recheckMicrophone()} variant="secondary" size="md">Recheck mic</Button>
-                <Button onClick={() => void beginInterview()} variant="primary" size="md">Retry</Button>
-                <Button onClick={() => void endInterview()} variant="ghost" size="md">End</Button>
-              </>
-            )}
+            <Button
+              onClick={toggleMic}
+              variant={micEnabled ? "secondary" : "accent"}
+              size="md"
+              disabled={micState === "denied" || micState === "unavailable"}
+              aria-label={micEnabled ? "Mute microphone" : "Unmute microphone"}
+            >
+              {micEnabled ? "🎙 Mic" : "🔇 Mic off"}
+            </Button>
+            <Button
+              onClick={toggleCamera}
+              variant={cameraEnabled ? "secondary" : "accent"}
+              size="md"
+              disabled={camState === "denied" || camState === "unavailable"}
+              aria-label={cameraEnabled ? "Turn off camera" : "Turn on camera"}
+            >
+              {cameraEnabled ? "📷 Camera" : "📷 Camera off"}
+            </Button>
+            <Button
+              onClick={repeatQuestion}
+              variant="secondary"
+              size="md"
+              disabled={phase === "initializing" || phase === "processing" || phase === "completing"}
+            >
+              ↻ Repeat
+            </Button>
+            <Button
+              onClick={() => void endInterview()}
+              variant="ghost"
+              size="md"
+            >
+              ⛔ End
+            </Button>
           </footer>
         </div>
       )}
@@ -597,3 +708,4 @@ export default function InterviewModal({ skill, onClose, onCompleted }: Props) {
     </div>
   );
 }
+

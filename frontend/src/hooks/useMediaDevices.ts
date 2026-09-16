@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 
-export type MediaDeviceState = "idle" | "requesting" | "live" | "denied" | "unavailable" | "skipped";
+export type MediaDeviceState = "idle" | "requesting" | "live" | "denied" | "unavailable" | "off" | "muted" | "skipped";
 
 export type MediaResult = {
   camera: "live" | "denied" | "unavailable";
@@ -11,6 +11,7 @@ export type MediaResult = {
 
 export type UseMediaDevicesResult = {
   videoRef: React.RefObject<HTMLVideoElement | null>;
+  setVideoRef: (el: HTMLVideoElement | null) => void;
   camState: MediaDeviceState;
   micState: MediaDeviceState;
   micLevel: number;
@@ -100,6 +101,10 @@ export function useMediaDevices(): UseMediaDevicesResult {
     streamRef.current = null;
     if (videoRef.current) videoRef.current.srcObject = null;
     setMicLevel(0);
+    setCamState("idle");
+    setMicState("idle");
+    setCameraEnabled(true);
+    setMicEnabled(true);
   }, []);
 
   // Cleanup on unmount
@@ -255,13 +260,23 @@ export function useMediaDevices(): UseMediaDevicesResult {
     }
   }, [mergeStream, startMicMeter]);
 
+  const setVideoRef = useCallback((el: HTMLVideoElement | null) => {
+    videoRef.current = el;
+    if (el && streamRef.current && streamRef.current.getVideoTracks().length > 0) {
+      el.srcObject = streamRef.current;
+      el.play().catch(() => {});
+    }
+  }, []);
+
   const toggleCamera = useCallback(() => {
     const stream = streamRef.current;
     if (!stream) return;
     const videoTrack = stream.getVideoTracks()[0];
     if (!videoTrack) return;
-    videoTrack.enabled = !videoTrack.enabled;
-    setCameraEnabled(videoTrack.enabled);
+    const next = !videoTrack.enabled;
+    videoTrack.enabled = next;
+    setCameraEnabled(next);
+    setCamState(next ? "live" : "off");
   }, []);
 
   const toggleMic = useCallback(() => {
@@ -269,20 +284,26 @@ export function useMediaDevices(): UseMediaDevicesResult {
     if (!stream) return;
     const audioTrack = stream.getAudioTracks()[0];
     if (!audioTrack) return;
-    audioTrack.enabled = !audioTrack.enabled;
-    setMicEnabled(audioTrack.enabled);
-    if (!audioTrack.enabled) setMicLevel(0);
+    const next = !audioTrack.enabled;
+    audioTrack.enabled = next;
+    setMicEnabled(next);
+    setMicState(next ? "live" : "muted");
+    if (!next) setMicLevel(0);
   }, []);
 
   // Sync video element when camState changes
   useEffect(() => {
-    if (camState === "live" && videoRef.current && streamRef.current) {
-      videoRef.current.srcObject = streamRef.current;
+    if ((camState === "live" || camState === "off") && videoRef.current && streamRef.current) {
+      if (videoRef.current.srcObject !== streamRef.current) {
+        videoRef.current.srcObject = streamRef.current;
+        videoRef.current.play().catch(() => {});
+      }
     }
   }, [camState]);
 
   return {
     videoRef,
+    setVideoRef,
     camState,
     micState,
     micLevel,

@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { Link } from "react-router-dom";
 import Button from "../components/ui/Button";
+import InterviewModal from "../components/assessment/InterviewModal";
 import {
   answerMockQuestion,
   completeMockInterview,
@@ -39,6 +40,7 @@ export default function Interview() {
   const [report, setReport] = useState<InterviewReport | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+  const [liveInterviewSkill, setLiveInterviewSkill] = useState<string | null>(null);
 
   // Camera / mic
   const [camState, setCamState] = useState<CamState>("idle");
@@ -52,10 +54,15 @@ export default function Interview() {
 
   // Dictation (browser SpeechRecognition with fallback)
   const [dictating, setDictating] = useState(false);
-  const recogRef = useRef<any>(null);
+  const recogRef = useRef<{ stop: () => void; start: () => void } | null>(null);
   const speechSupported =
     typeof window !== "undefined" &&
-    Boolean((window as any).SpeechRecognition || (window as any).webkitSpeechRecognition);
+    Boolean(
+      (window as unknown as { SpeechRecognition?: unknown; webkitSpeechRecognition?: unknown })
+        .SpeechRecognition ||
+        (window as unknown as { SpeechRecognition?: unknown; webkitSpeechRecognition?: unknown })
+          .webkitSpeechRecognition
+    );
 
   // Timer
   const [elapsed, setElapsed] = useState(0);
@@ -85,10 +92,10 @@ export default function Interview() {
 
   useEffect(() => {
     if (stage === "question") {
-      setElapsed(0);
-      timerRef.current = window.setInterval(() => setElapsed((e) => e + 1), 1000);
+      const id = window.setInterval(() => setElapsed((e) => e + 1), 1000);
+      timerRef.current = id;
       return () => {
-        if (timerRef.current) window.clearInterval(timerRef.current);
+        window.clearInterval(id);
       };
     }
     if (timerRef.current) window.clearInterval(timerRef.current);
@@ -114,7 +121,7 @@ export default function Interview() {
       setMicState("live");
       // Mic level meter (presence only — no recording by default)
       try {
-        const Ctx = window.AudioContext || (window as any).webkitAudioContext;
+        const Ctx = window.AudioContext || (window as unknown as { webkitAudioContext: typeof AudioContext }).webkitAudioContext;
         const ctx: AudioContext = new Ctx();
         audioCtxRef.current = ctx;
         const src = ctx.createMediaStreamSource(stream);
@@ -214,7 +221,29 @@ export default function Interview() {
       setAudioFallback(true);
       return;
     }
-    const Impl = (window as any).SpeechRecognition || (window as any).webkitSpeechRecognition;
+    const win = window as unknown as {
+      SpeechRecognition?: new () => {
+        lang: string;
+        interimResults: boolean;
+        continuous: boolean;
+        onresult: ((ev: { resultIndex: number; results: Array<Array<{ transcript: string }>> }) => void) | null;
+        onend: (() => void) | null;
+        onerror: (() => void) | null;
+        start: () => void;
+        stop: () => void;
+      };
+      webkitSpeechRecognition?: new () => {
+        lang: string;
+        interimResults: boolean;
+        continuous: boolean;
+        onresult: ((ev: { resultIndex: number; results: Array<Array<{ transcript: string }>> }) => void) | null;
+        onend: (() => void) | null;
+        onerror: (() => void) | null;
+        start: () => void;
+        stop: () => void;
+      };
+    };
+    const Impl = win.SpeechRecognition || win.webkitSpeechRecognition;
     if (dictating) {
       try {
         recogRef.current?.stop();
@@ -225,12 +254,13 @@ export default function Interview() {
       return;
     }
     try {
+      if (!Impl) return;
       const recog = new Impl();
       recogRef.current = recog;
       recog.lang = "en-US";
       recog.interimResults = true;
       recog.continuous = false;
-      recog.onresult = (ev: any) => {
+      recog.onresult = (ev: { resultIndex: number; results: Array<Array<{ transcript: string }>> }) => {
         let text = "";
         for (let i = ev.resultIndex; i < ev.results.length; i++) {
           text += ev.results[i][0].transcript;
@@ -301,6 +331,37 @@ export default function Interview() {
                 {busy ? "Preparing your interview…" : "Prepare my interview"}
               </Button>
             </div>
+
+            <div style={{ marginTop: 28, padding: "20px", background: "rgba(79, 70, 229, 0.08)", borderRadius: 12, border: "1px solid rgba(79, 70, 229, 0.2)" }}>
+              <div style={{ fontWeight: 700, color: "#4f46e5", fontSize: "1.05rem", marginBottom: 6 }}>
+                🎙 Live Video AI Interview (Zoom / Google Meet Style)
+              </div>
+              <p style={{ fontSize: "0.88rem", color: "#475569", margin: "0 0 14px 0", lineHeight: 1.5 }}>
+                Have a natural verbal video interview with the INAURA AI interviewer. The AI interviewer speaks directly to you, listens via speech recognition, and adapts dynamically.
+              </p>
+              <div style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center" }}>
+                <span style={{ fontSize: "0.85rem", fontWeight: 600, color: "#334155" }}>Start with Skill:</span>
+                {["Python", "DSA", "SQL", "React", "Java", "JavaScript"].map((s) => (
+                  <Button
+                    key={s}
+                    variant="secondary"
+                    size="sm"
+                    onClick={() => setLiveInterviewSkill(s)}
+                  >
+                    {s}
+                  </Button>
+                ))}
+                <Button
+                  variant="primary"
+                  size="sm"
+                  onClick={() => setLiveInterviewSkill("Python")}
+                  style={{ marginLeft: "auto" }}
+                >
+                  Let&apos;s Begin Live Call
+                </Button>
+              </div>
+            </div>
+
             <p className="iv__fine">
               Camera stays on this device for presence. No video is uploaded or stored. Gemini grading
               happens server-side — your API keys never reach the browser.
@@ -571,6 +632,13 @@ export default function Interview() {
           </section>
         )}
       </main>
+
+      {liveInterviewSkill && (
+        <InterviewModal
+          skill={liveInterviewSkill}
+          onClose={() => setLiveInterviewSkill(null)}
+        />
+      )}
     </div>
   );
 }

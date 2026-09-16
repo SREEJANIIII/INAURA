@@ -9,110 +9,147 @@ export type UseTextToSpeechResult = {
   isSupported: boolean;
 };
 
-interface SpeechSynthesisVoice {
-  lang: string;
-  name: string;
-  localService: boolean;
-  default: boolean;
-}
-
-interface SpeechSynthesisUtteranceEvent extends Event {
-  error: string;
-}
-
-interface SpeechSynthesisWithWebkit extends SpeechSynthesis {
-  getVoices(): SpeechSynthesisVoice[];
-}
-
-function getSynthesis(): SpeechSynthesisWithWebkit | null {
+function getSynthesis(): SpeechSynthesis | null {
   if (typeof window === "undefined") return null;
-  return (window.speechSynthesis as SpeechSynthesisWithWebkit) || null;
+  return window.speechSynthesis || null;
 }
 
 export function useTextToSpeech(): UseTextToSpeechResult {
   const [state, setState] = useState<TTSState>("idle");
   const resolveRef = useRef<(() => void) | null>(null);
   const speakingRef = useRef(false);
+  const activeUtteranceRef = useRef<SpeechSynthesisUtterance | null>(null);
+  const watchdogTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const isSupported =
     typeof window !== "undefined" && Boolean(window.speechSynthesis);
 
-  const stop = useCallback(() => {
-    const synth = getSynthesis();
-    if (synth) {
-      try { synth.cancel(); } catch { /* ignore */ }
-    }
-    speakingRef.current = false;
-    setState("idle");
-    if (resolveRef.current) {
-      resolveRef.current();
-      resolveRef.current = null;
+  const clearWatchdog = useCallback(() => {
+    if (watchdogTimerRef.current !== null) {
+      clearTimeout(watchdogTimerRef.current);
+      watchdogTimerRef.current = null;
     }
   }, []);
+
+  const stop = useCallback(() => {
+    clearWatchdog();
+    const synth = getSynthesis();
+    if (synth) {
+      try {
+        synth.cancel();
+      } catch {
+        /* ignore */
+      }
+    }
+    speakingRef.current = false;
+    activeUtteranceRef.current = null;
+    setState("idle");
+    if (resolveRef.current) {
+      const r = resolveRef.current;
+      resolveRef.current = null;
+      r();
+    }
+  }, [clearWatchdog]);
 
   useEffect(() => stop, [stop]);
 
   const speak = useCallback(
     (text: string): Promise<void> => {
       return new Promise((resolve) => {
+        clearWatchdog();
         const synth = getSynthesis();
         if (!synth || !text.trim()) {
-          setState("unsupported");
+          if (!synth) setState("unsupported");
           resolve();
           return;
         }
 
-        try { synth.cancel(); } catch { /* ignore */ }
+        try {
+          synth.cancel();
+        } catch {
+          /* ignore */
+        }
 
         const utterance = new SpeechSynthesisUtterance(text);
+        activeUtteranceRef.current = utterance; // Prevent garbage collection in Chrome
+
         utterance.lang = "en-US";
         utterance.rate = 1.0;
         utterance.pitch = 1.0;
 
-        const voices = synth.getVoices?.() || [];
-        const preferred = voices.find(
-          (v) =>
-            v.lang === "en-US" && (v.name.includes("Google") || v.name.includes("Natural") || v.name.includes("Samantha"))
-        );
-        if (preferred) utterance.voice = preferred;
+        try {
+          const voices = synth.getVoices() || [];
+          const preferred = voices.find(
+            (v) =>
+              v.lang.startsWith("en") &&
+              (v.name.includes("Google") ||
+                v.name.includes("Natural") ||
+                v.name.includes("Samantha") ||
+                v.name.includes("Karen") ||
+                v.name.includes("Daniel"))
+          );
+          if (preferred) utterance.voice = preferred;
+        } catch {
+          /* best-effort voice selection */
+        }
 
         speakingRef.current = true;
         setState("speaking");
-        resolveRef.current = () => { resolve(); resolveRef.current = null; };
 
-        utterance.onend = () => {
+        const finish = () => {
+          clearWatchdog();
           speakingRef.current = false;
+          activeUtteranceRef.current = null;
           setState("idle");
-          resolve();
-          resolveRef.current = null;
+          if (resolveRef.current) {
+            const r = resolveRef.current;
+            resolveRef.current = null;
+            r();
+          }
         };
 
-        utterance.onerror = (ev: SpeechSynthesisUtteranceEvent) => {
+        resolveRef.current = resolve;
+
+        utterance.onend = () => {
+          finish();
+        };
+
+        utterance.onerror = (ev: SpeechSynthesisErrorEvent) => {
           if (ev.error === "canceled" || ev.error === "interrupted") {
-            speakingRef.current = false;
-            setState("idle");
-            resolve();
-            resolveRef.current = null;
+            finish();
             return;
           }
           console.warn("Speech synthesis error:", ev.error);
-          speakingRef.current = false;
           setState("error");
-          resolve();
-          resolveRef.current = null;
+          finish();
         };
 
+        // Watchdog: If browser drops onend or hangs, automatically finish
+        const estimatedMs = Math.max(8000, text.length * 120);
+        watchdogTimerRef.current = setTimeout(() => {
+          if (speakingRef.current) {
+            console.warn("Speech synthesis watchdog triggered after", estimatedMs, "ms");
+            finish();
+          }
+        }, estimatedMs);
+
         try {
+          if (synth.paused) {
+            synth.resume();
+          }
           synth.speak(utterance);
+          if (synth.paused) {
+            synth.resume();
+          }
         } catch {
           speakingRef.current = false;
+          activeUtteranceRef.current = null;
           setState("error");
-          resolve();
-          resolveRef.current = null;
+          finish();
         }
       });
     },
-    []
+    [clearWatchdog]
   );
 
   return { state, speak, stop, isSupported };
