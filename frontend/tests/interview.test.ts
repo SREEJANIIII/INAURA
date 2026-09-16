@@ -106,7 +106,6 @@ describe("1. Media Devices & Stream Management", () => {
 
   it("toggles microphone without destroying media stream", () => {
     const audioTrack = new MockMediaStreamTrack("audio");
-    const stream = new MockMediaStream([audioTrack]);
 
     assert.strictEqual(audioTrack.enabled, true);
     // User mutes mic
@@ -306,7 +305,7 @@ describe("4. Interview State Machine & Lifecycle Guards", () => {
   it("correctly executes repeat question flow", () => {
     let speechStopped = false;
     let ttsStopped = false;
-    let currentPrompt = "What is polymorphism?";
+    const currentPrompt = "What is polymorphism?";
     let spokenText = "";
 
     const repeatQuestion = () => {
