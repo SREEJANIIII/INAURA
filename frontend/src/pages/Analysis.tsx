@@ -545,6 +545,12 @@ export default function Analysis() {
                           {existing.verification_message}
                         </p>
                       )}
+                      {Array.isArray((existing?.metadata as Record<string, unknown> | null)?.warnings) &&
+                        ((existing?.metadata as Record<string, unknown>).warnings as string[]).map((warn, idx) => (
+                          <p key={`w-${idx}`} className="analysis__verification-details" style={{ color: "#b45309" }}>
+                            ⚠ {warn}
+                          </p>
+                        ))}
                       {s.type === "linkedin" && (
                         <p className="analysis__verification-details" style={{ fontStyle: "italic", color: "var(--muted-2)" }}>
                           Used only as supporting/self-reported evidence

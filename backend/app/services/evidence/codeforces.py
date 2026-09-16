@@ -94,13 +94,14 @@ class CodeforcesProvider(EvidenceProvider):
         # 3. Query Official Codeforces Public API
         user_info_url = f"https://codeforces.com/api/user.info?handles={handle}"
         rating_history_url = f"https://codeforces.com/api/user.rating?handle={handle}"
-        user_status_url = f"https://codeforces.com/api/user.status?handle={handle}&from=1&count=60"
+        # Fetch more submissions to capture solved problem diversity (was 60, too few for active users)
+        user_status_url = f"https://codeforces.com/api/user.status?handle={handle}&from=1&count=350"
         headers = {
             "User-Agent": "INAURA-Evidence-Intelligence/1.0",
         }
 
         try:
-            async with httpx.AsyncClient(timeout=6.0) as client:
+            async with httpx.AsyncClient(timeout=8.0) as client:
                 info_resp = await client.get(user_info_url, headers=headers)
 
                 if info_resp.status_code == 429:

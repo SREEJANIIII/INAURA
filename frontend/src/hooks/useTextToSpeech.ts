@@ -9,44 +9,33 @@ export type UseTextToSpeechResult = {
   isSupported: boolean;
 };
 
-interface SpeechSynthesisVoice {
-  lang: string;
-  name: string;
-  localService: boolean;
-  default: boolean;
-}
-
-interface SpeechSynthesisUtteranceEvent extends Event {
-  error: string;
-}
-
-interface SpeechSynthesisWithWebkit extends SpeechSynthesis {
-  getVoices(): SpeechSynthesisVoice[];
-}
-
-function getSynthesis(): SpeechSynthesisWithWebkit | null {
+function getSynthesis(): SpeechSynthesis | null {
   if (typeof window === "undefined") return null;
-  return (window.speechSynthesis as SpeechSynthesisWithWebkit) || null;
+  return window.speechSynthesis || null;
 }
 
 export function useTextToSpeech(): UseTextToSpeechResult {
   const [state, setState] = useState<TTSState>("idle");
   const resolveRef = useRef<(() => void) | null>(null);
-  const speakingRef = useRef(false);
+  const utteranceRef = useRef<SpeechSynthesisUtterance | null>(null);
 
-  const isSupported =
-    typeof window !== "undefined" && Boolean(window.speechSynthesis);
+  const isSupported = typeof window !== "undefined" && Boolean(window.speechSynthesis);
 
   const stop = useCallback(() => {
     const synth = getSynthesis();
     if (synth) {
-      try { synth.cancel(); } catch { /* ignore */ }
+      try {
+        synth.cancel();
+      } catch {
+        /* ignore */
+      }
     }
-    speakingRef.current = false;
+    utteranceRef.current = null;
     setState("idle");
     if (resolveRef.current) {
-      resolveRef.current();
+      const r = resolveRef.current;
       resolveRef.current = null;
+      r();
     }
   }, []);
 
@@ -56,60 +45,107 @@ export function useTextToSpeech(): UseTextToSpeechResult {
     (text: string): Promise<void> => {
       return new Promise((resolve) => {
         const synth = getSynthesis();
-        if (!synth || !text.trim()) {
-          setState("unsupported");
+        const trimmed = text.trim();
+        if (!synth || !trimmed) {
+          if (!synth) setState("unsupported");
           resolve();
           return;
         }
 
-        try { synth.cancel(); } catch { /* ignore */ }
-
-        const utterance = new SpeechSynthesisUtterance(text);
-        utterance.lang = "en-US";
-        utterance.rate = 1.0;
-        utterance.pitch = 1.0;
-
-        const voices = synth.getVoices?.() || [];
-        const preferred = voices.find(
-          (v) =>
-            v.lang === "en-US" && (v.name.includes("Google") || v.name.includes("Natural") || v.name.includes("Samantha"))
-        );
-        if (preferred) utterance.voice = preferred;
-
-        speakingRef.current = true;
-        setState("speaking");
-        resolveRef.current = () => { resolve(); resolveRef.current = null; };
-
-        utterance.onend = () => {
-          speakingRef.current = false;
-          setState("idle");
-          resolve();
-          resolveRef.current = null;
-        };
-
-        utterance.onerror = (ev: SpeechSynthesisUtteranceEvent) => {
-          if (ev.error === "canceled" || ev.error === "interrupted") {
-            speakingRef.current = false;
-            setState("idle");
-            resolve();
-            resolveRef.current = null;
-            return;
-          }
-          console.warn("Speech synthesis error:", ev.error);
-          speakingRef.current = false;
-          setState("error");
-          resolve();
-          resolveRef.current = null;
-        };
-
+        // Cancel any ongoing speech
         try {
-          synth.speak(utterance);
+          synth.cancel();
         } catch {
-          speakingRef.current = false;
-          setState("error");
-          resolve();
-          resolveRef.current = null;
+          /* ignore */
         }
+
+        // Wait a tick for cancel to take effect (some browsers need it)
+        setTimeout(() => {
+          const utterance = new SpeechSynthesisUtterance(trimmed);
+          utteranceRef.current = utterance;
+          utterance.lang = "en-US";
+          utterance.rate = 1.0;
+          utterance.pitch = 1.0;
+          utterance.volume = 1.0;
+
+          try {
+            const voices = synth.getVoices?.() || [];
+            const preferred = voices.find(
+              (v) =>
+                v.lang.startsWith("en") &&
+                (v.name.includes("Google") || v.name.includes("Natural") || v.name.includes("Samantha") || v.default)
+            );
+            if (preferred) utterance.voice = preferred;
+          } catch {
+            /* voice selection is best-effort */
+          }
+
+          setState("speaking");
+          resolveRef.current = () => {
+            resolveRef.current = null;
+            resolve();
+          };
+
+          utterance.onend = () => {
+            utteranceRef.current = null;
+            setState("idle");
+            if (resolveRef.current) {
+              const r = resolveRef.current;
+              resolveRef.current = null;
+              r();
+            } else {
+              resolve();
+            }
+          };
+
+          utterance.onerror = (ev: SpeechSynthesisErrorEvent) => {
+            utteranceRef.current = null;
+            // 'canceled' / 'interrupted' are not errors when stop() is called
+            const err = (ev as unknown as { error: string }).error;
+            if (err === "canceled" || err === "interrupted") {
+              setState("idle");
+              if (resolveRef.current) {
+                const r = resolveRef.current;
+                resolveRef.current = null;
+                r();
+              } else {
+                resolve();
+              }
+              return;
+            }
+            console.warn("Speech synthesis error:", err);
+            setState("error");
+            if (resolveRef.current) {
+              const r = resolveRef.current;
+              resolveRef.current = null;
+              r();
+            } else {
+              resolve();
+            }
+          };
+
+          try {
+            synth.speak(utterance);
+            // Some browsers require resume if paused
+            if (synth.paused) {
+              try {
+                synth.resume();
+              } catch {
+                /* ignore */
+              }
+            }
+          } catch {
+            utteranceRef.current = null;
+            setState("error");
+            if (resolveRef.current) {
+              const r = resolveRef.current;
+              resolveRef.current = null;
+              r();
+            } else {
+              resolve();
+            }
+          }
+        }, 50);
       });
     },
     []
