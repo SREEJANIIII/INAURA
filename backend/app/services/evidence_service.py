@@ -1,5 +1,6 @@
 from fastapi import HTTPException, UploadFile
 from supabase import Client
+import asyncio
 from typing import List, Optional, Dict
 from datetime import datetime, timezone
 import uuid
@@ -23,6 +24,7 @@ ALLOWED_FILE_TYPES = {
 }
 ALLOWED_EXTS = {".pdf", ".doc", ".docx"}
 MAX_SIZE = 10 * 1024 * 1024  # 10 MB
+_IN_FLIGHT_VERIFICATIONS: Dict[str, asyncio.Task] = {}
 
 
 def _client() -> Client:
@@ -238,7 +240,7 @@ def update_evidence(user_id: str, evidence_id: str, payload: dict) -> dict:
         raise HTTPException(status_code=500, detail="Failed to update evidence")
 
 
-async def verify_evidence_item(user_id: str, evidence_id: str, force_refresh: bool = False) -> dict:
+async def _verify_evidence_item_once(user_id: str, evidence_id: str, force_refresh: bool = False) -> dict:
     """
     Independently inspect an evidence item using its provider.
     Updates verification status, message, verified_at, and saves verified signals in metadata.
@@ -311,6 +313,22 @@ async def verify_evidence_item(user_id: str, evidence_id: str, force_refresh: bo
         "facts": result.facts,
         "warnings": result.warnings,
     }
+
+
+async def verify_evidence_item(user_id: str, evidence_id: str, force_refresh: bool = False) -> dict:
+    """Verify one evidence item, coalescing concurrent requests for its key."""
+    key = f"{user_id}:{evidence_id}"
+    existing = _IN_FLIGHT_VERIFICATIONS.get(key)
+    if existing is not None and not existing.done():
+        return await asyncio.shield(existing)
+
+    task = asyncio.create_task(_verify_evidence_item_once(user_id, evidence_id, force_refresh))
+    _IN_FLIGHT_VERIFICATIONS[key] = task
+    try:
+        return await asyncio.shield(task)
+    finally:
+        if _IN_FLIGHT_VERIFICATIONS.get(key) is task:
+            _IN_FLIGHT_VERIFICATIONS.pop(key, None)
 
 
 def delete_evidence(user_id: str, evidence_id: str):

@@ -72,3 +72,26 @@ export async function apiFetch<T>(
 
   return (await response.json()) as T;
 }
+
+export async function apiFetchBlob(endpoint: string, options: ApiOptions = {}): Promise<Blob> {
+  const { params, ...fetchOptions } = options;
+  let url = `${API_BASE_URL}${endpoint.startsWith("/") ? endpoint : `/${endpoint}`}`;
+  if (params) {
+    const search = new URLSearchParams(Object.entries(params).reduce((acc, [k, v]) => ({ ...acc, [k]: String(v) }), {} as Record<string, string>)).toString();
+    if (search) url += `?${search}`;
+  }
+  let authHeader: Record<string, string> = {};
+  try {
+    if (supabase) {
+      const { data } = await supabase.auth.getSession();
+      const token = data.session?.access_token;
+      if (token) authHeader = { Authorization: `Bearer ${token}` };
+    }
+  } catch { /* let the API return the useful error */ }
+  const response = await fetch(url, { ...fetchOptions, headers: { ...authHeader, ...(fetchOptions.headers as Record<string, string> | undefined), "Content-Type": "application/json" } });
+  if (!response.ok) {
+    const text = await response.text().catch(() => "");
+    throw new Error(`API error ${response.status} ${response.statusText}${text ? `: ${text}` : ""}`);
+  }
+  return response.blob();
+}

@@ -20,8 +20,25 @@ class Settings(BaseSettings):
     # NVIDIA NIM interview evaluator.
     nvidia_api_key: str | None = None
     nvidia_model: str = "nvidia/nemotron-3-nano-omni-30b-a3b-reasoning"
+    # Interview TTS — NVIDIA-hosted voice (TEXT -> SPEECH only).
+    # Gemini keeps using GOOGLE_API_KEY/gemini-2.5-flash for evaluation.
+    # NVIDIA_API_KEY is backend-only and never reaches the frontend.
+    tts_provider: str = "nvidia"
+    nvidia_api_key: str | None = None
+    nvidia_tts_model: str = "magpie-tts-multilingual"
+    nvidia_tts_voice: str = "Magpie-Multilingual.EN-US.Aria"
+    nvidia_tts_language: str = "en-US"
+    nvidia_tts_function_id: str = "877104f7-e885-42b9-8de8-f6e4c6303969"
+    nvidia_tts_endpoint: str = ""
+    nvidia_tts_timeout_seconds: int = 30
+    # Local-development TTS diagnostics (TTS_DEBUG=true). Adds safe provider
+    # facts to logs and to the /interview/tts 503 response. Always false in
+    # production. NEVER enables key/secret output.
+    tts_debug: bool = False
     # Gemini embeddings (preferred) — uses GOOGLE_API_KEY fallback if EMBEDDING_API_KEY not set
     gemini_embedding_model: str = "gemini-embedding-001"
+    # Optional server-side GitHub token. Never returned to the frontend.
+    github_token: str | None = None
 
     class Config:
         env_file = ".env"
@@ -32,10 +49,15 @@ class Settings(BaseSettings):
     def model_post_init(self, __context):  # type: ignore
         # Treat placeholder values from .env.example as not set
         placeholders = {"your-anon-key", "your-service-role-key", "your-jwt-secret", "YOUR_JWT_SECRET", "your-project.supabase.co", "your-embedding-key", "your-google-api-key", "your-nvidia-api-key"}
-        for field in ["supabase_url", "supabase_anon_key", "supabase_service_role_key", "supabase_jwt_secret", "embedding_api_key", "google_api_key", "nvidia_api_key"]:
+        for field in ["supabase_url", "supabase_anon_key", "supabase_service_role_key", "supabase_jwt_secret", "embedding_api_key", "google_api_key", "nvidia_api_key", "github_token"]:
             val = getattr(self, field)
             if val and any(ph in val for ph in placeholders):
                 setattr(self, field, None)
+        # Normalize TTS provider (NVIDIA voice only)
+        if self.tts_provider:
+            self.tts_provider = self.tts_provider.strip().lower()
+            if self.tts_provider in {"", "none", "disabled"}:
+                self.tts_provider = "nvidia"
         # Normalize embedding provider
         if self.embedding_provider:
             self.embedding_provider = self.embedding_provider.strip().lower()

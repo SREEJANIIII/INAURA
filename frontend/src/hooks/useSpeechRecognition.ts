@@ -55,7 +55,7 @@ declare global {
  * Normalizes common casing/formatting for technical terms from speech recognition
  * without altering candidate meaning or inventing words.
  */
-function normalizeTechnicalTerms(text: string): string {
+export function normalizeTechnicalTerms(text: string): string {
   if (!text) return "";
   let s = text;
   const terms: Array<[RegExp, string]> = [
@@ -116,8 +116,8 @@ export function useSpeechRecognition(
   }, []);
 
   const submitTranscript = useCallback((transcript: string) => {
-    const cleaned = normalizeTechnicalTerms(transcript.trim());
-    if (!cleaned || isSubmittedRef.current) return;
+    const raw = transcript.trim();
+    if (!raw || isSubmittedRef.current) return;
     isSubmittedRef.current = true;
     clearSilenceTimer();
     activeRef.current = false;
@@ -127,7 +127,7 @@ export function useSpeechRecognition(
       /* ignore */
     }
     setState("idle");
-    onSilenceRef.current?.(cleaned);
+    onSilenceRef.current?.(raw);
   }, [clearSilenceTimer]);
 
   const scheduleSilenceTimer = useCallback(() => {
@@ -310,7 +310,7 @@ export function useSpeechRecognition(
     setInterimTranscript("");
     interimTranscriptRef.current = "";
     setState("idle");
-    return normalizeTechnicalTerms(combined);
+    return combined;
   }, [clearSilenceTimer]);
 
   const reset = useCallback(() => {

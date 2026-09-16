@@ -561,10 +561,46 @@ VITE_API_URL=http://localhost:8000/api/v1
 
 Vite dev proxy also forwards `/api` to `http://localhost:8000` for local dev without CORS.
 
+## INTERVIEW VOICE (NVIDIA TTS via backend, no browser speech)
+
+The AI video interview voice is synthesized by **NVIDIA-hosted TTS**
+(`magpie-tts-multilingual`, voice `Magpie-Multilingual.EN-US.Aria`), called
+server-side through our FastAPI backend. There is no browser
+`speechSynthesis` in the interview path, no Gemini TTS, no Piper, and no
+voice quota on the Gemini key. Gemini (`GOOGLE_API_KEY`) is still used
+server-side for ALL interview evaluation/reasoning — it analyzes each
+answer and generates the next question, which NVIDIA then speaks.
+
+How it works:
+
+- User answer → transcript → Gemini evaluates THIS answer → Gemini returns
+  the next/follow-up question → backend requests NVIDIA audio for that exact
+  text → browser plays it → microphone starts listening.
+- Duplicate questions are never voiced twice (session+question in-flight
+  dedupe, stale-audio guards); ending/repeating cancels stale playback.
+- If voice fails, the existing fallback applies: the question text stays
+  visible and the candidate answers by speaking or typing.
+
+Setup: add `NVIDIA_API_KEY` to `backend/.env` (get a key at
+https://build.nvidia.com → Generate API Key; never commit it) alongside
+`TTS_PROVIDER=nvidia`. See `backend/.env.example` for the model/voice/
+endpoint knobs. Nothing to install.
+
 ## Verification (Phase 0/1)
 
 1. Backend health: `curl http://localhost:8000/api/v1/health`
 2. Frontend: Home page has "Check Backend Connection" button — should show `ok` when backend is running.
+
+The voice interview uses NVIDIA TTS (backend, see INTERVIEW VOICE above) plus
+server-side Gemini evaluation. Add `GOOGLE_API_KEY` and `NVIDIA_API_KEY` to `backend/.env` (the
+key is never exposed to the frontend) and restart the backend before using
+the live interview.
+
+For reliable deep GitHub inspection, add a server-side fine-grained
+`GITHUB_TOKEN` to `backend/.env` with read-only public repository metadata and
+contents access. The token is read only by the backend and is never returned to
+the frontend. Without it, GitHub's anonymous rate limit can allow profile
+discovery but block the larger repository inspection pass.
 3. Frontend build: `npm run build`
 4. Backend check: `python -m py_compile app/main.py` or `pytest` when tests exist.
 

@@ -30,6 +30,9 @@ import json
 import logging
 import re
 import uuid
+import asyncio
+import hashlib
+from time import perf_counter
 
 from fastapi import HTTPException
 
@@ -38,6 +41,7 @@ from ..evidence_weights import ASSESSMENT_SOURCE, reliability
 from ..signal_extractor import make_signal
 from ..skill_taxonomy import normalize_skill, normalize_skill_slug
 from .layers import INTERVIEW
+from ..gemini_diagnostics import classify_error, log_gemini_event, provider_details
 
 logger = logging.getLogger(__name__)
 
@@ -55,6 +59,123 @@ INTERVIEW_TOTAL_BUDGET = 8
 # Displayed estimate; the interview is self-paced within the TTL.
 INTERVIEW_ESTIMATED_MINUTES = 10
 INTERVIEW_TTL_MINUTES = 120
+
+# Serializes answer/complete operations for a session in this process. The
+# durable answer claim added in 022 protects the same invariant across workers.
+_session_locks: Dict[str, asyncio.Lock] = {}
+
+
+def _session_lock(session_id: str) -> asyncio.Lock:
+    return _session_locks.setdefault(session_id, asyncio.Lock())
+
+
+def _answer_hash(transcript: str) -> str:
+    return hashlib.sha256(transcript.strip().encode("utf-8")).hexdigest()
+
+
+def _existing_answer(s: dict, question_id: str, transcript_hash: str) -> Optional[dict]:
+    for entry in s.get("evaluation_results") or []:
+        if not isinstance(entry, dict) or entry.get("question_id") != question_id:
+            continue
+        if entry.get("transcript_hash") and entry.get("transcript_hash") != transcript_hash:
+            raise HTTPException(status_code=409, detail={
+                "message": "This question already has a different submitted answer",
+                "error_category": "duplicate_answer_conflict",
+            })
+        if entry.get("response"):
+            return entry["response"]
+    return None
+
+
+def _claim_answer(c, session_id: str, question_id: str, transcript_hash: str) -> tuple[str, Optional[dict]]:
+    """Claim one answer durably when migration 022 is installed.
+
+    Older installations fall back to the per-process lock, preserving
+    compatibility until the additive migration is applied.
+    """
+    row = {"session_id": session_id, "question_id": question_id, "transcript_hash": transcript_hash, "status": "processing"}
+    try:
+        c.table("assessment_interview_answer_claims").insert(row).execute()
+        return "claimed", None
+    except Exception as exc:
+        text = str(exc).lower()
+        if "does not exist" in text or "pgrst205" in text or "could not find the table" in text:
+            return "unavailable", None
+        try:
+            existing = c.table("assessment_interview_answer_claims").select("*").eq("session_id", session_id).eq("question_id", question_id).limit(1).execute()
+            data = (existing.data or []) if existing else []
+            if not data:
+                raise
+            claim = data[0]
+            if claim.get("transcript_hash") != transcript_hash:
+                raise HTTPException(status_code=409, detail={"message": "This question already has a different submitted answer", "error_category": "duplicate_answer_conflict"})
+            if claim.get("status") == "completed" and claim.get("response"):
+                return "completed", claim["response"]
+            if claim.get("status") == "processing":
+                raise HTTPException(status_code=409, detail={"message": "This answer is already being evaluated", "error_category": "answer_in_progress", "retryable": True})
+            c.table("assessment_interview_answer_claims").update(row).eq("session_id", session_id).eq("question_id", question_id).execute()
+            return "claimed", None
+        except HTTPException:
+            raise
+        except Exception:
+            # Do not turn a diagnostics/idempotency table outage into a broken
+            # interview; the process-local lock still protects this worker.
+            return "unavailable", None
+
+
+def _finish_answer_claim(c, session_id: str, question_id: str, response: dict, status: str = "completed") -> None:
+    try:
+        c.table("assessment_interview_answer_claims").update({"status": status, "response": response}).eq("session_id", session_id).eq("question_id", question_id).execute()
+    except Exception:
+        pass
+
+
+def _release_answer_claim(c, session_id: str, question_id: str) -> None:
+    try:
+        c.table("assessment_interview_answer_claims").delete().eq("session_id", session_id).eq("question_id", question_id).execute()
+    except Exception:
+        pass
+
+
+def _claim_completion(c, session_id: str) -> tuple[str, Optional[dict]]:
+    try:
+        c.table("assessment_interview_completion_claims").insert({"session_id": session_id, "status": "processing"}).execute()
+        return "claimed", None
+    except Exception as exc:
+        text = str(exc).lower()
+        if "does not exist" in text or "pgrst205" in text or "could not find the table" in text:
+            return "unavailable", None
+        try:
+            existing = c.table("assessment_interview_completion_claims").select("*").eq("session_id", session_id).limit(1).execute()
+            data = (existing.data or []) if existing else []
+            if not data:
+                raise
+            claim = data[0]
+            if claim.get("status") == "completed" and claim.get("response"):
+                return "completed", claim["response"]
+            raise HTTPException(status_code=409, detail={
+                "message": "Interview completion is already in progress",
+                "error_category": "completion_in_progress",
+                "retryable": True,
+            })
+        except HTTPException:
+            raise
+        except Exception:
+            return "unavailable", None
+
+
+def _finish_completion_claim(c, session_id: str, response: dict) -> None:
+    try:
+        c.table("assessment_interview_completion_claims").update({"status": "completed", "response": response}).eq("session_id", session_id).execute()
+    except Exception:
+        pass
+
+
+def _release_completion_claim(c, session_id: str) -> None:
+    try:
+        c.table("assessment_interview_completion_claims").delete().eq("session_id", session_id).execute()
+    except Exception:
+        pass
 
 
 # ---------------------------------------------------------------------------
@@ -446,6 +567,8 @@ async def evaluate_answer_llm(
     prior_summary: str,
     competencies: List[Dict[str, str]],
     _llm: Any = None,
+    session_id: Optional[str] = None,
+    question_id: Optional[str] = None,
 ) -> Dict[str, Any]:
     """Evaluate one interview answer via NVIDIA NIM.
 
@@ -463,6 +586,7 @@ async def evaluate_answer_llm(
         f"Question: {question.get('prompt', '')}\n\n"
         f"Candidate answer:\n{transcript[:4000]}"
     )
+    started = perf_counter()
     try:
         if hasattr(llm, "ainvoke"):
             raw = await llm.ainvoke([
@@ -473,10 +597,19 @@ async def evaluate_answer_llm(
         else:
             raw = llm.invoke(user_prompt)
             text = str(getattr(raw, "content", raw) or "")
+        log_gemini_event(request_type="evaluation", model=getattr(llm, "model", "gemini-2.5-flash"), success=True,
+                         elapsed_ms=(perf_counter() - started) * 1000, session_id=session_id, question_id=question_id)
     except HTTPException:
         raise
     except Exception as e:
-        raise HTTPException(status_code=502, detail=f"Interview answer evaluation failed: {str(e)[:200]}")
+        details = provider_details(e)
+        log_gemini_event(request_type="evaluation", model=getattr(llm, "model", "gemini-2.5-flash"), success=False,
+                         elapsed_ms=(perf_counter() - started) * 1000, error=e, session_id=session_id, question_id=question_id)
+        raise HTTPException(status_code=502, detail={
+            "message": "Interview answer evaluation failed",
+            "error_category": classify_error(e),
+            **details,
+        })
     try:
         return parse_answer_evaluation(text, str(question.get("id") or ""))
     except Exception:
@@ -847,6 +980,18 @@ async def answer_interview_question(
     transcript: str,
     _llm: Any = None,
 ) -> dict:
+    """Serialize and idempotently process one adaptive answer."""
+    async with _session_lock(session_id):
+        return await _answer_interview_question_locked(user_id, session_id, question_id, transcript, _llm=_llm)
+
+
+async def _answer_interview_question_locked(
+    user_id: str,
+    session_id: str,
+    question_id: str,
+    transcript: str,
+    _llm: Any = None,
+) -> dict:
     """Submit one answer, evaluate with NVIDIA NIM, optionally insert follow-up.
 
     Returns the next interview state: evaluation, next action, next question.
@@ -874,6 +1019,15 @@ async def answer_interview_question(
     if target_q is None:
         raise HTTPException(status_code=400, detail="question_id does not belong to this session")
 
+    text = (transcript or "").strip()
+    if not text:
+        raise HTTPException(status_code=400, detail="Answer transcript is empty")
+
+    transcript_hash = _answer_hash(text)
+    existing_response = _existing_answer(s, question_id, transcript_hash)
+    if existing_response is not None:
+        return existing_response
+
     # Guard: only allow answering the current question (or a follow-up at current_index).
     # Prevents re-answering earlier questions from skipping later ones.
     current_index = int(s.get("current_index") or 0)
@@ -882,10 +1036,9 @@ async def answer_interview_question(
             status_code=409,
             detail=f"Question '{question_id}' is not the current question (current index: {current_index})",
         )
-
-    text = (transcript or "").strip()
-    if not text:
-        raise HTTPException(status_code=400, detail="Answer transcript is empty")
+    claim_state, claimed_response = _claim_answer(c, session_id, question_id, transcript_hash)
+    if claimed_response is not None:
+        return claimed_response
 
     # Build prior evidence summary for corroboration
     prior_snap = s.get("prior_snapshot") or []
@@ -911,16 +1064,28 @@ async def answer_interview_question(
     ai_available = True
     evaluation_pending = False
     note = None
+    failure_category = None
+    provider_status = None
+    provider_code = None
+    retry_after = None
     try:
-        evaluation = await evaluate_answer_llm(eval_input, text, prior_text, competencies, _llm=_llm)
+        evaluation = await evaluate_answer_llm(
+            eval_input, text, prior_text, competencies, _llm=_llm,
+            session_id=session_id, question_id=question_id,
+        )
     except HTTPException as e:
         if e.status_code in (502, 503):
             ai_available = False
             evaluation_pending = True
-            note = e.detail
+            detail = e.detail if isinstance(e.detail, dict) else {"message": str(e.detail)}
+            note = str(detail.get("message") or "Evaluation is temporarily unavailable")
+            failure_category = detail.get("error_category")
+            provider_status = detail.get("status")
+            provider_code = detail.get("provider_code")
+            retry_after = detail.get("retry_after")
         else:
+            _release_answer_claim(c, session_id, question_id)
             raise
-
     # Store the answer in transcript
     existing_transcript = s.get("transcript") or []
     # Find or create the transcript entry for this question
@@ -946,6 +1111,7 @@ async def answer_interview_question(
         "question_id": question_id,
         "competency": target_q.get("competency"),
         "evaluation": evaluation,
+        "transcript_hash": transcript_hash,
     }
     # Replace if already exists
     existing_evals = [e for e in existing_evals if isinstance(e, dict) and e.get("question_id") != question_id]
@@ -993,11 +1159,6 @@ async def answer_interview_question(
     if follow_up_question is not None:
         update["plan"] = plan
 
-    try:
-        c.table(INTERVIEW_SESSIONS_TABLE).update(update).eq("id", session_id).eq("user_id", user_id).execute()
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Failed to save interview answer: {str(e)[:200]}")
-
     # Build response
     completed = action == "complete"
     next_question = None
@@ -1021,7 +1182,7 @@ async def answer_interview_question(
     elif action == "complete":
         spoken_response = "Thank you. That concludes all questions for this interview. I'm finalizing your evaluation now."
 
-    return {
+    response = {
         "session_id": session_id,
         "question_id": question_id,
         "next_action": action,
@@ -1036,7 +1197,24 @@ async def answer_interview_question(
         "answered_count": answered_count,
         "total_questions": len(questions),
         "note": note,
+        "failure_category": failure_category,
+        "provider_status": provider_status,
+        "provider_code": provider_code,
+        "retry_after": retry_after,
     }
+    # Store the exact response so a network retry can replay it without a
+    # second evaluation or adaptive mutation.
+    for entry in existing_evals:
+        if isinstance(entry, dict) and entry.get("question_id") == question_id:
+            entry["response"] = response
+            break
+    _finish_answer_claim(c, session_id, question_id, response)
+    try:
+        c.table(INTERVIEW_SESSIONS_TABLE).update(update).eq("id", session_id).eq("user_id", user_id).execute()
+    except Exception as e:
+        _finish_answer_claim(c, session_id, question_id, response, status="failed")
+        raise HTTPException(status_code=500, detail=f"Failed to save interview answer: {str(e)[:200]}")
+    return response
 
 
 # ---------------------------------------------------------------------------
@@ -1080,6 +1258,7 @@ def _make_interview_llm():
 #         model=settings.gemini_model or "gemini-2.5-flash",
 #         google_api_key=settings.google_api_key,
 #         temperature=0.2,
+        max_retries=0,
 #     )
 
 
@@ -1188,6 +1367,16 @@ async def complete_interview_session(
     session_id: str,
     recalculate: bool = True,
 ) -> dict:
+    """Serialize completion so it cannot race answer evaluation."""
+    async with _session_lock(session_id):
+        return await _complete_interview_session_locked(user_id, session_id, recalculate=recalculate)
+
+
+async def _complete_interview_session_locked(
+    user_id: str,
+    session_id: str,
+    recalculate: bool = True,
+) -> dict:
     """
     Finish an interview: grade via the model when configured, else store the
     transcript as awaiting_review (no signal, nothing breaks).
@@ -1202,7 +1391,18 @@ async def complete_interview_session(
     c = _client()
     s = _load_session(c, user_id, session_id)
     if str(s.get("status")) not in ("in_progress",):
-        raise HTTPException(status_code=409, detail="This interview session is already completed")
+        return {
+            "session_id": session_id,
+            "skill": canonical if "canonical" in locals() else str(s.get("skill_name") or ""),
+            "status": s.get("status"),
+            "validity": s.get("validity") or "low_confidence",
+            "counts_as_evidence": str(s.get("status")) == "graded",
+            "completed_at": s.get("completed_at"),
+            "source_reliability": INTERVIEW_RELIABILITY if str(s.get("status")) == "graded" else None,
+            "technical_scores": s.get("technical_scores"),
+            "communication_scores": s.get("communication_scores"),
+            "note": "Interview completion was already recorded.",
+        }
 
     plan = s.get("plan") or {}
     transcript = s.get("transcript") or []
@@ -1210,6 +1410,10 @@ async def complete_interview_session(
     canonical = normalize_skill(s.get("skill_name") or "") or str(s.get("skill_name") or "")
     competencies = plan.get("competencies") or competencies_for_skill(canonical)
     now = datetime.now(timezone.utc)
+
+    _completion_state, claimed_completion = _claim_completion(c, session_id)
+    if claimed_completion is not None:
+        return claimed_completion
 
     answered = sum(1 for t in transcript if isinstance(t, dict) and str(t.get("answer") or "").strip())
     if not transcript or answered == 0:
@@ -1219,7 +1423,7 @@ async def complete_interview_session(
             c.table(INTERVIEW_SESSIONS_TABLE).update(update).eq("id", session_id).eq("user_id", user_id).execute()
         except Exception as e:
             raise HTTPException(status_code=500, detail=f"Failed to complete interview: {str(e)[:200]}")
-        return {
+        response = {
             "session_id": session_id,
             "skill": canonical,
             "status": "completed",
@@ -1228,6 +1432,8 @@ async def complete_interview_session(
             "completed_at": update["completed_at"],
             "note": "INAURA found limited evidence of implementation understanding — no answers were submitted.",
         }
+        _finish_completion_claim(c, session_id, response)
+        return response
 
     # Determine grading path: per-answer evaluations vs batch transcript
     has_per_answer_evals = bool(
@@ -1279,15 +1485,18 @@ async def complete_interview_session(
                     c.table(INTERVIEW_SESSIONS_TABLE).update(update).eq("id", session_id).eq("user_id", user_id).execute()
                 except Exception as ue:
                     raise HTTPException(status_code=500, detail=f"Failed to save interview: {str(ue)[:200]}")
-                return {
+                response = {
                     "session_id": session_id,
                     "skill": canonical,
                     "status": "awaiting_review",
                     "validity": "low_confidence",
                     "counts_as_evidence": False,
                     "completed_at": update["completed_at"],
-                    "note": e.detail,
+                    "note": str(e.detail),
                 }
+                _finish_completion_claim(c, session_id, response)
+                return response
+            _release_completion_claim(c, session_id)
             raise
 
         tech = grades["technical"]
@@ -1305,6 +1514,7 @@ async def complete_interview_session(
     try:
         c.table(INTERVIEW_SESSIONS_TABLE).update(update).eq("id", session_id).eq("user_id", user_id).execute()
     except Exception as e:
+        _release_completion_claim(c, session_id)
         raise HTTPException(status_code=500, detail=f"Failed to save interview grades: {str(e)[:200]}")
 
     result: Dict[str, Any] = {
@@ -1328,6 +1538,7 @@ async def complete_interview_session(
         from .service import _recalculate_analysis
 
         result["analysis"] = await _recalculate_analysis(user_id, canonical)
+    _finish_completion_claim(c, session_id, result)
     return result
 
 
