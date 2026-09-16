@@ -235,16 +235,12 @@ export function useSpeechRecognition(
           return;
         }
 
-        // If candidate spoke and browser closed recognition before silence timer:
+        // Recognition can end after a final result. Give the silence timer the
+        // configured window to collect any last interim words instead of
+        // submitting immediately from onend.
         if (hasSpokenRef.current) {
-          const full = [finalTranscriptRef.current, interimTranscriptRef.current]
-            .filter(Boolean)
-            .join(" ")
-            .trim();
-          if (full && !isSubmittedRef.current) {
-            submitTranscript(full);
-            return;
-          }
+          scheduleSilenceTimer();
+          return;
         }
 
         // If recognition closed unexpectedly (e.g. Chrome 15s idle timeout) without speech,
@@ -274,26 +270,36 @@ export function useSpeechRecognition(
           return;
         }
         console.warn("Speech recognition error:", ev.error);
-        if (ev.error === "not-allowed" || ev.error === "service-not-allowed") {
+        if (ev.error === "not-allowed" || ev.error === "service-not-allowed" || ev.error === "audio-capture" || ev.error === "network") {
           activeRef.current = false;
           clearSilenceTimer();
           setState("error");
         }
       };
 
-      recog.start();
       activeRef.current = true;
       restartAttemptsRef.current = 0;
+      try {
+        recog.start();
+      } catch {
+        activeRef.current = false;
+        setState("error");
+        return;
+      }
       setState("listening");
       // CRITICAL: Do NOT start silence timer here! We wait until candidate actually speaks!
     } catch {
       setState("error");
     }
-  }, [isSupported, scheduleSilenceTimer, clearSilenceTimer, submitTranscript]);
+  }, [isSupported, scheduleSilenceTimer, clearSilenceTimer]);
 
   const stop = useCallback(() => {
     clearSilenceTimer();
     activeRef.current = false;
+    const combined = [finalTranscriptRef.current, interimTranscriptRef.current]
+      .filter(Boolean)
+      .join(" ")
+      .trim();
     if (recogRef.current) {
       try {
         recogRef.current.stop();
@@ -303,10 +309,6 @@ export function useSpeechRecognition(
     }
     setInterimTranscript("");
     interimTranscriptRef.current = "";
-    const combined = [finalTranscriptRef.current, interimTranscriptRef.current]
-      .filter(Boolean)
-      .join(" ")
-      .trim();
     setState("idle");
     return normalizeTechnicalTerms(combined);
   }, [clearSilenceTimer]);

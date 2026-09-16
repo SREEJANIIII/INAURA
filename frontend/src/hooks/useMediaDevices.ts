@@ -55,6 +55,9 @@ export function useMediaDevices(): UseMediaDevicesResult {
 
   const startMicMeter = useCallback((stream: MediaStream) => {
     try {
+      if (rafRef.current !== null) cancelAnimationFrame(rafRef.current);
+      try { audioCtxRef.current?.close(); } catch { /* ignore */ }
+      audioCtxRef.current = null;
       const Ctx = window.AudioContext || (window as unknown as { webkitAudioContext: typeof AudioContext }).webkitAudioContext;
       if (!Ctx) return;
       const ctx: AudioContext = new Ctx();
@@ -111,17 +114,15 @@ export function useMediaDevices(): UseMediaDevicesResult {
   useEffect(() => stopAll, [stopAll]);
 
   const mergeStream = useCallback((existing: MediaStream | null, patch: MediaStream | null): MediaStream => {
-    const tracks: MediaStreamTrack[] = [];
-    if (existing) {
-      tracks.push(...existing.getVideoTracks());
-      tracks.push(...existing.getAudioTracks());
-    }
-    if (patch) {
-      // Add tracks from patch that don't already exist (by kind)
-      for (const track of patch.getTracks()) {
-        const alreadyHas = tracks.some((t) => t.kind === track.kind);
-        if (!alreadyHas) tracks.push(track);
+    // Replace tracks by kind so a retry cannot leave a stopped track in the preview.
+    const tracks = existing ? [...existing.getTracks()] : [];
+    for (const nextTrack of patch?.getTracks() ?? []) {
+      for (const oldTrack of tracks.filter((track) => track.kind === nextTrack.kind)) {
+        oldTrack.stop();
+        const index = tracks.indexOf(oldTrack);
+        if (index >= 0) tracks.splice(index, 1);
       }
+      tracks.push(nextTrack);
     }
     return new MediaStream(tracks);
   }, []);
@@ -181,8 +182,8 @@ export function useMediaDevices(): UseMediaDevicesResult {
           setMicState("live");
           startMicMeter(merged);
         }
-      } catch {
-        micResult = kindFromError(new Error());
+      } catch (micErr) {
+        micResult = kindFromError(micErr);
         setMicState(micResult === "denied" ? "denied" : "unavailable");
       }
     }
@@ -198,8 +199,8 @@ export function useMediaDevices(): UseMediaDevicesResult {
           setCamState("live");
           await attachVideo(merged);
         }
-      } catch {
-        camResult = kindFromError(new Error());
+      } catch (camErr) {
+        camResult = kindFromError(camErr);
         setCamState(camResult === "denied" ? "denied" : "unavailable");
       }
     }

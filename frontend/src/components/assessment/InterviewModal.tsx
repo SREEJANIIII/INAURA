@@ -245,7 +245,9 @@ export default function InterviewModal({ skill, onClose, onCompleted }: Props) {
     }
 
     try {
-      const data = await startSkillInterview(skill);
+      // Device retries and browser recovery reuse the existing backend session.
+      // Only the first successful start is allowed to create one.
+      const data = sessionRef.current ?? await startSkillInterview(skill);
       if (!interviewActiveRef.current) {
         setLoading(false);
         return;
@@ -271,7 +273,9 @@ export default function InterviewModal({ skill, onClose, onCompleted }: Props) {
       setLoading(false);
       speechRef.current.reset();
 
-      const greeting = `Hi! I'm your INAURA AI interviewer. I've reviewed your profile and we'll focus on ${skill} today. Let's begin. ${firstQ.prompt}`;
+      const greeting = sessionRef.current
+        ? firstQ.prompt
+        : `Hi! I'm your INAURA AI interviewer. I've reviewed your profile and we'll focus on ${skill} today. Let's begin. ${firstQ.prompt}`;
       await speakThenListen(greeting);
     } catch (e) {
       if (!interviewActiveRef.current) return;
@@ -708,4 +712,3 @@ export default function InterviewModal({ skill, onClose, onCompleted }: Props) {
     </div>
   );
 }
-
