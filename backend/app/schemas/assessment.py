@@ -315,6 +315,8 @@ class AnswerInterviewResponse(BaseModel):
     session_id: str
     question_id: str
     next_action: str = "next"
+    action: Optional[str] = None
+    spoken_response: Optional[str] = None
     ai_available: bool = True
     evaluation: Optional[AnswerInterviewEvaluation] = None
     evaluation_pending: bool = False

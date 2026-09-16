@@ -649,6 +649,9 @@ def test_follow_up_inserted_at_correct_position():
     nq = resp.get("current_question") or {}
     assert nq.get("id") == "q0_followup_1"
     assert nq.get("competency") == "c1_followup"
+    assert resp.get("action") == "FOLLOW_UP"
+    assert resp.get("spoken_response") is not None
+    assert "Why did you do that?" in resp["spoken_response"]
     # The persisted plan should have the follow-up inserted between q0 and q1
     update_call = mock_update.update.call_args
     saved_plan = update_call[0][0].get("plan")

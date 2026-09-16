@@ -1,6 +1,10 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 
+<<<<<<< HEAD
 export type MediaDeviceState = "idle" | "requesting" | "live" | "denied" | "unavailable" | "off" | "muted";
+=======
+export type MediaDeviceState = "idle" | "requesting" | "live" | "denied" | "unavailable" | "off" | "muted" | "skipped";
+>>>>>>> cd816cd7af05b78146197492a0c4f6a7d6cd19d9
 
 export type MediaResult = {
   camera: "live" | "denied" | "unavailable";
@@ -10,6 +14,7 @@ export type MediaResult = {
 
 export type UseMediaDevicesResult = {
   videoRef: React.RefObject<HTMLVideoElement | null>;
+  setVideoRef: (el: HTMLVideoElement | null) => void;
   camState: MediaDeviceState;
   micState: MediaDeviceState;
   micLevel: number;
@@ -118,6 +123,10 @@ export function useMediaDevices(): UseMediaDevicesResult {
     audioCtxRef.current = null;
     analyserRef.current = null;
     setMicLevel(0);
+    setCamState("idle");
+    setMicState("idle");
+    setCameraEnabled(true);
+    setMicEnabled(true);
   }, []);
 
   const attachVideo = useCallback(async (stream: MediaStream | null) => {
@@ -406,10 +415,19 @@ export function useMediaDevices(): UseMediaDevicesResult {
     }
   }, [mergeTracks, startMicMeter]);
 
+  const setVideoRef = useCallback((el: HTMLVideoElement | null) => {
+    videoRef.current = el;
+    if (el && streamRef.current && streamRef.current.getVideoTracks().length > 0) {
+      el.srcObject = streamRef.current;
+      el.play().catch(() => {});
+    }
+  }, []);
+
   const toggleCamera = useCallback(() => {
     const stream = streamRef.current;
     if (!stream) return;
     const videoTrack = stream.getVideoTracks()[0];
+<<<<<<< HEAD
     if (!videoTrack) {
       // Try to request camera if none exists
       void requestCamera();
@@ -422,11 +440,20 @@ export function useMediaDevices(): UseMediaDevicesResult {
       void attachVideo(stream);
     }
   }, [requestCamera, attachVideo]);
+=======
+    if (!videoTrack) return;
+    const next = !videoTrack.enabled;
+    videoTrack.enabled = next;
+    setCameraEnabled(next);
+    setCamState(next ? "live" : "off");
+  }, []);
+>>>>>>> cd816cd7af05b78146197492a0c4f6a7d6cd19d9
 
   const toggleMic = useCallback(() => {
     const stream = streamRef.current;
     if (!stream) return;
     const audioTrack = stream.getAudioTracks()[0];
+<<<<<<< HEAD
     if (!audioTrack) {
       void requestMicrophone();
       return;
@@ -440,6 +467,23 @@ export function useMediaDevices(): UseMediaDevicesResult {
       setMicLevel(0);
       stopMicMeter();
       // Restart meter after? No, muted means disabled
+=======
+    if (!audioTrack) return;
+    const next = !audioTrack.enabled;
+    audioTrack.enabled = next;
+    setMicEnabled(next);
+    setMicState(next ? "live" : "muted");
+    if (!next) setMicLevel(0);
+  }, []);
+
+  // Sync video element when camState changes
+  useEffect(() => {
+    if ((camState === "live" || camState === "off") && videoRef.current && streamRef.current) {
+      if (videoRef.current.srcObject !== streamRef.current) {
+        videoRef.current.srcObject = streamRef.current;
+        videoRef.current.play().catch(() => {});
+      }
+>>>>>>> cd816cd7af05b78146197492a0c4f6a7d6cd19d9
     }
   }, [requestMicrophone, startMicMeter, stopMicMeter]);
 
@@ -465,6 +509,7 @@ export function useMediaDevices(): UseMediaDevicesResult {
 
   return {
     videoRef,
+    setVideoRef,
     camState,
     micState,
     micLevel,
