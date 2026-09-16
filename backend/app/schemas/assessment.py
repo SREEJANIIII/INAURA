@@ -275,4 +275,52 @@ class CompleteInterviewResponse(BaseModel):
     technical_scores: Optional[dict] = None
     communication_scores: Optional[dict] = None
     analysis: Optional[dict] = None
+    grading_path: Optional[str] = None
+    note: Optional[str] = None
+
+
+# ---------------------------------------------------------------------------
+# Layer 3 — Per-answer adaptive interview
+# ---------------------------------------------------------------------------
+
+class AnswerInterviewRequest(BaseModel):
+    question_id: str = Field(..., min_length=1, max_length=120)
+    transcript: str = Field(..., min_length=1, max_length=8000, description="Answer text (typed or voice-transcribed)")
+
+
+class AnswerInterviewEvaluation(BaseModel):
+    """Structured per-answer evaluation from Gemini."""
+    question_id: str = ""
+    technical_correctness: float = Field(default=0.0, ge=0.0, le=1.0)
+    depth: float = Field(default=0.0, ge=0.0, le=1.0)
+    reasoning: float = Field(default=0.0, ge=0.0, le=1.0)
+    specificity: float = Field(default=0.0, ge=0.0, le=1.0)
+    communication: float = Field(default=0.0, ge=0.0, le=1.0)
+    evidence_corroboration: float = Field(default=0.0, ge=0.0, le=1.0)
+    contradiction: float = Field(default=0.0, ge=0.0, le=1.0)
+    confidence: float = Field(default=0.0, ge=0.0, le=1.0)
+    brief_explanation: str = ""
+    follow_up_needed: bool = False
+    suggested_follow_up: str = ""
+
+
+class AnswerInterviewQuestionOut(BaseModel):
+    id: str
+    competency: str
+    prompt: str
+    follow_ups: List[str] = []
+
+
+class AnswerInterviewResponse(BaseModel):
+    session_id: str
+    question_id: str
+    next_action: str = "next"
+    ai_available: bool = True
+    evaluation: Optional[AnswerInterviewEvaluation] = None
+    evaluation_pending: bool = False
+    current_index: int = 0
+    current_question: Optional[AnswerInterviewQuestionOut] = None
+    completed: bool = False
+    answered_count: int = 0
+    total_questions: int = 0
     note: Optional[str] = None

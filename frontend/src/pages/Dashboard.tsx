@@ -103,9 +103,12 @@ export default function Dashboard() {
             Your analysis will use your profile plus future evidence (GitHub, LeetCode, etc.) to generate skill gaps and a personalized roadmap.
             This is currently a placeholder for the next phase.
           </p>
-          <div style={{ marginTop: 18 }}>
+          <div style={{ marginTop: 18, display: "flex", gap: 10, flexWrap: "wrap" }}>
             <Button variant="primary" size="lg" onClick={() => nav("/analysis")}>
               Complete Your INAURA Analysis
+            </Button>
+            <Button variant="secondary" size="lg" onClick={() => nav("/interview")}>
+              Start AI Mock Interview
             </Button>
           </div>
           <div style={{ marginTop: 12, fontSize: "0.84rem", color: "#64748b" }}>

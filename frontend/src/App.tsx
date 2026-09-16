@@ -10,6 +10,7 @@ import AnalysisResults from "./pages/AnalysisResults";
 import CapabilityMap from "./pages/CapabilityMap";
 import Roadmap from "./pages/Roadmap";
 import AIReviewTest from "./pages/AIReviewTest";
+import Interview from "./pages/Interview";
 import { ProtectedRoute, GuestOnly } from "./components/auth/ProtectedRoute";
 
 export default function App() {
@@ -83,6 +84,15 @@ export default function App() {
         element={
           <ProtectedRoute>
             <Roadmap />
+          </ProtectedRoute>
+        }
+      />
+      {/* Adaptive AI mock interview — evidence source (kept separate from AI Career Review) */}
+      <Route
+        path="/interview"
+        element={
+          <ProtectedRoute>
+            <Interview />
           </ProtectedRoute>
         }
       />

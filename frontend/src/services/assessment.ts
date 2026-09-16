@@ -319,3 +319,54 @@ export function completeSkillInterview(session_id: string) {
     body: JSON.stringify({ session_id }),
   });
 }
+
+// ---------------------------------------------------------------------------
+// Layer 3 — Per-answer adaptive interview (voice interview)
+// ---------------------------------------------------------------------------
+
+export type AnswerInterviewEvaluation = {
+  question_id: string;
+  technical_correctness: number;
+  depth: number;
+  reasoning: number;
+  specificity: number;
+  communication: number;
+  evidence_corroboration: number;
+  contradiction: number;
+  confidence: number;
+  brief_explanation: string;
+  follow_up_needed: boolean;
+  suggested_follow_up: string;
+};
+
+export type AnswerInterviewQuestion = {
+  id: string;
+  competency: string;
+  prompt: string;
+  follow_ups: string[];
+};
+
+export type AnswerInterviewResponse = {
+  session_id: string;
+  question_id: string;
+  next_action: string;
+  ai_available: boolean;
+  evaluation: AnswerInterviewEvaluation | null;
+  evaluation_pending: boolean;
+  current_index: number;
+  current_question: AnswerInterviewQuestion | null;
+  completed: boolean;
+  answered_count: number;
+  total_questions: number;
+  note: string | null;
+};
+
+export function answerInterviewQuestion(session_id: string, question_id: string, transcript: string) {
+  return apiFetch<AnswerInterviewResponse>(
+    `/analysis/assessment/interview/${encodeURIComponent(session_id)}/answer`,
+    {
+      method: "POST",
+      body: JSON.stringify({ question_id, transcript }),
+    }
+  );
+}

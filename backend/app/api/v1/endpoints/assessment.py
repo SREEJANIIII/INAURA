@@ -2,6 +2,8 @@ from fastapi import APIRouter, Depends
 
 from ....core.security import get_current_user, CurrentUser
 from ....schemas.assessment import (
+    AnswerInterviewRequest,
+    AnswerInterviewResponse,
     AvailableAssessmentsResponse,
     CompleteInterviewRequest,
     CompleteInterviewResponse,
@@ -144,4 +146,20 @@ async def complete_skill_interview(
     return await interview_service.complete_interview_session(
         user_id=current_user.id,
         session_id=payload.session_id,
+    )
+
+
+@router.post("/interview/{session_id}/answer", response_model=AnswerInterviewResponse)
+async def answer_interview_question(
+    session_id: str,
+    payload: AnswerInterviewRequest,
+    current_user: CurrentUser = Depends(get_current_user),
+):
+    """Submit one answer to a skill interview question; Gemini evaluates it
+    and the system decides whether to ask a follow-up or advance."""
+    return await interview_service.answer_interview_question(
+        user_id=current_user.id,
+        session_id=session_id,
+        question_id=payload.question_id,
+        transcript=payload.transcript,
     )

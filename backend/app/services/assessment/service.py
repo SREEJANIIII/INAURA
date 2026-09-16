@@ -344,6 +344,13 @@ def load_assessment_signals(user_id: str) -> List[dict]:
     except Exception as e:
         logger.debug("Interview signals unavailable for %s: %s", user_id, e)
 
+    try:
+        from ..mock_interview_service import load_mock_interview_signals
+
+        signals = list(signals) + load_mock_interview_signals(user_id)
+    except Exception as e:
+        logger.debug("Mock interview signals unavailable for %s: %s", user_id, e)
+
     return signals
 
 

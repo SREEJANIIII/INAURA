@@ -55,10 +55,22 @@ from typing import Dict, Iterable, List, Optional
 # Canonical source key for INAURA's own graded skill assessment.
 ASSESSMENT_SOURCE = "assessment"
 
+# Canonical source key for the adaptive AI mock interview (multi-skill,
+# evidence-driven). It is ANOTHER EVIDENCE SOURCE alongside the assessment,
+# not a replacement: spoken answers demonstrate understanding directly, but a
+# short interview is a weaker instrument than the graded assessment bank, so
+# it ranks below "assessment" and alongside performance platforms.
+# Prototype heuristic (not validated psychometrics): reliability 0.75,
+# directness 0.85. Documented here so the skill engine needs no special case.
+MOCK_INTERVIEW_SOURCE = "interview"
+
 # Weighting factor applied to each evidence signal in the proficiency average.
 SOURCE_RELIABILITY: Dict[str, float] = {
     # VERY HIGH — direct validation of the person
     "assessment": 0.95,
+    # HIGH — person-facing performance evidence (mock interview: spoken,
+    # adaptive, graded against evidence; weaker instrument than assessment)
+    "interview": 0.75,
     # HIGH — performance-based platforms and verified coursework
     "leetcode": 0.85,
     "codeforces": 0.85,
@@ -86,7 +98,7 @@ DEFAULT_RELIABILITY = 0.50
 # the estimate, but by product decision it cannot establish proficiency alone.
 RELIABILITY_TIERS: Dict[str, List[str]] = {
     "very_high": ["assessment"],
-    "high": ["leetcode", "codeforces", "kaggle", "syllabus", "coursework"],
+    "high": ["interview", "leetcode", "codeforces", "kaggle", "syllabus", "coursework"],
     "medium": ["certification", "certification_file", "project_doc"],
     "supporting": ["project", "github"],
     "low": ["resume", "linkedin", "self_declared"],
@@ -99,6 +111,9 @@ TIER_ORDER: List[str] = ["low", "supporting", "medium", "high", "very_high"]
 SOURCE_DIRECTNESS: Dict[str, float] = {
     # Graded, person-facing assessment: fully direct
     "assessment": 1.00,
+    # Adaptive spoken interview: the person explains their own work live,
+    # but a short session is noisier than the graded bank
+    "interview": 0.85,
     # Performance platforms: the person solved the problems themselves
     "leetcode": 0.80,
     "codeforces": 0.80,

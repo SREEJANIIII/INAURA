@@ -42,12 +42,16 @@ from .layers import INTERVIEW
 logger = logging.getLogger(__name__)
 
 INTERVIEW_SESSIONS_TABLE = "assessment_interview_sessions"
-INTERVIEW_VERSION = "interview-v1"
+INTERVIEW_VERSION = "interview-v2"
 
 INTERVIEW_RELIABILITY = reliability(ASSESSMENT_SOURCE)
 
 # One interview asks this many main questions (each with follow-ups).
 INTERVIEW_QUESTION_COUNT = 4
+# Maximum adaptive follow-ups allowed per session.
+INTERVIEW_MAX_FOLLOW_UPS = 4
+# Total question budget (base + follow-ups).
+INTERVIEW_TOTAL_BUDGET = 8
 # Displayed estimate; the interview is self-paced within the TTL.
 INTERVIEW_ESTIMATED_MINUTES = 10
 INTERVIEW_TTL_MINUTES = 120
@@ -308,6 +312,309 @@ def validate_plan(plan: Dict[str, Any]) -> List[str]:
 
 
 # ---------------------------------------------------------------------------
+# Prior evidence snapshot (for corroboration during per-answer evaluation)
+# ---------------------------------------------------------------------------
+
+def build_prior_snapshot(user_id: str, canonical: str) -> List[Dict[str, Any]]:
+    """Capture prior evidence state for one skill at session start.
+
+    Stores enough context for Gemini to compare interview answers against
+    existing evidence without exposing sensitive data.
+    """
+    snapshot: Dict[str, Any] = {
+        "skill": canonical,
+        "knowledge_score": _effective_score("assessment_attempts", user_id, canonical),
+        "practical_score": _effective_score("assessment_practical_attempts", user_id, canonical),
+    }
+
+    # Include project context for corroboration
+    projects = _related_projects(user_id, canonical, limit=3)
+    if projects:
+        snapshot["related_projects"] = [
+            {"name": p.get("name", ""), "technologies": p.get("technologies", [])}
+            for p in projects
+        ]
+
+    # Include evidence sources (types only, not content)
+    try:
+        c = get_supabase_client()
+        if c is not None:
+            r = (
+                c.table("evidence").select("evidence_type, source_url")
+                .eq("user_id", user_id).limit(20).execute()
+            )
+            evidence_types: set = set()
+            for row in (r.data or []):
+                et = str(row.get("evidence_type") or "").strip()
+                if et:
+                    evidence_types.add(et)
+            if evidence_types:
+                snapshot["evidence_sources"] = sorted(evidence_types)
+    except Exception:
+        pass  # Best-effort: missing evidence table is fine
+
+    return [snapshot]
+
+
+def prior_summary_text(snapshot: List[Dict[str, Any]], skill: str) -> str:
+    """Human-readable prior evidence summary for Gemini evaluation prompts."""
+    if not snapshot:
+        return f"{skill}: no prior evidence available"
+    entry = snapshot[0] if isinstance(snapshot[0], dict) else {}
+    parts = [f"{skill}: prior evidence summary"]
+    k_score = entry.get("knowledge_score")
+    p_score = entry.get("practical_score")
+    if k_score is not None:
+        parts.append(f"knowledge assessment score: {k_score:.0%}")
+    if p_score is not None:
+        parts.append(f"practical assessment score: {p_score:.0%}")
+    projects = entry.get("related_projects") or []
+    if projects:
+        names = [str(p.get("name", "")) for p in projects if p.get("name")]
+        if names:
+            parts.append(f"related projects: {', '.join(names[:3])}")
+    sources = entry.get("evidence_sources") or []
+    if sources:
+        parts.append(f"evidence types: {', '.join(sources[:5])}")
+    return "; ".join(parts)
+
+
+# ---------------------------------------------------------------------------
+# Per-answer Gemini evaluation (adaptive interview)
+# ---------------------------------------------------------------------------
+
+def parse_answer_evaluation(raw_text: str, question_id: str) -> Dict[str, Any]:
+    """Strict-parse Gemini JSON into structured per-answer evaluation.
+
+    Returns a validated dict with numeric scores and optional follow-up.
+    Raises ValueError on invalid output — never fabricates scores.
+    """
+    blob = _extract_json_object(raw_text or "")
+    if not blob:
+        raise ValueError("no JSON object in model reply")
+    data = json.loads(blob)
+    if not isinstance(data, dict):
+        raise ValueError("evaluation is not an object")
+
+    def _score(key: str, default: float = 0.0) -> float:
+        return _clamp01(data.get(key, default)) or default
+
+    return {
+        "question_id": question_id,
+        "technical_correctness": _score("technical_correctness"),
+        "depth": _score("depth"),
+        "reasoning": _score("reasoning"),
+        "specificity": _score("specificity"),
+        "communication": _score("communication"),
+        "evidence_corroboration": _score("evidence_corroboration"),
+        "contradiction": _score("contradiction"),
+        "confidence": _score("confidence"),
+        "brief_explanation": str(data.get("brief_explanation") or data.get("explanation") or "")[:500],
+        "follow_up_needed": bool(data.get("follow_up_needed", False)),
+        "suggested_follow_up": str(data.get("suggested_follow_up") or "")[:600],
+    }
+
+
+EVAL_SYSTEM_PROMPT = (
+    "You are a professional technical interviewer evaluating a candidate's answer "
+    "against a specific skill competency. Evaluate ONLY what the answer demonstrates "
+    "in terms of technical understanding, reasoning, and communication. Never judge "
+    "appearance, accent, or identity. Be concise and evidence-based.\n\n"
+    "Score each dimension 0.0 to 1.0. Set follow_up_needed=true when the answer is "
+    "vague, shallow, contradictory, or when one targeted probe would reveal deeper "
+    "understanding. suggested_follow_up must reference specific content from the answer.\n\n"
+    "Return JSON ONLY with this exact shape:\n"
+    "{\n"
+    '  "technical_correctness": 0.0-1.0,\n'
+    '  "depth": 0.0-1.0,\n'
+    '  "reasoning": 0.0-1.0,\n'
+    '  "specificity": 0.0-1.0,\n'
+    '  "communication": 0.0-1.0,\n'
+    '  "evidence_corroboration": 0.0-1.0,\n'
+    '  "contradiction": 0.0-1.0,\n'
+    '  "confidence": 0.0-1.0,\n'
+    '  "brief_explanation": "2-3 sentences max",\n'
+    '  "follow_up_needed": true/false,\n'
+    '  "suggested_follow_up": "targeted question or empty string"\n'
+    "}"
+)
+
+
+async def evaluate_answer_llm(
+    question: Dict[str, Any],
+    transcript: str,
+    prior_summary: str,
+    competencies: List[Dict[str, str]],
+    _llm: Any = None,
+) -> Dict[str, Any]:
+    """Evaluate one interview answer via Gemini.
+
+    Returns structured evaluation dict. Raises HTTPException on failure —
+    callers must handle 502/503 gracefully without fabricating scores.
+    """
+    llm = _llm if _llm is not None else _make_interview_llm()
+    comp_list = "\n".join(f"- {c['id']}: {c['label']}" for c in competencies)
+    user_prompt = (
+        f"Target skill: {question.get('skill', '')}\n"
+        f"Competency being assessed: {question.get('competency', '')} "
+        f"({question.get('competency_label', '')})\n\n"
+        f"COMPETENCIES FOR THIS SKILL:\n{comp_list}\n\n"
+        f"Prior evidence: {prior_summary[:1500]}\n\n"
+        f"Question: {question.get('prompt', '')}\n\n"
+        f"Candidate answer:\n{transcript[:4000]}"
+    )
+    try:
+        if hasattr(llm, "ainvoke"):
+            raw = await llm.ainvoke([
+                {"role": "system", "content": EVAL_SYSTEM_PROMPT},
+                {"role": "user", "content": user_prompt},
+            ])
+            text = str(getattr(raw, "content", raw) or "")
+        else:
+            raw = llm.invoke(user_prompt)
+            text = str(getattr(raw, "content", raw) or "")
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=502, detail=f"Interview answer evaluation failed: {str(e)[:200]}")
+    try:
+        return parse_answer_evaluation(text, str(question.get("id") or ""))
+    except Exception:
+        logger.warning("interview: unparseable answer evaluation (excerpt %r)", text[:400])
+        raise HTTPException(status_code=502, detail="AI returned an unparseable evaluation — please retry.")
+
+
+# ---------------------------------------------------------------------------
+# Adaptive next-action decision
+# ---------------------------------------------------------------------------
+
+def decide_next_action(
+    evaluation: Optional[Dict[str, Any]],
+    current_index: int,
+    total_planned: int,
+    follow_ups_used: int,
+    questions_answered: int,
+) -> str:
+    """Adaptive policy: follow_up | next | complete.
+
+    Follow up when the evaluator requests it, the answer shows a real gap,
+    and budget remains. Otherwise advance to the next planned question or
+    complete the interview.
+    """
+    if questions_answered >= INTERVIEW_TOTAL_BUDGET:
+        return "complete"
+
+    if evaluation and evaluation.get("follow_up_needed"):
+        weak = (
+            evaluation.get("technical_correctness", 1) < 0.50
+            or evaluation.get("depth", 1) < 0.45
+            or evaluation.get("contradiction", 0) > 0.55
+        )
+        confident = evaluation.get("confidence", 0) >= 0.40
+        has_question = bool(str(evaluation.get("suggested_follow_up") or "").strip())
+        if (
+            weak
+            and confident
+            and has_question
+            and follow_ups_used < INTERVIEW_MAX_FOLLOW_UPS
+            and questions_answered < INTERVIEW_TOTAL_BUDGET
+        ):
+            return "follow_up"
+
+    if current_index >= total_planned - 1:
+        return "complete"
+
+    return "next"
+
+
+# ---------------------------------------------------------------------------
+# Follow-up question generation
+# ---------------------------------------------------------------------------
+
+FOLLOWUP_SYSTEM_PROMPT = (
+    "You are a technical interviewer. Generate ONE targeted follow-up question "
+    "based on the candidate's answer. The follow-up must:\n"
+    "- Reference specific content from the answer (not generic)\n"
+    "- Probe the uncertainty or weakness revealed\n"
+    "- Be answerable in 1-2 minutes\n"
+    "- Be concise (1-2 sentences)\n\n"
+    "Return JSON ONLY: {\"follow_up\": \"your question here\"}"
+)
+
+
+async def generate_follow_up_question(
+    question: Dict[str, Any],
+    transcript: str,
+    evaluation: Dict[str, Any],
+    _llm: Any = None,
+) -> Optional[str]:
+    """Generate a targeted follow-up question based on the answer evaluation.
+
+    Returns the follow-up question text, or None if generation fails.
+    Never raises — failures degrade gracefully.
+    """
+    suggested = str(evaluation.get("suggested_follow_up") or "").strip()
+    if suggested:
+        return suggested
+
+    llm = _llm if _llm is not None else _make_interview_llm()
+    user_prompt = (
+        f"Skill: {question.get('skill', '')}\n"
+        f"Question asked: {question.get('prompt', '')}\n"
+        f"Candidate answer: {transcript[:2000]}\n"
+        f"Evaluation: technical_correctness={evaluation.get('technical_correctness', 0):.2f}, "
+        f"depth={evaluation.get('depth', 0):.2f}, "
+        f"reasoning={evaluation.get('reasoning', 0):.2f}\n"
+        f"Brief explanation: {evaluation.get('brief_explanation', '')[:300]}"
+    )
+    try:
+        if hasattr(llm, "ainvoke"):
+            raw = await llm.ainvoke([
+                {"role": "system", "content": FOLLOWUP_SYSTEM_PROMPT},
+                {"role": "user", "content": user_prompt},
+            ])
+            text = str(getattr(raw, "content", raw) or "")
+        else:
+            raw = llm.invoke(user_prompt)
+            text = str(getattr(raw, "content", raw) or "")
+        blob = _extract_json_object(text)
+        if blob:
+            data = json.loads(blob)
+            fu = str(data.get("follow_up") or "").strip()
+            if fu:
+                return fu[:600]
+    except Exception:
+        logger.debug("Follow-up generation failed, using fallback")
+    # Fallback: derive from evaluation dimensions
+    if evaluation.get("technical_correctness", 1) < 0.50:
+        return f"Can you walk through the core technical details of your approach to {question.get('skill', 'this topic')} more concretely?"
+    if evaluation.get("depth", 1) < 0.50:
+        return f"What deeper trade-offs or alternatives did you consider when making your decision?"
+    return f"Can you provide a specific example that illustrates the point you just made?"
+
+
+# ---------------------------------------------------------------------------
+# Signal strength from per-answer evaluation
+# ---------------------------------------------------------------------------
+
+def signal_strength_from_answer_evaluation(ev: Dict[str, Any]) -> float:
+    """Per-answer evaluation -> evidence signal strength.
+
+    Weights technical correctness (0.40), depth (0.25), reasoning (0.20),
+    and specificity (0.15); contradiction penalizes; confidence scales.
+    """
+    t = _clamp01(ev.get("technical_correctness", 0))
+    d = _clamp01(ev.get("depth", 0))
+    r = _clamp01(ev.get("reasoning", 0))
+    s = _clamp01(ev.get("specificity", 0))
+    contra = _clamp01(ev.get("contradiction", 0))
+    conf = _clamp01(ev.get("confidence", 0))
+    raw = 0.40 * t + 0.25 * d + 0.20 * r + 0.15 * s - 0.25 * contra
+    raw = max(0.0, min(1.0, raw))
+    return round(max(0.0, min(1.0, raw * (0.5 + 0.5 * conf))), 4)
+
+
+# ---------------------------------------------------------------------------
 # Session persistence
 # ---------------------------------------------------------------------------
 
@@ -407,6 +714,9 @@ def start_interview_session(user_id: str, skill: str) -> dict:
     if problems:
         raise HTTPException(status_code=500, detail=f"Interview plan failed validation: {problems[0]}")
 
+    # Capture prior evidence snapshot for corroboration during evaluation
+    prior_snapshot = build_prior_snapshot(user_id, canonical)
+
     session_id = str(uuid.uuid4())
     now = datetime.now(timezone.utc)
     c = _client()
@@ -420,6 +730,9 @@ def start_interview_session(user_id: str, skill: str) -> dict:
         "status": "in_progress",
         "plan": plan,
         "transcript": [],
+        "current_index": 0,
+        "prior_snapshot": prior_snapshot,
+        "evaluation_results": [],
         "started_at": now.isoformat(),
     }
     try:
@@ -521,6 +834,197 @@ def submit_interview_responses(
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Failed to save interview answers: {str(e)[:200]}")
     return {"session_id": session_id, "skill": s.get("skill_name"), "answered": sum(1 for t in transcript if t["answered"]), "total": len(transcript)}
+
+
+# ---------------------------------------------------------------------------
+# Per-answer adaptive endpoint
+# ---------------------------------------------------------------------------
+
+async def answer_interview_question(
+    user_id: str,
+    session_id: str,
+    question_id: str,
+    transcript: str,
+    _llm: Any = None,
+) -> dict:
+    """Submit one answer, evaluate with Gemini, optionally insert follow-up.
+
+    Returns the next interview state: evaluation, next action, next question.
+    Preserves backward compatibility — existing batch submit still works.
+    """
+    c = _client()
+    s = _load_session(c, user_id, session_id)
+    if str(s.get("status")) not in ("in_progress",):
+        raise HTTPException(status_code=409, detail="This interview session is already completed")
+
+    plan = s.get("plan") or {}
+    questions = plan.get("questions") or []
+    competencies = plan.get("competencies") or competencies_for_skill(
+        normalize_skill(s.get("skill_name") or "") or str(s.get("skill_name") or "")
+    )
+
+    # Find the target question
+    target_q = None
+    target_idx = -1
+    for i, q in enumerate(questions):
+        if isinstance(q, dict) and q.get("id") == question_id:
+            target_q = q
+            target_idx = i
+            break
+    if target_q is None:
+        raise HTTPException(status_code=400, detail="question_id does not belong to this session")
+
+    # Guard: only allow answering the current question (or a follow-up at current_index).
+    # Prevents re-answering earlier questions from skipping later ones.
+    current_index = int(s.get("current_index") or 0)
+    if target_idx != current_index:
+        raise HTTPException(
+            status_code=409,
+            detail=f"Question '{question_id}' is not the current question (current index: {current_index})",
+        )
+
+    text = (transcript or "").strip()
+    if not text:
+        raise HTTPException(status_code=400, detail="Answer transcript is empty")
+
+    # Build prior evidence summary for corroboration
+    prior_snap = s.get("prior_snapshot") or []
+    canonical = normalize_skill(s.get("skill_name") or "") or str(s.get("skill_name") or "")
+    prior_text = prior_summary_text(prior_snap, canonical)
+
+    # Competency label for the prompt
+    comp_label = ""
+    for c_ in competencies:
+        if c_.get("id") == target_q.get("competency"):
+            comp_label = c_.get("label", "")
+            break
+
+    # Evaluate the answer with Gemini
+    eval_input = {
+        "id": target_q.get("id"),
+        "skill": canonical,
+        "competency": target_q.get("competency", ""),
+        "competency_label": comp_label,
+        "prompt": target_q.get("prompt", ""),
+    }
+    evaluation: Optional[Dict[str, Any]] = None
+    ai_available = True
+    evaluation_pending = False
+    note = None
+    try:
+        evaluation = await evaluate_answer_llm(eval_input, text, prior_text, competencies, _llm=_llm)
+    except HTTPException as e:
+        if e.status_code in (502, 503):
+            ai_available = False
+            evaluation_pending = True
+            note = e.detail
+        else:
+            raise
+
+    # Store the answer in transcript
+    existing_transcript = s.get("transcript") or []
+    # Find or create the transcript entry for this question
+    found = False
+    for entry in existing_transcript:
+        if isinstance(entry, dict) and entry.get("question_id") == question_id:
+            entry["answer"] = text[:8000]
+            entry["answered"] = True
+            found = True
+            break
+    if not found:
+        existing_transcript.append({
+            "question_id": question_id,
+            "competency": target_q.get("competency"),
+            "prompt": target_q.get("prompt"),
+            "answer": text[:8000],
+            "answered": True,
+        })
+
+    # Store the evaluation result
+    existing_evals = s.get("evaluation_results") or []
+    eval_record = {
+        "question_id": question_id,
+        "competency": target_q.get("competency"),
+        "evaluation": evaluation,
+    }
+    # Replace if already exists
+    existing_evals = [e for e in existing_evals if isinstance(e, dict) and e.get("question_id") != question_id]
+    existing_evals.append(eval_record)
+
+    # Decide next action
+    follow_ups_used = sum(
+        1 for q in questions
+        if isinstance(q, dict) and q.get("competency", "").endswith("_followup")
+    )
+    answered_count = len([e for e in existing_evals if isinstance(e, dict) and e.get("evaluation") is not None])
+    action = decide_next_action(evaluation, current_index, len(questions), follow_ups_used, answered_count + 1)
+
+    # Generate follow-up if needed
+    follow_up_question = None
+    if action == "follow_up" and evaluation:
+        fu_text = await generate_follow_up_question(eval_input, text, evaluation, _llm=_llm)
+        if fu_text:
+            follow_up_question = {
+                "id": f"{question_id}_followup_{len(existing_evals)}",
+                "competency": f"{target_q.get('competency', '')}_followup",
+                "prompt": fu_text,
+                "follow_ups": [],
+                "_is_follow_up": True,
+                "_parent_question_id": question_id,
+            }
+            # Insert follow-up right after the current question (splice, not append)
+            questions.insert(current_index + 1, follow_up_question)
+
+    # Update session state
+    new_index = current_index
+    if action == "next":
+        new_index = current_index + 1
+    elif action == "follow_up" and follow_up_question is not None:
+        new_index = current_index + 1  # Point to the just-inserted follow-up
+    elif action == "complete":
+        new_index = len(questions)
+
+    update: Dict[str, Any] = {
+        "transcript": existing_transcript,
+        "evaluation_results": existing_evals,
+        "current_index": new_index,
+    }
+    # Persist the plan whenever a follow-up was inserted (plan was mutated in-place)
+    if follow_up_question is not None:
+        update["plan"] = plan
+
+    try:
+        c.table(INTERVIEW_SESSIONS_TABLE).update(update).eq("id", session_id).eq("user_id", user_id).execute()
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to save interview answer: {str(e)[:200]}")
+
+    # Build response
+    completed = action == "complete"
+    next_question = None
+    if not completed and new_index < len(questions):
+        nq = questions[new_index]
+        if isinstance(nq, dict):
+            next_question = {
+                "id": nq.get("id"),
+                "competency": nq.get("competency", ""),
+                "prompt": nq.get("prompt", ""),
+                "follow_ups": nq.get("follow_ups", []),
+            }
+
+    return {
+        "session_id": session_id,
+        "question_id": question_id,
+        "next_action": action,
+        "ai_available": ai_available,
+        "evaluation": evaluation,
+        "evaluation_pending": evaluation_pending,
+        "current_index": new_index,
+        "current_question": next_question,
+        "completed": completed,
+        "answered_count": answered_count,
+        "total_questions": len(questions),
+        "note": note,
+    }
 
 
 # ---------------------------------------------------------------------------
@@ -654,6 +1158,13 @@ async def complete_interview_session(
     """
     Finish an interview: grade via the model when configured, else store the
     transcript as awaiting_review (no signal, nothing breaks).
+
+    Supports two grading paths:
+      1. Per-answer evaluations (adaptive flow) — aggregates stored evaluations
+      2. Batch transcript grading (legacy flow) — single Gemini call on full transcript
+
+    Backward compatible: existing sessions without per-answer evaluations
+    are graded via the original batch path.
     """
     c = _client()
     s = _load_session(c, user_id, session_id)
@@ -662,6 +1173,7 @@ async def complete_interview_session(
 
     plan = s.get("plan") or {}
     transcript = s.get("transcript") or []
+    evaluation_results = s.get("evaluation_results") or []
     canonical = normalize_skill(s.get("skill_name") or "") or str(s.get("skill_name") or "")
     competencies = plan.get("competencies") or competencies_for_skill(canonical)
     now = datetime.now(timezone.utc)
@@ -684,38 +1196,79 @@ async def complete_interview_session(
             "note": "INAURA found limited evidence of implementation understanding — no answers were submitted.",
         }
 
-    try:
-        grades = grade_interview_transcript(canonical, competencies, transcript)
-    except HTTPException as e:
-        if e.status_code == 503:
-            # Grading not configured: keep the transcript, wait for review.
-            update = {"status": "awaiting_review", "validity": "low_confidence", "completed_at": now.isoformat()}
-            try:
-                c.table(INTERVIEW_SESSIONS_TABLE).update(update).eq("id", session_id).eq("user_id", user_id).execute()
-            except Exception as ue:
-                raise HTTPException(status_code=500, detail=f"Failed to save interview: {str(ue)[:200]}")
-            return {
-                "session_id": session_id,
-                "skill": canonical,
-                "status": "awaiting_review",
-                "validity": "low_confidence",
-                "counts_as_evidence": False,
-                "completed_at": update["completed_at"],
-                "note": e.detail,
-            }
-        raise
+    # Determine grading path: per-answer evaluations vs batch transcript
+    has_per_answer_evals = bool(
+        evaluation_results
+        and any(isinstance(e, dict) and e.get("evaluation") for e in evaluation_results)
+    )
 
-    tech = grades["technical"]
-    comm = grades["communication"]
-    technical_overall = round(sum(tech.values()) / len(tech), 4) if tech else 0.0
-    comm_overall = round(sum(comm.values()) / len(comm), 4) if comm else 0.0
-    update = {
-        "status": "graded",
-        "validity": "valid",
-        "completed_at": now.isoformat(),
-        "technical_scores": {"per_competency": tech, "overall": technical_overall},
-        "communication_scores": {"per_dimension": comm, "overall": comm_overall},
-    }
+    if has_per_answer_evals:
+        # Path 1: Aggregate per-answer evaluations (adaptive flow)
+        tech_scores: Dict[str, float] = {}
+        comm_scores: Dict[str, float] = {}
+        all_evals: List[Dict[str, Any]] = []
+        for entry in evaluation_results:
+            if not isinstance(entry, dict):
+                continue
+            ev = entry.get("evaluation")
+            if not isinstance(ev, dict):
+                continue
+            comp = str(entry.get("competency") or "").strip()
+            # Strip _followup suffix for competency grouping
+            base_comp = comp.replace("_followup", "") if comp.endswith("_followup") else comp
+            if base_comp and base_comp not in tech_scores:
+                tech_scores[base_comp] = _clamp01(
+                    (ev.get("technical_correctness", 0) + ev.get("depth", 0) + ev.get("reasoning", 0)) / 3
+                )
+            if ev.get("communication") is not None:
+                # Communication stored separately, not merged into skill signal
+                comm_scores[base_comp] = _clamp01(ev.get("communication", 0))
+            all_evals.append(ev)
+
+        technical_overall = round(sum(tech_scores.values()) / len(tech_scores), 4) if tech_scores else 0.0
+        comm_overall = round(sum(comm_scores.values()) / len(comm_scores), 4) if comm_scores else 0.0
+
+        update = {
+            "status": "graded",
+            "validity": "valid",
+            "completed_at": now.isoformat(),
+            "technical_scores": {"per_competency": tech_scores, "overall": technical_overall},
+            "communication_scores": {"per_dimension": comm_scores, "overall": comm_overall},
+        }
+    else:
+        # Path 2: Batch transcript grading (legacy flow — backward compatible)
+        try:
+            grades = grade_interview_transcript(canonical, competencies, transcript)
+        except HTTPException as e:
+            if e.status_code == 503:
+                update = {"status": "awaiting_review", "validity": "low_confidence", "completed_at": now.isoformat()}
+                try:
+                    c.table(INTERVIEW_SESSIONS_TABLE).update(update).eq("id", session_id).eq("user_id", user_id).execute()
+                except Exception as ue:
+                    raise HTTPException(status_code=500, detail=f"Failed to save interview: {str(ue)[:200]}")
+                return {
+                    "session_id": session_id,
+                    "skill": canonical,
+                    "status": "awaiting_review",
+                    "validity": "low_confidence",
+                    "counts_as_evidence": False,
+                    "completed_at": update["completed_at"],
+                    "note": e.detail,
+                }
+            raise
+
+        tech = grades["technical"]
+        comm = grades["communication"]
+        technical_overall = round(sum(tech.values()) / len(tech), 4) if tech else 0.0
+        comm_overall = round(sum(comm.values()) / len(comm), 4) if comm else 0.0
+        update = {
+            "status": "graded",
+            "validity": "valid",
+            "completed_at": now.isoformat(),
+            "technical_scores": {"per_competency": tech, "overall": technical_overall},
+            "communication_scores": {"per_dimension": comm, "overall": comm_overall},
+        }
+
     try:
         c.table(INTERVIEW_SESSIONS_TABLE).update(update).eq("id", session_id).eq("user_id", user_id).execute()
     except Exception as e:
@@ -731,6 +1284,7 @@ async def complete_interview_session(
         "source_reliability": INTERVIEW_RELIABILITY,
         "technical_scores": update["technical_scores"],
         "communication_scores": update["communication_scores"],
+        "grading_path": "per_answer" if has_per_answer_evals else "batch_transcript",
         "note": (
             "Implementation understanding validated."
             if technical_overall >= 0.5

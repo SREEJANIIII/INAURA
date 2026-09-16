@@ -1,0 +1,160 @@
+/* INAURA AI Mock Interview — uses global design tokens */
+.iv {
+  min-height: 100vh;
+  background: var(--bg-subtle);
+  color: var(--ink);
+}
+.iv__header {
+  background: var(--bg);
+  border-bottom: 1px solid var(--line);
+  position: sticky;
+  top: 0;
+  z-index: 10;
+}
+.iv__header-inner {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0.8rem 1.5rem;
+}
+.iv__brand {
+  color: var(--muted);
+  font-weight: 600;
+  text-decoration: none;
+  font-size: 0.9rem;
+}
+.iv__badge {
+  font-size: 0.72rem;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  font-weight: 700;
+  color: var(--accent);
+  background: var(--accent-soft);
+  border: 1px solid var(--accent-border);
+  padding: 0.3rem 0.7rem;
+  border-radius: var(--radius-full);
+}
+.iv__main {
+  padding: 2rem 1.5rem 4rem;
+  max-width: 1080px;
+}
+.iv__card {
+  background: var(--bg);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-sm);
+  padding: 1.75rem;
+  margin-bottom: 1.25rem;
+}
+.iv__grid {
+  display: grid;
+  grid-template-columns: 1.6fr 0.9fr;
+  gap: 1.25rem;
+  align-items: start;
+}
+@media (max-width: 900px) {
+  .iv__grid { grid-template-columns: 1fr; }
+}
+.iv__side h3 { margin: 0 0 0.6rem; font-size: 1rem; }
+.iv__side ol, .iv__side ul { color: var(--muted); font-size: 0.92rem; line-height: 1.6; }
+.iv__eyebrow {
+  font-size: 0.72rem;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  font-weight: 700;
+  color: var(--accent);
+  margin-bottom: 0.5rem;
+}
+.iv__title { font-size: 2rem; margin: 0 0 0.5rem; letter-spacing: -0.02em; }
+.iv__h2 { font-size: 1.35rem; margin: 0 0 0.75rem; }
+.iv__sub, .iv__list { color: var(--muted); line-height: 1.65; }
+.iv__label { display: grid; gap: 0.4rem; font-weight: 600; font-size: 0.9rem; margin: 1rem 0; }
+.iv__input, .iv__textarea {
+  width: 100%;
+  border: 1px solid var(--line-strong);
+  border-radius: var(--radius-sm);
+  padding: 0.7rem 0.85rem;
+  font: inherit;
+  background: var(--bg);
+}
+.iv__textarea { resize: vertical; line-height: 1.6; }
+.iv__row { display: flex; gap: 0.6rem; flex-wrap: wrap; margin-top: 1rem; }
+.iv__fine { color: var(--muted-2); font-size: 0.82rem; line-height: 1.6; }
+.iv__warn {
+  background: #fffbeb;
+  border: 1px solid #fde68a;
+  color: #92400e;
+  border-radius: var(--radius-sm);
+  padding: 0.7rem 0.9rem;
+  font-size: 0.88rem;
+  margin-top: 0.9rem;
+}
+.iv__error {
+  background: #fef2f2;
+  border: 1px solid #fecaca;
+  color: #b91c1c;
+  border-radius: var(--radius-sm);
+  padding: 0.8rem 1rem;
+  margin-bottom: 1rem;
+  font-weight: 600;
+}
+.iv__video-wrap { position: relative; }
+.iv__video {
+  width: 100%;
+  aspect-ratio: 16 / 10;
+  object-fit: cover;
+  background: #0f172a;
+  border-radius: var(--radius);
+}
+.iv__video--small { aspect-ratio: 16 / 9; }
+.iv__video-off {
+  position: absolute;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  color: #cbd5e1;
+  font-size: 0.9rem;
+}
+.iv__rec {
+  position: absolute;
+  top: 0.6rem;
+  left: 0.6rem;
+  font-size: 0.72rem;
+  font-weight: 700;
+  background: rgba(15, 23, 42, 0.75);
+  color: #e2e8f0;
+  padding: 0.25rem 0.6rem;
+  border-radius: var(--radius-full);
+}
+.iv__rec--live { color: #fecaca; }
+.iv__meter-row { display: flex; align-items: center; gap: 0.6rem; margin-top: 0.8rem; flex-wrap: wrap; }
+.iv__meter-label { font-size: 0.82rem; color: var(--muted); font-weight: 600; }
+.iv__meter { flex: 1; min-width: 120px; height: 8px; background: var(--bg-muted); border-radius: 99px; overflow: hidden; }
+.iv__meter-fill { height: 100%; background: var(--accent); transition: width 120ms linear; }
+.iv__progress { height: 8px; background: var(--bg-muted); border-radius: 99px; overflow: hidden; margin-bottom: 0.8rem; }
+.iv__progress-fill { height: 100%; background: var(--accent); transition: width 300ms ease; }
+.iv__meta { display: flex; justify-content: space-between; color: var(--muted-2); font-size: 0.82rem; font-weight: 600; }
+.iv__q { font-size: 1.25rem; line-height: 1.55; margin: 0.6rem 0 1rem; }
+.iv__chip {
+  display: inline-block;
+  font-size: 0.72rem;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  background: var(--accent-soft);
+  color: var(--accent-hover);
+  border: 1px solid var(--accent-border);
+  border-radius: var(--radius-full);
+  padding: 0.2rem 0.6rem;
+}
+.iv__eval p { color: var(--muted); line-height: 1.65; }
+.iv__scores { display: grid; grid-template-columns: repeat(4, 1fr); gap: 0.6rem; margin: 1rem 0; }
+@media (max-width: 640px) { .iv__scores { grid-template-columns: repeat(2, 1fr); } }
+.iv__score { background: var(--bg-subtle); border: 1px solid var(--line); border-radius: var(--radius-sm); padding: 0.7rem; text-align: center; }
+.iv__score-v { font-size: 1.25rem; font-weight: 800; }
+.iv__score-l { font-size: 0.72rem; color: var(--muted-2); text-transform: uppercase; letter-spacing: 0.06em; }
+.iv__stats { display: flex; gap: 1.5rem; color: var(--muted); margin: 0.5rem 0 1rem; flex-wrap: wrap; }
+.iv__cols { display: grid; grid-template-columns: 1fr 1fr; gap: 1rem; }
+@media (max-width: 640px) { .iv__cols { grid-template-columns: 1fr; } }
+.iv__table { width: 100%; border-collapse: collapse; font-size: 0.9rem; }
+.iv__table th, .iv__table td { text-align: left; padding: 0.7rem 0.6rem; border-bottom: 1px solid var(--line); vertical-align: top; }

@@ -265,6 +265,17 @@ def build_evidence_sources(signals: List[dict]) -> List[dict]:
             details = dict(meta)
             if source_url:
                 details["source_url"] = source_url
+        elif src_type == "interview":
+            label = "INAURA Mock Interview"
+            details = {
+                "mock_interview_session_id": meta.get("mock_interview_session_id"),
+                "target_role": meta.get("target_role"),
+                "answers_count": meta.get("answers_count"),
+                "version": meta.get("mock_interview_version"),
+                "completed_at": meta.get("completed_at") or meta.get("source_created_at"),
+            }
+            if source_url:
+                details["source_url"] = source_url
         elif src_type == "assessment":
             correct = meta.get("correct_count")
             total = meta.get("question_count")

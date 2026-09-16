@@ -1,355 +1,595 @@
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import Button from "../ui/Button";
 import {
+  answerInterviewQuestion,
   completeSkillInterview,
+  getSkillInterview,
   startSkillInterview,
-  submitInterviewResponses,
   type CompleteInterviewResponse,
   type StartInterviewResponse,
 } from "../../services/assessment";
+import { useMediaDevices } from "../../hooks/useMediaDevices";
+import { useSpeechRecognition } from "../../hooks/useSpeechRecognition";
+import { useTextToSpeech } from "../../hooks/useTextToSpeech";
 import "./InterviewModal.css";
 
 type Props = {
   skill: string;
   onClose: () => void;
-  /** Called after grading completes so the parent can refresh the analysis. */
   onCompleted?: (result: CompleteInterviewResponse) => void;
 };
 
-type Step = "intro" | "media" | "questions" | "result";
+type Phase =
+  | "intro"
+  | "initializing"
+  | "ai_speaking"
+  | "listening"
+  | "processing"
+  | "completing"
+  | "completed"
+  | "error";
 
-type MediaState = {
-  camera: "unknown" | "ok" | "denied" | "unavailable" | "skipped";
-  microphone: "unknown" | "ok" | "denied" | "unavailable" | "skipped";
-  message?: string;
+type Question = {
+  id: string;
+  competency: string;
+  prompt: string;
+  follow_ups: string[];
 };
 
-function stopStream(stream: MediaStream | null) {
-  stream?.getTracks().forEach((t) => {
-    try {
-      t.stop();
-    } catch {
-      // ignore
-    }
-  });
-}
+const SILENCE_TIMEOUT_MS = 4000;
 
 export default function InterviewModal({ skill, onClose, onCompleted }: Props) {
-  const [step, setStep] = useState<Step>("intro");
+  const [phase, setPhase] = useState<Phase>("intro");
   const [session, setSession] = useState<StartInterviewResponse | null>(null);
-  const [answers, setAnswers] = useState<Record<string, string>>({});
-  const [activeIdx, setActiveIdx] = useState(0);
-  const [result, setResult] = useState<CompleteInterviewResponse | null>(null);
-  const [loading, setLoading] = useState(false);
-  const [submitting, setSubmitting] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-  const [media, setMedia] = useState<MediaState>({ camera: "unknown", microphone: "unknown" });
-  const [hasPreview, setHasPreview] = useState(false);
-  const [micLevel, setMicLevel] = useState(0);
-  const streamRef = useRef<MediaStream | null>(null);
-  const videoRef = useRef<HTMLVideoElement | null>(null);
-  const audioCtxRef = useRef<AudioContext | null>(null);
-  const rafRef = useRef<number | null>(null);
+  const [currentQuestion, setCurrentQuestion] = useState<Question | null>(null);
+  const [totalQuestions, setTotalQuestions] = useState(0);
+  const [answeredCount, setAnsweredCount] = useState(0);
 
-  // Always release camera/mic on unmount. Nothing is recorded or uploaded —
-  // the stream is a local preview only.
-  useEffect(() => {
-    return () => {
-      stopStream(streamRef.current);
-      if (rafRef.current !== null) cancelAnimationFrame(rafRef.current);
-      void audioCtxRef.current?.close().catch(() => undefined);
-    };
+  const [aiText, setAiText] = useState("");
+  const [typedAnswer, setTypedAnswer] = useState("");
+  const [error, setError] = useState<string | null>(null);
+  const [loading, setLoading] = useState(false);
+
+  const [result, setResult] = useState<CompleteInterviewResponse | null>(null);
+  const [sessionId, setSessionId] = useState<string | null>(
+    () => sessionStorage.getItem("interview_session_id")
+  );
+
+  const {
+    videoRef,
+    camState,
+    micState,
+    micLevel,
+    micEnabled,
+    cameraEnabled,
+    requestMedia,
+    toggleMic,
+    toggleCamera,
+    stopAll: stopMedia,
+  } = useMediaDevices();
+
+  const tts = useTextToSpeech();
+  const speech = useSpeechRecognition({ silenceTimeout: SILENCE_TIMEOUT_MS });
+
+  const phaseRef = useRef(phase);
+  const currentQuestionRef = useRef(currentQuestion);
+  const sessionRef = useRef(session);
+  const answeredCountRef = useRef(answeredCount);
+  const startingRef = useRef(false);
+
+  useEffect(() => { phaseRef.current = phase; });
+  useEffect(() => { currentQuestionRef.current = currentQuestion; });
+  useEffect(() => { sessionRef.current = session; });
+  useEffect(() => { answeredCountRef.current = answeredCount; });
+
+  useEffect(() => () => {
+    tts.stop();
+    speech.stop();
+    stopMedia();
+    sessionStorage.removeItem("interview_session_id");
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  const checkMedia = async () => {
-    setError(null);
-    setMedia({ camera: "unknown", microphone: "unknown" });
-    if (!navigator.mediaDevices?.getUserMedia) {
-      setMedia({
-        camera: "unavailable",
-        microphone: "unavailable",
-        message: "This device or browser does not support camera/microphone access.",
-      });
-      return;
-    }
-    try {
-      const stream = await navigator.mediaDevices.getUserMedia({ video: true, audio: true });
-      stopStream(streamRef.current);
-      streamRef.current = stream;
-      const hasVideo = stream.getVideoTracks().length > 0;
-      const hasAudio = stream.getAudioTracks().length > 0;
-      setHasPreview(hasVideo);
-      setMedia({
-        camera: hasVideo ? "ok" : "unavailable",
-        microphone: hasAudio ? "ok" : "unavailable",
-      });
-      if (videoRef.current && hasVideo) {
-        videoRef.current.srcObject = stream;
-      }
-      if (hasAudio) startMicMeter(stream);
-    } catch (e) {
-      const name = e instanceof DOMException ? e.name : "";
-      const denied = name === "NotAllowedError" || name === "SecurityError";
-      setMedia({
-        camera: denied ? "denied" : "unavailable",
-        microphone: denied ? "denied" : "unavailable",
-        message: denied
-          ? "Permission was denied. You can continue without camera and microphone."
-          : "Camera/microphone are unavailable. You can continue without them.",
-      });
-    }
-  };
-
-  const startMicMeter = (stream: MediaStream) => {
-    try {
-      const Ctx = window.AudioContext;
-      if (!Ctx) return;
-      const ctx = new Ctx();
-      audioCtxRef.current = ctx;
-      const src = ctx.createMediaStreamSource(stream);
-      const analyser = ctx.createAnalyser();
-      analyser.fftSize = 256;
-      src.connect(analyser);
-      const data = new Uint8Array(analyser.frequencyBinCount);
-      const tick = () => {
-        analyser.getByteTimeDomainData(data);
-        let sum = 0;
-        for (let i = 0; i < data.length; i++) {
-          const v = (data[i] - 128) / 128;
-          sum += v * v;
+  // ---- Session recovery on browser refresh ----
+  useEffect(() => {
+    if (!sessionId) return;
+    let active = true;
+    (async () => {
+      try {
+        const data = await getSkillInterview(sessionId);
+        if (!active) return;
+        if (["completed", "graded", "awaiting_review"].includes(data.status)) {
+          const graded = await completeSkillInterview(sessionId);
+          if (active) { setResult(graded); setPhase("completed"); }
+          return;
         }
-        setMicLevel(Math.min(1, Math.sqrt(sum / data.length) * 3));
-        rafRef.current = requestAnimationFrame(tick);
-      };
-      tick();
-    } catch {
-      // meter is best-effort only
-    }
-  };
+        setSession({
+          session_id: data.session_id || sessionId,
+          skill: data.skill || skill,
+          skill_key: skill,
+          interview_version: "interview-v2",
+          status: data.status,
+          started_at: data.started_at || "",
+          plan: data.plan as StartInterviewResponse["plan"],
+          evaluated_dimensions: {},
+          privacy_notice: "",
+          disclaimer: "",
+        });
+        const plan = data.plan as Record<string, unknown>;
+        const questions = (plan?.questions ?? []) as Question[];
+        const idx = (data as Record<string, unknown>).current_index as number ?? 0;
+        setTotalQuestions(questions.length);
+        setAnsweredCount(
+          (data.transcript as Array<Record<string, unknown>> | undefined || [])
+            .filter((t) => t.answer).length
+        );
+        if (questions[idx]) {
+          setCurrentQuestion(questions[idx]);
+          setPhase("intro");
+        } else {
+          const graded = await completeSkillInterview(sessionId);
+          if (active) { setResult(graded); setPhase("completed"); }
+        }
+      } catch {
+        if (active) {
+          sessionStorage.removeItem("interview_session_id");
+          setSessionId(null);
+        }
+      }
+    })();
+    return () => { active = false; };
+  }, [sessionId, skill]);
 
-  const beginInterview = async (withMedia: boolean) => {
-    if (!withMedia) {
-      stopStream(streamRef.current);
-      streamRef.current = null;
-      setHasPreview(false);
-      if (videoRef.current) videoRef.current.srcObject = null;
+  // ---- Submit answer to backend ----
+  const submitAnswer = useCallback(async (transcript: string) => {
+    const sess = sessionRef.current;
+    const q = currentQuestionRef.current;
+    if (!sess || !q || !transcript.trim()) return;
+
+    setPhase("processing");
+
+    try {
+      const res = await answerInterviewQuestion(sess.session_id, q.id, transcript.trim());
+      setAnsweredCount(res.answered_count);
+
+      if (res.completed || res.next_action === "complete" || !res.current_question) {
+        setPhase("completing");
+        const graded = await completeSkillInterview(sess.session_id);
+        sessionStorage.removeItem("interview_session_id");
+        stopMedia();
+        setResult(graded);
+        setPhase("completed");
+        onCompleted?.(graded);
+        return;
+      }
+
+      const nextQ = res.current_question;
+      let spokenText = "";
+      if (res.evaluation?.follow_up_needed && res.evaluation.suggested_follow_up) {
+        spokenText = res.evaluation.suggested_follow_up;
+      } else if (nextQ) {
+        spokenText = nextQ.prompt;
+      }
+
+      setCurrentQuestion(nextQ);
+
+      setAiText(spokenText);
+      setPhase("ai_speaking");
+      await tts.speak(spokenText);
+
+      setAiText("");
+      if (phaseRef.current === "ai_speaking") {
+        setPhase("listening");
+        speech.start();
+      }
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : "Could not submit answer";
+      if (msg.includes("409") || msg.includes("not the current question")) {
+        setError("Session out of sync. Recovering...");
+        setSessionId(sessionRef.current?.session_id || null);
+      } else {
+        setError(msg);
+        setPhase("error");
+      }
     }
+  }, [tts, speech, stopMedia, onCompleted]);
+
+  // ---- Start the interview: request media + create session + AI speaks ----
+  const beginInterview = useCallback(async () => {
+    if (startingRef.current) return;
+    startingRef.current = true;
     setLoading(true);
     setError(null);
+
+    try {
+      await requestMedia();
+    } catch {
+      // media failure is non-fatal; the hook sets camState/micState
+    }
+
     try {
       const data = await startSkillInterview(skill);
       setSession(data);
-      setStep("questions");
+      sessionStorage.setItem("interview_session_id", data.session_id);
+      setSessionId(data.session_id);
+
+      const questions = data.plan.questions || [];
+      setTotalQuestions(questions.length);
+      setAnsweredCount(0);
+
+      if (questions.length === 0) {
+        setError("No questions generated for this skill.");
+        setLoading(false);
+        startingRef.current = false;
+        return;
+      }
+
+      const firstQ = questions[0];
+      setCurrentQuestion(firstQ);
+
+      const greeting = `Hi! I'm your INAURA AI interviewer. I've reviewed your profile and we'll focus on ${skill} today. Let's begin. ${firstQ.prompt}`;
+      setAiText(greeting);
+      setPhase("ai_speaking");
+      setLoading(false);
+
+      await tts.speak(greeting);
+
+      setAiText("");
+      if (phaseRef.current === "ai_speaking") {
+        setPhase("listening");
+        speech.start();
+      }
     } catch (e) {
       setError(e instanceof Error ? e.message : "Could not start the interview");
-    } finally {
       setLoading(false);
     }
-  };
+    startingRef.current = false;
+  }, [skill, requestMedia, tts, speech]);
 
-  const questions = session?.plan.questions ?? [];
-  const activeQ = questions[activeIdx];
-  const answeredCount = questions.filter((q) => (answers[q.id] || "").trim().length > 0).length;
-
-  const finishInterview = async () => {
-    if (!session || submitting) return;
-    setSubmitting(true);
-    setError(null);
-    try {
-      await submitInterviewResponses(session.session_id, answers);
-      const graded = await completeSkillInterview(session.session_id);
-      setResult(graded);
-      setStep("result");
-      stopStream(streamRef.current);
-      streamRef.current = null;
-      onCompleted?.(graded);
-    } catch (e) {
-      setError(e instanceof Error ? e.message : "Could not finish the interview");
-    } finally {
-      setSubmitting(false);
+  // ---- Manual typed submit (fallback when speech recognition unsupported) ----
+  const submitTyped = useCallback(() => {
+    if (typedAnswer.trim()) {
+      speech.stop();
+      void submitAnswer(typedAnswer);
+      setTypedAnswer("");
     }
-  };
+  }, [typedAnswer, speech, submitAnswer]);
 
-  const pct = (v: number | null | undefined) =>
-    v === null || v === undefined ? "—" : `${Math.round(v * 100)}%`;
+  // ---- End interview ----
+  const endInterview = useCallback(async () => {
+    tts.stop();
+    speech.stop();
+    const sess = sessionRef.current;
+    if (sess) {
+      try {
+        setPhase("completing");
+        const graded = await completeSkillInterview(sess.session_id);
+        setResult(graded);
+        sessionStorage.removeItem("interview_session_id");
+        stopMedia();
+        setPhase("completed");
+        onCompleted?.(graded);
+      } catch {
+        stopMedia();
+        setPhase("completed");
+      }
+    } else {
+      stopMedia();
+      setPhase("completed");
+    }
+  }, [tts, speech, stopMedia, onCompleted]);
 
-  const mediaLabel = (s: MediaState["camera"]) =>
-    s === "ok" ? "Ready ✓" : s === "denied" ? "Denied" : s === "skipped" ? "Skipped" : s === "unavailable" ? "Unavailable" : "Not checked";
+  // ---- Repeat question ----
+  const repeatQuestion = useCallback(() => {
+    const q = currentQuestionRef.current;
+    if (!q) return;
+    tts.stop();
+    speech.stop();
+    setAiText(q.prompt);
+    setPhase("ai_speaking");
+    void tts.speak(q.prompt).then(() => {
+      setAiText("");
+      if (phaseRef.current === "ai_speaking") {
+        setPhase("listening");
+        speech.start();
+      }
+    });
+  }, [tts, speech]);
+
+  // ---- Retry camera/mic ----
+  const recheckDevices = useCallback(async () => {
+    setError(null);
+    await requestMedia();
+  }, [requestMedia]);
+
+  const liveCaption = phase === "listening" ? speech.liveTranscript : "";
+  const progress = totalQuestions > 0 ? Math.round((answeredCount / totalQuestions) * 100) : 0;
+  const skillDisplay = session?.skill || skill;
+  const isActive = phase === "ai_speaking" || phase === "listening" || phase === "processing";
+  const camFailed = camState === "denied" || camState === "unavailable";
+  const micFailed = micState === "denied" || micState === "unavailable";
 
   return (
-    <div className="iv__overlay" role="dialog" aria-modal="true" aria-label={`${skill} AI skill interview`}>
-      <div className="iv__modal">
-        <header className="iv__header">
-          <div>
-            <div className="iv__eyebrow">🎤 {skill} Skill Interview</div>
-            <h2 className="iv__title">
-              {step === "intro" && "Explain your reasoning"}
-              {step === "media" && "Camera & microphone check"}
-              {step === "questions" && `Question ${Math.min(activeIdx + 1, questions.length)} of ${questions.length}`}
-              {step === "result" && "Interview complete ✓"}
-            </h2>
-          </div>
-          <button className="iv__close" onClick={onClose} aria-label="Close interview">
-            ×
-          </button>
-        </header>
+    <div className="iv__overlay" role="dialog" aria-modal="true" aria-label={`${skill} live AI interview`}>
 
-        {step === "intro" && (
-          <>
-            <p className="iv__lede">
-              ~{session?.plan.estimated_minutes ?? 10} minutes · skill-specific questions about {skill},
-              adapted to your evidence and assessment results.
+      {/* ===== INTRO SCREEN ===== */}
+      {phase === "intro" && (
+        <div className="iv__intro">
+          <div className="iv__intro-card">
+            <div className="iv__intro-icon">🎙</div>
+            <h1 className="iv__intro-title">INAURA AI Interview</h1>
+            <p className="iv__intro-skill">{skill}</p>
+            <p className="iv__intro-desc">
+              This is a live AI interview. The interviewer will ask questions
+              verbally and adapt based on your answers.
             </p>
-            <div className="iv__dims">
-              <div>
-                <strong>INAURA will evaluate:</strong>
-                <ul>
-                  <li>Technical reasoning</li>
-                  <li>Practical understanding</li>
-                  <li>Technical communication (scored separately)</li>
-                </ul>
-              </div>
-            </div>
-            <p className="iv__privacy">
-              Camera + microphone are used for a presence check only. Your preview stays on this
-              device — INAURA does not store video or audio. Only your written answers are saved.
-              You can continue without camera access.
+            <p className="iv__intro-req">
+              Camera + microphone are required for the live interview experience.
             </p>
-            <div className="iv__footer">
-              <span className="iv__hint">Show INAURA that you can explain and defend your work.</span>
-              <Button onClick={() => setStep("media")}>Check camera &amp; microphone</Button>
-            </div>
-          </>
-        )}
-
-        {step === "media" && (
-          <>
-            <div className="iv__media-grid">
-              <div className="iv__media-box">
-                <video ref={videoRef} autoPlay muted playsInline className="iv__preview" aria-label="Camera preview" />
-                {!hasPreview && <div className="iv__preview-empty">No preview yet</div>}
-              </div>
-              <div className="iv__media-status">
-                <div>
-                  Camera: <strong>{mediaLabel(media.camera)}</strong>
-                </div>
-                <div>
-                  Microphone: <strong>{mediaLabel(media.microphone)}</strong>
-                </div>
-                {media.microphone === "ok" && (
-                  <div className="iv__meter" aria-label="Microphone level">
-                    <div className="iv__meter-fill" style={{ width: `${Math.round(micLevel * 100)}%` }} />
-                  </div>
-                )}
-                {media.message && <div className="iv__media-msg">{media.message}</div>}
-              </div>
-            </div>
-            {error && <div className="iv__error">{error}</div>}
-            <div className="iv__footer">
-              <Button onClick={checkMedia}>Recheck devices</Button>
-              <Button
-                onClick={() => {
-                  setMedia((m) => ({ ...m, camera: "skipped", microphone: "skipped" }));
-                  void beginInterview(false);
-                }}
-                disabled={loading}
-              >
-                Continue without camera
-              </Button>
-              <Button onClick={() => void beginInterview(true)} disabled={loading}>
-                {loading ? "Starting…" : "Start interview"}
-              </Button>
-            </div>
-          </>
-        )}
-
-        {step === "questions" && session && activeQ && (
-          <>
-            <div className="iv__progress">
-              Answered {answeredCount}/{questions.length}
-            </div>
-            <p className="iv__prompt">{activeQ.prompt}</p>
-            <label className="iv__label" htmlFor="iv-answer">
-              Your answer (content and structure are evaluated — never appearance)
-            </label>
-            <textarea
-              id="iv-answer"
-              className="iv__answer"
-              value={answers[activeQ.id] || ""}
-              onChange={(e) => setAnswers((a) => ({ ...a, [activeQ.id]: e.target.value }))}
-              rows={7}
-              placeholder="Explain your reasoning…"
-            />
-            {activeQ.follow_ups.length > 0 && (
-              <details className="iv__followups">
-                <summary>Possible follow-ups INAURA may explore</summary>
-                <ul>
-                  {activeQ.follow_ups.map((f, i) => (
-                    <li key={i}>{f}</li>
-                  ))}
-                </ul>
-              </details>
+            <Button
+              onClick={() => void beginInterview()}
+              variant="primary"
+              size="lg"
+              disabled={loading}
+            >
+              {loading ? "Starting..." : "Let's Begin"}
+            </Button>
+            {error && (
+              <div className="iv__intro-error" role="alert">{error}</div>
             )}
-            {error && <div className="iv__error">{error}</div>}
-            <div className="iv__footer">
-              <Button onClick={() => setActiveIdx((i) => Math.max(0, i - 1))} disabled={activeIdx === 0}>
-                Back
-              </Button>
-              {activeIdx < questions.length - 1 ? (
-                <Button onClick={() => setActiveIdx((i) => i + 1)}>Next</Button>
-              ) : (
-                <Button onClick={() => void finishInterview()} disabled={submitting}>
-                  {submitting ? "Finishing…" : "Finish interview"}
-                </Button>
+          </div>
+        </div>
+      )}
+
+      {/* ===== CALL SCREEN ===== */}
+      {phase !== "intro" && phase !== "completed" && (
+        <div className="iv__call">
+          <header className="iv__call-header">
+            <div className="iv__call-brand">
+              <span className="iv__call-logo">INAURA</span>
+              <span className="iv__call-skill">{skillDisplay}</span>
+            </div>
+            <div className="iv__call-status">
+              {phase === "ai_speaking" && <span className="iv__status-dot iv__status-dot--ai" />}
+              {phase === "listening" && <span className="iv__status-dot iv__status-dot--mic" />}
+              {phase === "processing" && <span className="iv__status-dot iv__status-dot--proc" />}
+              <span className="iv__status-label">
+                {phase === "initializing" && "Connecting..."}
+                {phase === "ai_speaking" && "AI is speaking"}
+                {phase === "listening" && "Listening..."}
+                {phase === "processing" && "Analyzing your response..."}
+                {phase === "completing" && "Building your report..."}
+                {phase === "error" && "Error"}
+              </span>
+            </div>
+            <div className="iv__call-progress">
+              <div className="iv__call-progress-bar">
+                <div className="iv__call-progress-fill" style={{ width: `${progress}%` }} />
+              </div>
+              <span className="iv__call-progress-text">{answeredCount}/{totalQuestions}</span>
+            </div>
+          </header>
+
+          {error && (
+            <div className="iv__error" role="alert">
+              <span>{error}</span>
+              <button className="iv__error-dismiss" onClick={() => setError(null)} aria-label="Dismiss">×</button>
+            </div>
+          )}
+
+          {/* Device failure banners — shown inline, controls remain visible */}
+          {camFailed && isActive && (
+            <div className="iv__device-banner iv__device-banner--warn">
+              <span>Camera unavailable</span>
+              <Button onClick={recheckDevices} variant="secondary" size="sm">Recheck camera</Button>
+              <span className="iv__device-banner-note">Continuing with audio only.</span>
+            </div>
+          )}
+          {micFailed && isActive && (
+            <div className="iv__device-banner iv__device-banner--warn">
+              <span>Microphone unavailable</span>
+              <Button onClick={recheckDevices} variant="secondary" size="sm">Recheck microphone</Button>
+            </div>
+          )}
+
+          <div className="iv__call-body">
+            {/* AI panel */}
+            <div className="iv__call-panel iv__call-panel--ai">
+              <div className="iv__call-avatar">
+                <div className={`iv__avatar-ring ${phase === "ai_speaking" ? "iv__avatar-ring--active" : ""}`}>
+                  <span className="iv__avatar-icon">🤖</span>
+                </div>
+              </div>
+              <div className="iv__call-panel-label">INAURA AI</div>
+              {phase === "ai_speaking" && aiText && (
+                <div className="iv__call-bubble iv__call-bubble--ai" aria-live="polite">{aiText}</div>
+              )}
+              {phase === "processing" && (
+                <div className="iv__call-bubble iv__call-bubble--ai iv__call-bubble--muted">
+                  <div className="iv__call-dots"><span /><span /><span /></div>
+                </div>
               )}
             </div>
-          </>
-        )}
 
-        {step === "result" && result && (
-          <div className="iv__result">
+            {/* User camera panel */}
+            <div className="iv__call-panel iv__call-panel--user">
+              <div className="iv__call-camera">
+                <video ref={videoRef} autoPlay muted playsInline className="iv__call-video" aria-label="Your camera preview" />
+                {camState !== "live" && (
+                  <div className="iv__call-camera-off">
+                    <span>📹</span>
+                    <span>{camFailed ? "Camera unavailable" : "Camera off"}</span>
+                  </div>
+                )}
+                {phase === "listening" && !micFailed && (
+                  <div className="iv__call-listening-badge">
+                    <div className="iv__pulse" />
+                    <div className="iv__call-mic-meter">
+                      <div className="iv__call-mic-meter-fill" style={{ width: `${Math.round(micLevel * 100)}%` }} />
+                    </div>
+                    <span>Listening</span>
+                  </div>
+                )}
+              </div>
+              <div className="iv__call-panel-label">You</div>
+            </div>
+          </div>
+
+          {/* Caption area — secondary to voice */}
+          <div className="iv__call-caption" aria-live="polite">
+            {phase === "listening" && liveCaption && (
+              <span className="iv__call-caption-text">{liveCaption}</span>
+            )}
+            {phase === "listening" && !liveCaption && (
+              <span className="iv__call-caption-hint">Speak now...</span>
+            )}
+            {phase === "ai_speaking" && aiText && (
+              <span className="iv__call-caption-text iv__call-caption-text--ai">{aiText}</span>
+            )}
+            {phase === "processing" && (
+              <span className="iv__call-caption-hint">Evaluating your response...</span>
+            )}
+          </div>
+
+          {/* Typed fallback — only when speech recognition is unsupported */}
+          {!speech.isSupported && phase === "listening" && (
+            <div className="iv__call-typed">
+              <input
+                className="iv__call-typed-input"
+                value={typedAnswer}
+                onChange={(e) => setTypedAnswer(e.target.value)}
+                onKeyDown={(e) => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); submitTyped(); } }}
+                placeholder="Type your answer here..."
+                autoFocus
+                aria-label="Type your answer"
+              />
+              <Button variant="primary" size="sm" onClick={submitTyped} disabled={!typedAnswer.trim()}>
+                Send
+              </Button>
+            </div>
+          )}
+
+          {/* Controls — always visible during active call */}
+          <footer className="iv__call-controls">
+            {phase === "initializing" && (
+              <div className="iv__call-completing">
+                <div className="iv__spinner" />
+                <span>Setting up your interview...</span>
+              </div>
+            )}
+
+            {isActive && (
+              <>
+                <Button
+                  onClick={toggleMic}
+                  variant={micEnabled ? "secondary" : "accent"}
+                  size="md"
+                  aria-label={micEnabled ? "Mute microphone" : "Unmute microphone"}
+                >
+                  {micEnabled ? "🎙 Mute" : "🔇 Unmute"}
+                </Button>
+                <Button
+                  onClick={toggleCamera}
+                  variant={cameraEnabled ? "secondary" : "accent"}
+                  size="md"
+                  aria-label={cameraEnabled ? "Turn off camera" : "Turn on camera"}
+                >
+                  {cameraEnabled ? "📷 Camera" : "📷 Camera off"}
+                </Button>
+                <Button onClick={repeatQuestion} variant="secondary" size="md">↻ Repeat</Button>
+                <Button onClick={() => void endInterview()} variant="ghost" size="md">End</Button>
+              </>
+            )}
+
+            {phase === "processing" && (
+              <>
+                <Button onClick={toggleMic} variant="secondary" size="md" disabled>Muted</Button>
+                <Button onClick={toggleCamera} variant={cameraEnabled ? "secondary" : "accent"} size="md">
+                  {cameraEnabled ? "📷 Camera" : "📷 Camera off"}
+                </Button>
+                <Button onClick={repeatQuestion} variant="secondary" size="md" disabled>↻ Repeat</Button>
+                <Button onClick={() => void endInterview()} variant="ghost" size="md">End</Button>
+              </>
+            )}
+
+            {phase === "completing" && (
+              <div className="iv__call-completing">
+                <div className="iv__spinner" />
+                <span>Building your interview report...</span>
+              </div>
+            )}
+
+            {phase === "error" && (
+              <>
+                <Button onClick={recheckDevices} variant="secondary" size="md">Recheck devices</Button>
+                <Button onClick={() => void beginInterview()} variant="primary" size="md">Retry</Button>
+                <Button onClick={() => void endInterview()} variant="ghost" size="md">End</Button>
+              </>
+            )}
+          </footer>
+        </div>
+      )}
+
+      {/* ===== COMPLETED REPORT ===== */}
+      {phase === "completed" && result && (
+        <div className="iv__report-overlay">
+          <div className="iv__report">
+            <h2 className="iv__report-title">Interview Complete</h2>
             {result.status === "graded" ? (
               <>
-                <div className="iv__scores">
-                  <div>
-                    <strong>Technical reasoning:</strong> {pct(result.technical_scores?.overall)}
+                <div className="iv__report-scores">
+                  <div className="iv__report-score">
+                    <span className="iv__report-score-value">
+                      {result.technical_scores?.overall != null ? `${Math.round(result.technical_scores.overall * 100)}%` : "—"}
+                    </span>
+                    <span className="iv__report-score-label">Technical Reasoning</span>
                   </div>
                   {result.communication_scores && (
-                    <div>
-                      <strong>Technical communication:</strong> {pct(result.communication_scores.overall)}
+                    <div className="iv__report-score">
+                      <span className="iv__report-score-value">{`${Math.round(result.communication_scores.overall * 100)}%`}</span>
+                      <span className="iv__report-score-label">Communication</span>
                     </div>
                   )}
                 </div>
                 {result.technical_scores && (
-                  <ul className="iv__breakdown">
-                    {Object.entries(result.technical_scores.per_competency).map(([k, v]) => (
-                      <li key={k}>
-                        {k}: <strong>{pct(v)}</strong>
-                      </li>
-                    ))}
-                  </ul>
+                  <div className="iv__report-breakdown">
+                    <h3>Per-Competency</h3>
+                    <ul>
+                      {Object.entries(result.technical_scores.per_competency).map(([k, v]) => (
+                        <li key={k}>
+                          <span>{k.replace(/_/g, " ")}</span>
+                          <span className="iv__report-bar">
+                            <span className="iv__report-bar-fill" style={{ width: `${Math.round(v * 100)}%` }} />
+                          </span>
+                          <span className="iv__report-pct">{Math.round(v * 100)}%</span>
+                        </li>
+                      ))}
+                    </ul>
+                  </div>
                 )}
-                {result.note && <p className="iv__note">{result.note}</p>}
-                <p className="iv__note iv__note--ok">Assessment evidence added to your skill profile.</p>
-              </>
-            ) : (
-              <>
-                <p className="iv__note">
-                  {result.status === "awaiting_review"
-                    ? "Your answers are saved. Grading is not configured yet, so this interview is awaiting review and does not change your skill profile."
-                    : result.note || "INAURA found limited evidence of implementation understanding."}
+                {result.note && <p className="iv__report-note">{result.note}</p>}
+                <p className="iv__report-note iv__report-note--ok">
+                  Assessment evidence has been added to your skill profile.
                 </p>
               </>
+            ) : (
+              <p className="iv__report-note">
+                {result.status === "awaiting_review"
+                  ? "Your interview is saved and awaiting review."
+                  : result.note || "INAURA found limited evidence of implementation understanding."}
+              </p>
             )}
-            <div className="iv__footer">
-              <span className="iv__hint">
-                The interview is one evidence source among your GitHub, projects, and assessments.
-              </span>
-              <Button onClick={onClose}>Done</Button>
+            <p className="iv__report-fine">
+              Interview evidence combines with your GitHub, projects, and assessments through
+              INAURA&apos;s existing evidence model. The deterministic skill engine decides how this
+              evidence affects your profile — not Gemini directly.
+            </p>
+            <div className="iv__report-actions">
+              <Button onClick={onClose} variant="primary" size="lg">Done</Button>
             </div>
           </div>
-        )}
-      </div>
+        </div>
+      )}
     </div>
   );
 }
