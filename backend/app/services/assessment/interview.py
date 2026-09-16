@@ -1258,7 +1258,7 @@ def _make_interview_llm():
 #         model=settings.gemini_model or "gemini-2.5-flash",
 #         google_api_key=settings.google_api_key,
 #         temperature=0.2,
-        max_retries=0,
+        # max_retries=0,
 #     )
 
 
