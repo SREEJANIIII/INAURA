@@ -1612,12 +1612,14 @@ def _normalize_requirement_row(row: dict) -> dict:
         published_at = proto_match.get("published_at", "2024-01-01")
         version = INDUSTRY_PROFILE_VERSION
     else:
-        row_level = row.get("required_level")
+        meta = row.get("metadata") if isinstance(row.get("metadata"), dict) else {}
+        row_level = meta.get("required_level") if meta.get("required_level") is not None else row.get("required_level")
         required_level = float(row_level if row_level is not None else proto_level)
         importance = float(row.get("importance", proto_match.get("importance", 0.5) if proto_match else 0.5))
         demand = float(row.get("demand", proto_match.get("demand", 0.5) if proto_match else 0.5))
         interview = float(row.get("interview_relevance", proto_match.get("interview_relevance", 0.5) if proto_match else 0.5))
-        industry_confidence = float(row.get("industry_confidence") or proto_conf)
+        row_conf = meta.get("industry_confidence") if meta.get("industry_confidence") is not None else row.get("industry_confidence")
+        industry_confidence = float(row_conf or proto_conf)
         source_quality = float(row.get("source_quality") or proto_quality)
         evidence_context = row.get("evidence_context") or proto_context or row.get("description", "")
         source = row.get("source") or proto_source

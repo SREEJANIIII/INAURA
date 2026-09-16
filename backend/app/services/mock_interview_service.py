@@ -15,8 +15,8 @@ Design:
     target role, industry requirements (importance/demand/
     interview_relevance), skill gaps, signal strength, source reliability,
     assessment results, project info decide what to ask.
-  * Answer EVALUATION + adaptive follow-ups use Gemini with strict
-    structured output (AnswerEvaluation). If Gemini is unavailable the
+  * Answer EVALUATION + adaptive follow-ups use NVIDIA NIM with strict
+    structured output (AnswerEvaluation). If NVIDIA NIM is unavailable the
     transcript is preserved, evaluation is marked pending, and no score is
     fabricated — the session continues with the deterministic plan.
   * Completion emits one signal per skill (source="interview",
@@ -313,7 +313,7 @@ def _to_question_rows(slots: List[Tuple[str, str, str]]) -> List[dict]:
 
 
 def parse_evaluation(raw_text: str, question_id: str) -> Dict[str, Any]:
-    """Strict-parse Gemini JSON into the AnswerEvaluation contract."""
+    """Strict-parse NVIDIA NIM JSON into the AnswerEvaluation contract."""
     blob = _extract_json_object(raw_text or "")
     if not blob:
         raise ValueError("no JSON object in model reply")
@@ -484,25 +484,46 @@ def build_skill_signals(
 
 
 # ---------------------------------------------------------------------------
-# Gemini (server-side only; never fabricate when unavailable)
+# NVIDIA NIM (server-side only; never fabricate when unavailable)
 # ---------------------------------------------------------------------------
 
 def _make_llm():
-    from langchain_google_genai import ChatGoogleGenerativeAI
+    from langchain_nvidia_ai_endpoints import ChatNVIDIA
     from ..core.config import get_settings
 
     settings = get_settings()
-    if not settings.google_api_key:
+    if not settings.nvidia_api_key:
         raise HTTPException(
             status_code=503,
-            detail="AI interview evaluation is not configured — set GOOGLE_API_KEY. "
+            detail="AI interview evaluation is not configured — set NVIDIA_API_KEY. "
                    "Your answer is saved; retry evaluation once configured.",
         )
-    return ChatGoogleGenerativeAI(
-        model=settings.gemini_model or "gemini-2.5-flash",
-        google_api_key=settings.google_api_key,
-        temperature=0.2,
+    return ChatNVIDIA(
+        model=settings.nvidia_model or "nvidia/nemotron-3-nano-omni-30b-a3b-reasoning",
+        api_key=settings.nvidia_api_key,
+        temperature=0.6,
+        top_p=0.95,
+        max_completion_tokens=65536,
     )
+
+
+# Gemini implementation kept commented for a future provider rollback.
+#
+# def _make_gemini_llm_legacy():
+#     from langchain_google_genai import ChatGoogleGenerativeAI
+#     from ..core.config import get_settings
+#
+#     settings = get_settings()
+#     if not settings.google_api_key:
+#         raise HTTPException(
+#             status_code=503,
+#             detail="AI interview evaluation is not configured — set GOOGLE_API_KEY.",
+#         )
+#     return ChatGoogleGenerativeAI(
+#         model=settings.gemini_model or "gemini-2.5-flash",
+#         google_api_key=settings.google_api_key,
+#         temperature=0.2,
+#     )
 
 
 EVAL_SYSTEM = (
@@ -679,7 +700,7 @@ def start_session(user_id: str, target_role: Optional[str], question_count: int 
         raise HTTPException(status_code=500, detail=f"Failed to start interview: {str(e)[:200]}")
 
     from ..core.config import get_settings
-    ai_available = bool(get_settings().google_api_key)
+    ai_available = bool(get_settings().nvidia_api_key)
     return {
         "session_id": session_id,
         "target_role": role,
@@ -755,7 +776,7 @@ def get_session(user_id: str, session_id: str) -> dict:
         "questions": outs,
         "current_question": current,
         "answers_count": len(responses),
-        "ai_available": bool(get_settings().google_api_key),
+        "ai_available": bool(get_settings().nvidia_api_key),
     }
 
 
@@ -1020,7 +1041,7 @@ def build_report(user_id: str, session_id: str) -> dict:
         "skill_results": skill_results,
         "recommended_next_actions": next_actions[:8],
         "overall_interview_confidence": overall,
-        "ai_available": bool(get_settings().google_api_key),
+        "ai_available": bool(get_settings().nvidia_api_key),
         "note": "Interview evidence flows into your skill profile on next analysis; roadmap updates follow existing gap logic.",
     }
 

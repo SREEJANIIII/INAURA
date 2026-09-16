@@ -18,7 +18,7 @@ A structured, SKILL-SPECIFIC interview, not free chat:
     never accuses, never deletes, and never rewrites existing evidence
 
 LLM usage: question plans are deterministic templates (no LLM needed, fully
-testable). Grading free-text responses needs a model: exactly ONE Gemini call
+testable). Grading free-text responses needs a model: exactly ONE NVIDIA NIM call
 per completed interview via the existing provider pattern. When no API key is
 configured the transcript is still stored and the session waits as
 ``awaiting_review`` — no signal is emitted and nothing breaks.
@@ -318,7 +318,7 @@ def validate_plan(plan: Dict[str, Any]) -> List[str]:
 def build_prior_snapshot(user_id: str, canonical: str) -> List[Dict[str, Any]]:
     """Capture prior evidence state for one skill at session start.
 
-    Stores enough context for Gemini to compare interview answers against
+    Stores enough context for NVIDIA NIM to compare interview answers against
     existing evidence without exposing sensitive data.
     """
     snapshot: Dict[str, Any] = {
@@ -357,7 +357,7 @@ def build_prior_snapshot(user_id: str, canonical: str) -> List[Dict[str, Any]]:
 
 
 def prior_summary_text(snapshot: List[Dict[str, Any]], skill: str) -> str:
-    """Human-readable prior evidence summary for Gemini evaluation prompts."""
+    """Human-readable prior evidence summary for NVIDIA NIM evaluation prompts."""
     if not snapshot:
         return f"{skill}: no prior evidence available"
     entry = snapshot[0] if isinstance(snapshot[0], dict) else {}
@@ -380,11 +380,11 @@ def prior_summary_text(snapshot: List[Dict[str, Any]], skill: str) -> str:
 
 
 # ---------------------------------------------------------------------------
-# Per-answer Gemini evaluation (adaptive interview)
+# Per-answer NVIDIA NIM evaluation (adaptive interview)
 # ---------------------------------------------------------------------------
 
 def parse_answer_evaluation(raw_text: str, question_id: str) -> Dict[str, Any]:
-    """Strict-parse Gemini JSON into structured per-answer evaluation.
+    """Strict-parse NVIDIA NIM JSON into structured per-answer evaluation.
 
     Returns a validated dict with numeric scores and optional follow-up.
     Raises ValueError on invalid output — never fabricates scores.
@@ -447,7 +447,7 @@ async def evaluate_answer_llm(
     competencies: List[Dict[str, str]],
     _llm: Any = None,
 ) -> Dict[str, Any]:
-    """Evaluate one interview answer via Gemini.
+    """Evaluate one interview answer via NVIDIA NIM.
 
     Returns structured evaluation dict. Raises HTTPException on failure —
     callers must handle 502/503 gracefully without fabricating scores.
@@ -847,7 +847,7 @@ async def answer_interview_question(
     transcript: str,
     _llm: Any = None,
 ) -> dict:
-    """Submit one answer, evaluate with Gemini, optionally insert follow-up.
+    """Submit one answer, evaluate with NVIDIA NIM, optionally insert follow-up.
 
     Returns the next interview state: evaluation, next action, next question.
     Preserves backward compatibility — existing batch submit still works.
@@ -899,7 +899,7 @@ async def answer_interview_question(
             comp_label = c_.get("label", "")
             break
 
-    # Evaluate the answer with Gemini
+    # Evaluate the answer with NVIDIA NIM
     eval_input = {
         "id": target_q.get("id"),
         "skill": canonical,
@@ -1040,26 +1040,47 @@ async def answer_interview_question(
 
 
 # ---------------------------------------------------------------------------
-# Grading: exactly ONE Gemini call; strict schema validation; technical and
+# Grading: exactly ONE NVIDIA NIM call; strict schema validation; technical and
 # communication kept separate.
 # ---------------------------------------------------------------------------
 
 def _make_interview_llm():
-    from langchain_google_genai import ChatGoogleGenerativeAI
+    from langchain_nvidia_ai_endpoints import ChatNVIDIA
     from ...core.config import get_settings
 
     settings = get_settings()
-    if not settings.google_api_key:
+    if not settings.nvidia_api_key:
         raise HTTPException(
             status_code=503,
-            detail="AI interview grading is not configured — set GOOGLE_API_KEY (and optionally GEMINI_MODEL). "
+            detail="AI interview grading is not configured — set NVIDIA_API_KEY (and optionally NVIDIA_MODEL). "
                    "Your answers are saved and will be graded once grading is configured.",
         )
-    return ChatGoogleGenerativeAI(
-        model=settings.gemini_model or "gemini-2.5-flash",
-        google_api_key=settings.google_api_key,
-        temperature=0.2,
+    return ChatNVIDIA(
+        model=settings.nvidia_model or "nvidia/nemotron-3-nano-omni-30b-a3b-reasoning",
+        api_key=settings.nvidia_api_key,
+        temperature=0.6,
+        top_p=0.95,
+        max_completion_tokens=65536,
     )
+
+
+# Gemini implementation kept commented for a future provider rollback.
+#
+# def _make_gemini_interview_llm_legacy():
+#     from langchain_google_genai import ChatGoogleGenerativeAI
+#     from ...core.config import get_settings
+#
+#     settings = get_settings()
+#     if not settings.google_api_key:
+#         raise HTTPException(
+#             status_code=503,
+#             detail="AI interview grading is not configured — set GOOGLE_API_KEY.",
+#         )
+#     return ChatGoogleGenerativeAI(
+#         model=settings.gemini_model or "gemini-2.5-flash",
+#         google_api_key=settings.google_api_key,
+#         temperature=0.2,
+#     )
 
 
 def _extract_json_object(text: str) -> Optional[str]:
@@ -1173,7 +1194,7 @@ async def complete_interview_session(
 
     Supports two grading paths:
       1. Per-answer evaluations (adaptive flow) — aggregates stored evaluations
-      2. Batch transcript grading (legacy flow) — single Gemini call on full transcript
+      2. Batch transcript grading (legacy flow) — single NVIDIA NIM call on full transcript
 
     Backward compatible: existing sessions without per-answer evaluations
     are graded via the original batch path.

@@ -332,3 +332,120 @@ def get_item_type(canonical: str) -> str:
     key = _normalize_key(canonical)
     return SKILL_ITEM_TYPE.get(key, "learn")
 
+
+# Detailed 4-stage task decomposition definitions (Learn, Practice, Build, Validate)
+SKILL_DECOMPOSED_BLOCKS = {
+    "python": [
+        {"stage": "learn", "title": "Python Syntax, Data Model & Functions", "desc": "Master core Python syntax, variable scoping, functions, argument packing/unpacking, and clean code conventions.", "val_method": "quiz"},
+        {"stage": "practice", "title": "Data Structures & Comprehensions Problem Set", "desc": "Solve 15 algorithmic exercises covering lists, dicts, sets, generator expressions, and comprehensions.", "val_method": "practical_test"},
+        {"stage": "build", "title": "Build a Modular CLI File Processing Tool", "desc": "Develop a command-line tool with argparse/click that parses structured files, handles edge cases, and logs output.", "val_method": "repo_inspection"},
+        {"stage": "validate", "title": "Unit Testing & Code Complexity Verification", "desc": "Implement a full pytest test suite achieving >80% coverage and document time/space complexity.", "val_method": "code_submission"},
+    ],
+    "sql": [
+        {"stage": "learn", "title": "Relational Modeling, JOINs & Indexing Fundamentals", "desc": "Learn relational algebra, entity normalization (1NF-3NF), B-tree indexes, and ACID transaction isolation.", "val_method": "quiz"},
+        {"stage": "practice", "title": "Complex Query & Aggregation Challenges", "desc": "Complete 30 SQL exercises covering multi-table JOINs, window functions (ROW_NUMBER, RANK), and CTEs.", "val_method": "practical_test"},
+        {"stage": "build", "title": "Design a Normalized E-Commerce Schema", "desc": "Draft and apply production DDL schema with foreign keys, composite indexes, and data integrity constraints.", "val_method": "repo_inspection"},
+        {"stage": "validate", "title": "Query Plan Optimization Benchmark", "desc": "Analyze query execution plans using EXPLAIN ANALYZE and optimize a slow query to reduce execution cost.", "val_method": "code_submission"},
+    ],
+    "dsa": [
+        {"stage": "learn", "title": "Algorithmic Complexity & Core Data Structures", "desc": "Study Big-O asymptotic analysis, array buffers, linked lists, hash collisions, and binary search trees.", "val_method": "quiz"},
+        {"stage": "practice", "title": "LeetCode Targeted Pillar Problem Set", "desc": "Solve 15 curated medium-difficulty problems focusing on two-pointers, sliding window, and graph BFS/DFS.", "val_method": "practical_test"},
+        {"stage": "build", "title": "Implement an LRU Cache & Graph Traversal Engine", "desc": "Write a clean object-oriented implementation of an LRU cache (hash map + doubly linked list) from scratch.", "val_method": "repo_inspection"},
+        {"stage": "validate", "title": "Timed Algorithmic Evaluation", "desc": "Complete a 90-minute timed problem set testing time/space trade-offs under interview constraints.", "val_method": "quiz"},
+    ],
+    "rest_apis": [
+        {"stage": "learn", "title": "HTTP Protocols, REST Architecture & Authentication", "desc": "Understand idempotent HTTP methods, status code semantics, JWT token authentication, and rate limiting.", "val_method": "quiz"},
+        {"stage": "practice", "title": "API Request Handling & Validation Exercises", "desc": "Implement robust request payload validation (Pydantic/Zod), query pagination, and structured error responses.", "val_method": "practical_test"},
+        {"stage": "build", "title": "Build a Production-Style CRUD REST API", "desc": "Build a backend service in FastAPI or Express featuring database persistence, authentication middleware, and OpenAPI docs.", "val_method": "repo_inspection"},
+        {"stage": "validate", "title": "Automated End-to-End API Test Suite", "desc": "Author an integration test suite verifying edge cases, invalid auth tokens, and payload boundary conditions.", "val_method": "code_submission"},
+    ],
+    "docker": [
+        {"stage": "learn", "title": "Container Architecture, Images & Dockerfile Directives", "desc": "Learn container namespaces/cgroups, image layering, caching optimization, and entrypoint vs cmd semantics.", "val_method": "quiz"},
+        {"stage": "practice", "title": "Multi-Stage Dockerfile Optimization", "desc": "Containerize existing backend and frontend applications using multi-stage builds to minimize image size.", "val_method": "practical_test"},
+        {"stage": "build", "title": "Compose Multi-Service App Environment", "desc": "Deploy an interconnected multi-container architecture (API + database + Redis caching) using docker-compose.", "val_method": "repo_inspection"},
+        {"stage": "validate", "title": "Container Healthcheck & Clean Deployment Verification", "desc": "Verify automated container restarts, healthcheck probes, persistent volume mounts, and secret isolation.", "val_method": "code_submission"},
+    ],
+    "react": [
+        {"stage": "learn", "title": "Component Architecture, Virtual DOM & State Hooks", "desc": "Master functional components, props drilling resolution, useState, useEffect lifecycles, and custom hooks.", "val_method": "quiz"},
+        {"stage": "practice", "title": "Interactive UI Component & Form State Practice", "desc": "Build 5 interactive UI components with controlled inputs, async data fetching, and loading/error states.", "val_method": "practical_test"},
+        {"stage": "build", "title": "Build an Async Responsive Web Dashboard", "desc": "Develop a multi-page web application featuring responsive layouts, route protection, and REST API integration.", "val_method": "repo_inspection"},
+        {"stage": "validate", "title": "Component Test Coverage & Accessibility Audit", "desc": "Write React Testing Library test cases for key user flows and verify WCAG accessibility standards.", "val_method": "code_submission"},
+    ],
+    "machine_learning": [
+        {"stage": "learn", "title": "Supervised Learning, Loss Functions & Evaluation", "desc": "Study regression vs classification, bias-variance tradeoff, cross-validation strategies, and metrics (F1, ROC-AUC).", "val_method": "quiz"},
+        {"stage": "practice", "title": "Feature Engineering & Pipeline Experimentation", "desc": "Build Scikit-learn pipelines with imputation, one-hot encoding, feature scaling, and GridSearchCV tuning.", "val_method": "practical_test"},
+        {"stage": "build", "title": "End-to-End Predictive Modeling Pipeline", "desc": "Train and evaluate models on a real-world tabular dataset, document feature importance, and output predictions.", "val_method": "repo_inspection"},
+        {"stage": "validate", "title": "Model Performance & Validation Report", "desc": "Deliver an evaluation report comparing baseline vs tuned models with cross-validated performance metrics.", "val_method": "code_submission"},
+    ],
+    "git": [
+        {"stage": "learn", "title": "Git Internal Object Model & Branching Strategies", "desc": "Understand blobs, trees, commits, HEAD pointers, fast-forward merges, and rebase mechanics.", "val_method": "quiz"},
+        {"stage": "practice", "title": "Branch Workflow & Merge Conflict Resolution", "desc": "Practice feature-branch workflows, rebasing on main, interactive squash, and resolving merge conflicts.", "val_method": "practical_test"},
+        {"stage": "build", "title": "Collaborative Pull Request Lifecycle", "desc": "Manage repository releases with semantic commit messages, signed tags, and structured PR descriptions.", "val_method": "repo_inspection"},
+        {"stage": "validate", "title": "Repository Cleanliness & Conflict Verification", "desc": "Demonstrate a simulated conflict resolution and produce a clean linear git history log.", "val_method": "self_check"},
+    ],
+}
+
+
+def decompose_skill_into_tasks(
+    canonical: str,
+    total_hours: float,
+    learner_state_classification: str = "UNKNOWN",
+    target_role: str = "Software Engineer",
+) -> List[Dict[str, Any]]:
+    """
+    Decompose a skill gap into structured 4-stage tasks (Learn -> Practice -> Build -> Validate).
+    Calculates estimated minutes for each task to sum exactly to total_hours * 60.
+    Adapts based on whether the learner is UNKNOWN vs INFERRED vs KNOWN.
+    """
+    key = _normalize_key(canonical)
+    blocks = SKILL_DECOMPOSED_BLOCKS.get(key)
+    tmpl = get_template_for_skill(canonical)
+    resources = get_resources_for_skill(canonical)
+
+    if not blocks:
+        # Fallback to templated decomposition
+        blocks = [
+            {"stage": "learn", "title": f"Core {canonical} Fundamentals", "desc": f"Learn: {tmpl.get('learn', 'Core concepts and documentation')}.", "val_method": "quiz"},
+            {"stage": "practice", "title": f"{canonical} Practical Exercises", "desc": f"Practice: {tmpl.get('practice', 'Complete guided exercises')}.", "val_method": "practical_test"},
+            {"stage": "build", "title": f"Build a {canonical} Project", "desc": f"Build: {tmpl.get('project', 'Build a small practical project demonstrating capability')}.", "val_method": "repo_inspection"},
+            {"stage": "validate", "title": f"Validate & Test {canonical} Knowledge", "desc": f"Validate: {tmpl.get('validate', 'Review, test, and document your work')}.", "val_method": "code_submission"},
+        ]
+
+    total_minutes = max(120, int(round(total_hours * 60)))
+
+    # Ratio breakdown based on learner state
+    if learner_state_classification == "INFERRED":
+        # Learner already has supporting background: shorten learn, emphasize build/practice
+        ratios = [0.15, 0.35, 0.35, 0.15]
+    elif learner_state_classification == "KNOWN":
+        # Fast-track review to validate & build
+        ratios = [0.10, 0.25, 0.45, 0.20]
+    else:
+        # UNKNOWN: balanced foundational start
+        ratios = [0.25, 0.35, 0.30, 0.10]
+
+    tasks: List[Dict[str, Any]] = []
+    accumulated_minutes = 0
+
+    for i, b in enumerate(blocks):
+        if i == len(blocks) - 1:
+            task_minutes = max(30, total_minutes - accumulated_minutes)
+        else:
+            task_minutes = max(30, int(round(total_minutes * ratios[i] / 15.0) * 15))
+            accumulated_minutes += task_minutes
+
+        task_resources = resources if b["stage"] in ("learn", "practice") else resources[:1]
+        
+        tasks.append({
+            "task_type": b["stage"],
+            "title": b["title"],
+            "description": f"{b['desc']} (Focus for {target_role}).",
+            "estimated_minutes": task_minutes,
+            "validation_method": b["val_method"],
+            "resources": task_resources,
+            "why_this_task": f"Progressive stage ({b['stage'].upper()}) designed to close your {canonical} gap for {target_role} through verified capability.",
+        })
+
+    return tasks
+
+

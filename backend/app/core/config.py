@@ -13,9 +13,13 @@ class Settings(BaseSettings):
     embedding_api_key: str | None = None
     embedding_model: str | None = None
     embedding_dimension: int | None = None
-    # Experimental AI review (isolated /ai-review-test feature only)
+    # Legacy Gemini configuration. Kept for the experimental /ai-review-test
+    # feature and as a future interview-provider fallback.
     google_api_key: str | None = None
     gemini_model: str = "gemini-2.5-flash"
+    # NVIDIA NIM interview evaluator.
+    nvidia_api_key: str | None = None
+    nvidia_model: str = "nvidia/nemotron-3-nano-omni-30b-a3b-reasoning"
     # Gemini embeddings (preferred) — uses GOOGLE_API_KEY fallback if EMBEDDING_API_KEY not set
     gemini_embedding_model: str = "gemini-embedding-001"
 
@@ -27,8 +31,8 @@ class Settings(BaseSettings):
 
     def model_post_init(self, __context):  # type: ignore
         # Treat placeholder values from .env.example as not set
-        placeholders = {"your-anon-key", "your-service-role-key", "your-jwt-secret", "YOUR_JWT_SECRET", "your-project.supabase.co", "your-embedding-key", "your-google-api-key"}
-        for field in ["supabase_url", "supabase_anon_key", "supabase_service_role_key", "supabase_jwt_secret", "embedding_api_key", "google_api_key"]:
+        placeholders = {"your-anon-key", "your-service-role-key", "your-jwt-secret", "YOUR_JWT_SECRET", "your-project.supabase.co", "your-embedding-key", "your-google-api-key", "your-nvidia-api-key"}
+        for field in ["supabase_url", "supabase_anon_key", "supabase_service_role_key", "supabase_jwt_secret", "embedding_api_key", "google_api_key", "nvidia_api_key"]:
             val = getattr(self, field)
             if val and any(ph in val for ph in placeholders):
                 setattr(self, field, None)
