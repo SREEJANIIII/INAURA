@@ -5,8 +5,6 @@ export type SpeechState = "idle" | "listening" | "error" | "unsupported";
 export type UseSpeechRecognitionOptions = {
   /** Ms of silence before auto-stopping. 0 = disabled. */
   silenceTimeout?: number;
-  /** Called when silence timeout fires with the collected transcript. */
-  onSilence?: (transcript: string) => void;
 };
 
 export type UseSpeechRecognitionResult = {
@@ -19,6 +17,8 @@ export type UseSpeechRecognitionResult = {
   stop: () => string;
   reset: () => void;
   isSupported: boolean;
+  /** Wire the silence callback. Call this to connect your handler. */
+  setOnSilence: (cb: (transcript: string) => void) => void;
 };
 
 interface SpeechRecognitionEvent extends Event {
@@ -53,17 +53,16 @@ declare global {
 export function useSpeechRecognition(
   opts: UseSpeechRecognitionOptions = {}
 ): UseSpeechRecognitionResult {
-  const { silenceTimeout = 0, onSilence } = opts;
+  const { silenceTimeout = 0 } = opts;
   const [state, setState] = useState<SpeechState>("idle");
   const [interimTranscript, setInterimTranscript] = useState("");
   const [finalTranscript, setFinalTranscript] = useState("");
   const recogRef = useRef<SpeechRecognitionInstance | null>(null);
   const activeRef = useRef(false);
   const silenceTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const onSilenceRef = useRef(onSilence);
+  const onSilenceRef = useRef<((t: string) => void) | null>(null);
   const finalTranscriptRef = useRef("");
-
-  useEffect(() => { onSilenceRef.current = onSilence; });
+  const lastSubmittedRef = useRef("");
 
   const isSupported =
     typeof window !== "undefined" &&
@@ -76,6 +75,13 @@ export function useSpeechRecognition(
     }
   }, []);
 
+  const submitTranscript = useCallback((transcript: string) => {
+    const trimmed = transcript.trim();
+    if (!trimmed || trimmed === lastSubmittedRef.current) return;
+    lastSubmittedRef.current = trimmed;
+    onSilenceRef.current?.(trimmed);
+  }, []);
+
   const resetSilenceTimer = useCallback(
     (currentFinal: string) => {
       if (silenceTimeout <= 0) return;
@@ -86,11 +92,11 @@ export function useSpeechRecognition(
           activeRef.current = false;
           setState("idle");
           setInterimTranscript("");
-          onSilenceRef.current?.(currentFinal.trim());
+          submitTranscript(currentFinal);
         }
       }, silenceTimeout);
     },
-    [silenceTimeout, clearSilenceTimer]
+    [silenceTimeout, clearSilenceTimer, submitTranscript]
   );
 
   const cleanup = useCallback(() => {
@@ -136,19 +142,33 @@ export function useSpeechRecognition(
           setFinalTranscript((prev) => {
             const next = prev ? `${prev} ${final_}`.trim() : final_.trim();
             finalTranscriptRef.current = next;
-            resetSilenceTimer(next);
             return next;
           });
         }
         setInterimTranscript(interim);
-        if (interim || final_) resetSilenceTimer("");
+        // Reset silence timer on any speech activity
+        if (interim || final_) {
+          setFinalTranscript((prev) => {
+            const combined = [prev, interim].filter(Boolean).join(" ").trim();
+            resetSilenceTimer(combined);
+            return prev;
+          });
+        }
       };
 
       recog.onend = () => {
+        if (!activeRef.current) return;
         activeRef.current = false;
         clearSilenceTimer();
-        setState("idle");
+        const transcript = finalTranscriptRef.current.trim();
         setInterimTranscript("");
+        // If recognition ended with meaningful content, submit it
+        if (transcript && transcript !== lastSubmittedRef.current) {
+          setState("idle");
+          submitTranscript(transcript);
+        } else {
+          setState("idle");
+        }
       };
 
       recog.onerror = (ev: SpeechRecognitionErrorEvent) => {
@@ -173,7 +193,7 @@ export function useSpeechRecognition(
     } catch {
       setState("error");
     }
-  }, [isSupported, resetSilenceTimer, clearSilenceTimer]);
+  }, [isSupported, resetSilenceTimer, clearSilenceTimer, submitTranscript]);
 
   const stop = useCallback(() => {
     clearSilenceTimer();
@@ -191,8 +211,13 @@ export function useSpeechRecognition(
     setInterimTranscript("");
     setFinalTranscript("");
     finalTranscriptRef.current = "";
+    lastSubmittedRef.current = "";
     setState("idle");
   }, [cleanup]);
+
+  const setOnSilence = useCallback((cb: (transcript: string) => void) => {
+    onSilenceRef.current = cb;
+  }, []);
 
   const liveTranscript = [finalTranscript, interimTranscript].filter(Boolean).join(" ").trim();
 
@@ -205,5 +230,6 @@ export function useSpeechRecognition(
     stop,
     reset,
     isSupported,
+    setOnSilence,
   };
 }

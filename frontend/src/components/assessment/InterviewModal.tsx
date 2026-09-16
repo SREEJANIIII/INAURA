@@ -63,6 +63,8 @@ export default function InterviewModal({ skill, onClose, onCompleted }: Props) {
     micEnabled,
     cameraEnabled,
     requestMedia,
+    requestCamera,
+    requestMicrophone,
     toggleMic,
     toggleCamera,
     stopAll: stopMedia,
@@ -74,21 +76,97 @@ export default function InterviewModal({ skill, onClose, onCompleted }: Props) {
   const phaseRef = useRef(phase);
   const currentQuestionRef = useRef(currentQuestion);
   const sessionRef = useRef(session);
-  const answeredCountRef = useRef(answeredCount);
-  const startingRef = useRef(false);
+  const interviewActiveRef = useRef(false);
+  const ttsRef = useRef(tts);
+  const speechRef = useRef(speech);
 
   useEffect(() => { phaseRef.current = phase; });
   useEffect(() => { currentQuestionRef.current = currentQuestion; });
   useEffect(() => { sessionRef.current = session; });
-  useEffect(() => { answeredCountRef.current = answeredCount; });
+  useEffect(() => { ttsRef.current = tts; });
+  useEffect(() => { speechRef.current = speech; });
 
+  // Cleanup on unmount
   useEffect(() => () => {
+    interviewActiveRef.current = false;
     tts.stop();
     speech.stop();
     stopMedia();
     sessionStorage.removeItem("interview_session_id");
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+
+  // ---- Speak then listen: guarded async transition ----
+  const speakThenListen = useCallback(async (text: string) => {
+    if (!interviewActiveRef.current) return;
+    setAiText(text);
+    setPhase("ai_speaking");
+    await ttsRef.current.speak(text);
+    if (!interviewActiveRef.current) return;
+    setAiText("");
+    if (phaseRef.current === "ai_speaking" && interviewActiveRef.current) {
+      setPhase("listening");
+      speechRef.current.start();
+    }
+  }, []);
+
+  // ---- Submit answer to backend ----
+  const submitAnswer = useCallback(async (transcript: string) => {
+    if (!interviewActiveRef.current) return;
+    const sess = sessionRef.current;
+    const q = currentQuestionRef.current;
+    if (!sess || !q || !transcript.trim()) return;
+
+    setPhase("processing");
+
+    try {
+      const res = await answerInterviewQuestion(sess.session_id, q.id, transcript.trim());
+      if (!interviewActiveRef.current) return;
+      setAnsweredCount(res.answered_count);
+
+      if (res.completed || res.next_action === "complete" || !res.current_question) {
+        setPhase("completing");
+        const graded = await completeSkillInterview(sess.session_id);
+        if (!interviewActiveRef.current) return;
+        sessionStorage.removeItem("interview_session_id");
+        interviewActiveRef.current = false;
+        stopMedia();
+        setResult(graded);
+        setPhase("completed");
+        onCompleted?.(graded);
+        return;
+      }
+
+      const nextQ = res.current_question;
+      let spokenText = "";
+      if (res.evaluation?.follow_up_needed && res.evaluation.suggested_follow_up) {
+        spokenText = res.evaluation.suggested_follow_up;
+      } else if (nextQ) {
+        spokenText = nextQ.prompt;
+      }
+
+      setCurrentQuestion(nextQ);
+      speechRef.current.reset();
+      await speakThenListen(spokenText);
+    } catch (e) {
+      if (!interviewActiveRef.current) return;
+      const msg = e instanceof Error ? e.message : "Could not submit answer";
+      if (msg.includes("409") || msg.includes("not the current question")) {
+        setError("Session out of sync. Recovering...");
+        setSessionId(sessionRef.current?.session_id || null);
+      } else {
+        setError(msg);
+        setPhase("error");
+      }
+    }
+  }, [speakThenListen, stopMedia, onCompleted]);
+
+  // ---- Wire silence → submitAnswer ----
+  useEffect(() => {
+    speech.setOnSilence((transcript: string) => {
+      void submitAnswer(transcript);
+    });
+  }, [speech, submitAnswer]);
 
   // ---- Session recovery on browser refresh ----
   useEffect(() => {
@@ -125,7 +203,10 @@ export default function InterviewModal({ skill, onClose, onCompleted }: Props) {
         );
         if (questions[idx]) {
           setCurrentQuestion(questions[idx]);
-          setPhase("intro");
+          if (active) {
+            setPhase("intro");
+            void requestMedia();
+          }
         } else {
           const graded = await completeSkillInterview(sessionId);
           if (active) { setResult(graded); setPhase("completed"); }
@@ -138,77 +219,22 @@ export default function InterviewModal({ skill, onClose, onCompleted }: Props) {
       }
     })();
     return () => { active = false; };
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [sessionId, skill]);
 
-  // ---- Submit answer to backend ----
-  const submitAnswer = useCallback(async (transcript: string) => {
-    const sess = sessionRef.current;
-    const q = currentQuestionRef.current;
-    if (!sess || !q || !transcript.trim()) return;
-
-    setPhase("processing");
-
-    try {
-      const res = await answerInterviewQuestion(sess.session_id, q.id, transcript.trim());
-      setAnsweredCount(res.answered_count);
-
-      if (res.completed || res.next_action === "complete" || !res.current_question) {
-        setPhase("completing");
-        const graded = await completeSkillInterview(sess.session_id);
-        sessionStorage.removeItem("interview_session_id");
-        stopMedia();
-        setResult(graded);
-        setPhase("completed");
-        onCompleted?.(graded);
-        return;
-      }
-
-      const nextQ = res.current_question;
-      let spokenText = "";
-      if (res.evaluation?.follow_up_needed && res.evaluation.suggested_follow_up) {
-        spokenText = res.evaluation.suggested_follow_up;
-      } else if (nextQ) {
-        spokenText = nextQ.prompt;
-      }
-
-      setCurrentQuestion(nextQ);
-
-      setAiText(spokenText);
-      setPhase("ai_speaking");
-      await tts.speak(spokenText);
-
-      setAiText("");
-      if (phaseRef.current === "ai_speaking") {
-        setPhase("listening");
-        speech.start();
-      }
-    } catch (e) {
-      const msg = e instanceof Error ? e.message : "Could not submit answer";
-      if (msg.includes("409") || msg.includes("not the current question")) {
-        setError("Session out of sync. Recovering...");
-        setSessionId(sessionRef.current?.session_id || null);
-      } else {
-        setError(msg);
-        setPhase("error");
-      }
-    }
-  }, [tts, speech, stopMedia, onCompleted]);
-
-  // ---- Start the interview: request media + create session + AI speaks ----
+  // ---- Start the interview ----
   const beginInterview = useCallback(async () => {
-    if (startingRef.current) return;
-    startingRef.current = true;
+    if (interviewActiveRef.current) return;
+    interviewActiveRef.current = true;
     setLoading(true);
     setError(null);
 
-    try {
-      await requestMedia();
-    } catch {
-      // media failure is non-fatal; the hook sets camState/micState
-    }
+    await requestMedia();
+    if (!interviewActiveRef.current) { setLoading(false); return; }
 
     try {
       const data = await startSkillInterview(skill);
+      if (!interviewActiveRef.current) { setLoading(false); return; }
       setSession(data);
       sessionStorage.setItem("interview_session_id", data.session_id);
       setSessionId(data.session_id);
@@ -220,33 +246,25 @@ export default function InterviewModal({ skill, onClose, onCompleted }: Props) {
       if (questions.length === 0) {
         setError("No questions generated for this skill.");
         setLoading(false);
-        startingRef.current = false;
+        interviewActiveRef.current = false;
         return;
       }
 
       const firstQ = questions[0];
       setCurrentQuestion(firstQ);
+      setLoading(false);
+      speechRef.current.reset();
 
       const greeting = `Hi! I'm your INAURA AI interviewer. I've reviewed your profile and we'll focus on ${skill} today. Let's begin. ${firstQ.prompt}`;
-      setAiText(greeting);
-      setPhase("ai_speaking");
-      setLoading(false);
-
-      await tts.speak(greeting);
-
-      setAiText("");
-      if (phaseRef.current === "ai_speaking") {
-        setPhase("listening");
-        speech.start();
-      }
+      await speakThenListen(greeting);
     } catch (e) {
+      if (!interviewActiveRef.current) return;
       setError(e instanceof Error ? e.message : "Could not start the interview");
       setLoading(false);
     }
-    startingRef.current = false;
-  }, [skill, requestMedia, tts, speech]);
+  }, [skill, requestMedia, speakThenListen]);
 
-  // ---- Manual typed submit (fallback when speech recognition unsupported) ----
+  // ---- Manual typed submit (fallback) ----
   const submitTyped = useCallback(() => {
     if (typedAnswer.trim()) {
       speech.stop();
@@ -257,6 +275,7 @@ export default function InterviewModal({ skill, onClose, onCompleted }: Props) {
 
   // ---- End interview ----
   const endInterview = useCallback(async () => {
+    interviewActiveRef.current = false;
     tts.stop();
     speech.stop();
     const sess = sessionRef.current;
@@ -282,25 +301,23 @@ export default function InterviewModal({ skill, onClose, onCompleted }: Props) {
   // ---- Repeat question ----
   const repeatQuestion = useCallback(() => {
     const q = currentQuestionRef.current;
-    if (!q) return;
+    if (!q || !interviewActiveRef.current) return;
     tts.stop();
     speech.stop();
-    setAiText(q.prompt);
-    setPhase("ai_speaking");
-    void tts.speak(q.prompt).then(() => {
-      setAiText("");
-      if (phaseRef.current === "ai_speaking") {
-        setPhase("listening");
-        speech.start();
-      }
-    });
-  }, [tts, speech]);
+    speech.reset();
+    void speakThenListen(q.prompt);
+  }, [tts, speech, speakThenListen]);
 
-  // ---- Retry camera/mic ----
-  const recheckDevices = useCallback(async () => {
+  // ---- Retry devices ----
+  const recheckCamera = useCallback(async () => {
     setError(null);
-    await requestMedia();
-  }, [requestMedia]);
+    await requestCamera();
+  }, [requestCamera]);
+
+  const recheckMicrophone = useCallback(async () => {
+    setError(null);
+    await requestMicrophone();
+  }, [requestMicrophone]);
 
   const liveCaption = phase === "listening" ? speech.liveTranscript : "";
   const progress = totalQuestions > 0 ? Math.round((answeredCount / totalQuestions) * 100) : 0;
@@ -377,23 +394,21 @@ export default function InterviewModal({ skill, onClose, onCompleted }: Props) {
             </div>
           )}
 
-          {/* Device failure banners — shown inline, controls remain visible */}
           {camFailed && isActive && (
             <div className="iv__device-banner iv__device-banner--warn">
               <span>Camera unavailable</span>
-              <Button onClick={recheckDevices} variant="secondary" size="sm">Recheck camera</Button>
+              <Button onClick={recheckCamera} variant="secondary" size="sm">Recheck camera</Button>
               <span className="iv__device-banner-note">Continuing with audio only.</span>
             </div>
           )}
           {micFailed && isActive && (
             <div className="iv__device-banner iv__device-banner--warn">
               <span>Microphone unavailable</span>
-              <Button onClick={recheckDevices} variant="secondary" size="sm">Recheck microphone</Button>
+              <Button onClick={recheckMicrophone} variant="secondary" size="sm">Recheck mic</Button>
             </div>
           )}
 
           <div className="iv__call-body">
-            {/* AI panel */}
             <div className="iv__call-panel iv__call-panel--ai">
               <div className="iv__call-avatar">
                 <div className={`iv__avatar-ring ${phase === "ai_speaking" ? "iv__avatar-ring--active" : ""}`}>
@@ -411,7 +426,6 @@ export default function InterviewModal({ skill, onClose, onCompleted }: Props) {
               )}
             </div>
 
-            {/* User camera panel */}
             <div className="iv__call-panel iv__call-panel--user">
               <div className="iv__call-camera">
                 <video ref={videoRef} autoPlay muted playsInline className="iv__call-video" aria-label="Your camera preview" />
@@ -435,7 +449,6 @@ export default function InterviewModal({ skill, onClose, onCompleted }: Props) {
             </div>
           </div>
 
-          {/* Caption area — secondary to voice */}
           <div className="iv__call-caption" aria-live="polite">
             {phase === "listening" && liveCaption && (
               <span className="iv__call-caption-text">{liveCaption}</span>
@@ -451,7 +464,6 @@ export default function InterviewModal({ skill, onClose, onCompleted }: Props) {
             )}
           </div>
 
-          {/* Typed fallback — only when speech recognition is unsupported */}
           {!speech.isSupported && phase === "listening" && (
             <div className="iv__call-typed">
               <input
@@ -469,7 +481,6 @@ export default function InterviewModal({ skill, onClose, onCompleted }: Props) {
             </div>
           )}
 
-          {/* Controls — always visible during active call */}
           <footer className="iv__call-controls">
             {phase === "initializing" && (
               <div className="iv__call-completing">
@@ -480,20 +491,12 @@ export default function InterviewModal({ skill, onClose, onCompleted }: Props) {
 
             {isActive && (
               <>
-                <Button
-                  onClick={toggleMic}
-                  variant={micEnabled ? "secondary" : "accent"}
-                  size="md"
-                  aria-label={micEnabled ? "Mute microphone" : "Unmute microphone"}
-                >
+                <Button onClick={toggleMic} variant={micEnabled ? "secondary" : "accent"} size="md"
+                  aria-label={micEnabled ? "Mute microphone" : "Unmute microphone"}>
                   {micEnabled ? "🎙 Mute" : "🔇 Unmute"}
                 </Button>
-                <Button
-                  onClick={toggleCamera}
-                  variant={cameraEnabled ? "secondary" : "accent"}
-                  size="md"
-                  aria-label={cameraEnabled ? "Turn off camera" : "Turn on camera"}
-                >
+                <Button onClick={toggleCamera} variant={cameraEnabled ? "secondary" : "accent"} size="md"
+                  aria-label={cameraEnabled ? "Turn off camera" : "Turn on camera"}>
                   {cameraEnabled ? "📷 Camera" : "📷 Camera off"}
                 </Button>
                 <Button onClick={repeatQuestion} variant="secondary" size="md">↻ Repeat</Button>
@@ -521,7 +524,8 @@ export default function InterviewModal({ skill, onClose, onCompleted }: Props) {
 
             {phase === "error" && (
               <>
-                <Button onClick={recheckDevices} variant="secondary" size="md">Recheck devices</Button>
+                <Button onClick={() => void recheckCamera()} variant="secondary" size="md">Recheck camera</Button>
+                <Button onClick={() => void recheckMicrophone()} variant="secondary" size="md">Recheck mic</Button>
                 <Button onClick={() => void beginInterview()} variant="primary" size="md">Retry</Button>
                 <Button onClick={() => void endInterview()} variant="ghost" size="md">End</Button>
               </>
