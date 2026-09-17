@@ -1954,8 +1954,8 @@ async def _answer_interview_question_locked(
 
 
 # ---------------------------------------------------------------------------
-# Grading: exactly ONE NVIDIA NIM call; strict schema validation; technical and
-# communication kept separate.
+# Legacy batch grading only; the live adaptive path uses stored per-answer
+# evaluations and never reaches this NVIDIA-based compatibility grader.
 # ---------------------------------------------------------------------------
 
 def _make_interview_llm():
