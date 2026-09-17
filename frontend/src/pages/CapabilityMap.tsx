@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from "react";
+import { forwardRef, useCallback, useEffect, useRef, useState } from "react";
 import { Link } from "react-router-dom";
 import Button from "../components/ui/Button";
 import { getLatestAnalysis } from "../services/analysis";
@@ -92,271 +92,296 @@ function depthName(depth: number): string {
   return "unverified";
 }
 
-function SkillCard({
-  entry,
-  expanded,
-  onToggle,
-}: {
+interface BigSkillCardProps {
   entry: SkillCapability;
-  expanded: boolean;
-  onToggle: () => void;
-}) {
-  const pct = Math.round(entry.proficiency * 100);
-  const topAction = entry.missing_capabilities[0]?.next_actions[0];
-  const explainById = Object.fromEntries(
-    (entry.capabilities ?? [])
-      .filter((c) => c.capability_explanation)
-      .map((c) => [c.id, c.capability_explanation as CapabilityExplanation]),
-  );
-  return (
-    <div className="capmap__card">
-      <button
-        type="button"
-        className="capmap__card-head"
-        onClick={onToggle}
-        aria-expanded={expanded}
-      >
-        <span className="capmap__card-title">{entry.skill}</span>
-        <span className="capmap__bar" aria-hidden="true">
-          <span
-            className="capmap__bar-fill"
-            style={{ width: `${Math.max(0, Math.min(100, pct))}%` }}
-          />
-        </span>
-        <span className="capmap__pct">{pct}%</span>
-        <span className={`capmap__badge capmap__badge--${entry.status}`}>
-          {statusLabel(entry.status)}
-        </span>
-        <span className="capmap__chevron" aria-hidden="true">
-          {expanded ? "▾" : "▸"}
-        </span>
-      </button>
-
-      {expanded && (
-        <div className="capmap__card-body">
-          <p className="capmap__explanation">{entry.explanation}</p>
-
-          {entry.industry_expectations.length > 0 && (
-            <section className="capmap__section">
-              <h4>Industry expects</h4>
-              <ul>
-                {entry.industry_expectations.map((exp) => (
-                  <li key={exp.capability_id}>
-                    ✓ {exp.title}
-                    {exp.relevance.length > 0 && (
-                      <span className="capmap__muted">
-                        {" "}
-                        — {exp.relevance.join("; ")}
-                      </span>
-                    )}
-                  </li>
-                ))}
-              </ul>
-              {(entry.requirement.source || entry.requirement.evidence_strength) && (
-                <p className="capmap__muted">
-                  Basis: {entry.requirement.source}
-                  {entry.requirement.evidence_strength
-                    ? ` (${entry.requirement.evidence_strength} evidence)`
-                    : ""}
-                  {entry.requirement.source_url ? (
-                    <>
-                      {" · "}
-                      <a
-                        href={entry.requirement.source_url}
-                        target="_blank"
-                        rel="noreferrer"
-                      >
-                        source
-                      </a>
-                    </>
-                  ) : null}
-                </p>
-              )}
-            </section>
-          )}
-
-          {entry.capabilities.length > 0 && (
-            <section className="capmap__section">
-              <h4>What you should be able to do</h4>
-              <ul>
-                {Array.from(
-                  new Set(
-                    entry.capabilities.flatMap((c) => c.observable_abilities),
-                  ),
-                ).map((ability) => (
-                  <li key={ability}>{ability}</li>
-                ))}
-              </ul>
-            </section>
-          )}
-
-          {entry.what_inaura_knows && (
-            <section className="capmap__section">
-              <h4>What INAURA knows</h4>
-              {entry.what_inaura_knows.summary && (
-                <p className="capmap__explanation">
-                  {entry.what_inaura_knows.summary}
-                </p>
-              )}
-              {entry.what_inaura_knows.demonstrated_areas.length > 0 && (
-                <>
-                  <p className="capmap__muted">
-                    <strong>Demonstrated</strong>
-                  </p>
-                  <ul>
-                    {entry.what_inaura_knows.demonstrated_areas.map((area) => (
-                      <li key={area.capability_id}>
-                        ✓ {area.capability_title}
-                      </li>
-                    ))}
-                  </ul>
-                </>
-              )}
-              {entry.what_inaura_knows.developing_areas.length > 0 && (
-                <>
-                  <p className="capmap__muted">
-                    <strong>Developing</strong>
-                  </p>
-                  <ul>
-                    {entry.what_inaura_knows.developing_areas.map((area) => (
-                      <li key={area.capability_id}>
-                        ◐ {area.capability_title}
-                      </li>
-                    ))}
-                  </ul>
-                </>
-              )}
-              {entry.what_inaura_knows.unverified_areas.length > 0 && (
-                <>
-                  <p className="capmap__muted">
-                    <strong>Unverified</strong>
-                  </p>
-                  <ul>
-                    {entry.what_inaura_knows.unverified_areas.map((area) => (
-                      <li key={area.capability_id}>
-                        ? {area.capability_title}
-                      </li>
-                    ))}
-                  </ul>
-                </>
-              )}
-            </section>
-          )}
-
-          {entry.demonstrated_capabilities.length > 0 && (
-            <section className="capmap__section">
-              <h4>What INAURA found</h4>
-              <ul>
-                {entry.demonstrated_capabilities.map((cap) => (
-                  <li key={cap.id}>
-                    ✓ <strong>{cap.title}</strong>
-                    {cap.evidence.slice(0, 2).map((ev, i) => (
-                      <span key={i} className="capmap__muted">
-                        {" "}
-                        — {ev.provider}
-                        {ev.repository ? ` · ${ev.repository}` : ""}
-                        {ev.depth >= 3 ? ` (${depthName(ev.depth)})` : ""}
-                      </span>
-                    ))}
-                    {explainById[cap.id] && (
-                      <WhyDetails explanation={explainById[cap.id]} />
-                    )}
-                  </li>
-                ))}
-              </ul>
-            </section>
-          )}
-
-          {entry.evidence_sources.length > 0 && (
-            <section className="capmap__section">
-              <h4>Evidence</h4>
-              <ul className="capmap__evidence">
-                {entry.evidence_sources.slice(0, 6).map((ev, i) => (
-                  <li key={i}>
-                    <strong>{ev.provider || "evidence"}</strong>
-                    {ev.repository ? (
-                      <>
-                        {" → "}
-                        {ev.repository}
-                      </>
-                    ) : null}
-                    {ev.files.slice(0, 3).map((f) => (
-                      <span key={f} className="capmap__file">
-                        {" → "}
-                        {f}
-                      </span>
-                    ))}
-                    {ev.files.length > 3 ? (
-                      <span className="capmap__muted">
-                        {" "}
-                        (+{ev.files.length - 3} more)
-                      </span>
-                    ) : null}
-                    <span className="capmap__muted">
-                      {" "}
-                      · {depthName(ev.depth)} evidence
-                    </span>
-                  </li>
-                ))}
-              </ul>
-            </section>
-          )}
-
-          {entry.missing_capabilities.length > 0 && (
-            <section className="capmap__section">
-              <h4>Still develop</h4>
-              <ul>
-                {entry.missing_capabilities.map((cap: MissingCapability) => (
-                  <li key={cap.id}>
-                    ⚠ <strong>{cap.title}</strong>{" "}
-                    <span className="capmap__muted">
-                      ({statusLabel(cap.status)} · priority{" "}
-                      {Math.round(cap.priority)})
-                    </span>
-                    {explainById[cap.id] && (
-                      <WhyDetails explanation={explainById[cap.id]} />
-                    )}
-                  </li>
-                ))}
-              </ul>
-            </section>
-          )}
-
-          {topAction && (
-            <section className="capmap__section capmap__next">
-              <h4>Next action</h4>
-              <p>{topAction}</p>
-              {entry.missing_capabilities[0]?.resources.slice(0, 2).map((r) => (
-                <div key={r.url} className="capmap__muted">
-                  <a href={r.url} target="_blank" rel="noreferrer">
-                    {r.title}
-                  </a>
-                  {r.provider ? ` — ${r.provider}` : ""}
-                </div>
-              ))}
-            </section>
-          )}
-
-          {entry.status === "insufficient_industry_data" && (
-            <p className="capmap__empty">
-              INAURA does not have enough industry evidence to define
-              capabilities for this skill, so none are invented here.
-            </p>
-          )}
-        </div>
-      )}
-    </div>
-  );
+  onClose: () => void;
 }
+
+const BigSkillCard = forwardRef<HTMLDivElement, BigSkillCardProps>(
+  function BigSkillCard({ entry, onClose }, ref) {
+    const pct = Math.round(entry.proficiency * 100);
+    const topAction = entry.missing_capabilities[0]?.next_actions[0];
+    const explainById = Object.fromEntries(
+      (entry.capabilities ?? [])
+        .filter((c) => c.capability_explanation)
+        .map((c) => [c.id, c.capability_explanation as CapabilityExplanation]),
+    );
+
+    return (
+      <div
+        ref={ref}
+        className="capmap__big-card"
+        role="region"
+        aria-label={`Detailed capability card for ${entry.skill}`}
+      >
+        <div className="capmap__big-card-header">
+          <div className="capmap__big-card-title-group">
+            <div className="capmap__big-card-tag-row">
+              <span className={`capmap__badge capmap__badge--${entry.status}`}>
+                {statusLabel(entry.status)}
+              </span>
+              <span className="capmap__pct-badge">{pct}% Proficiency</span>
+            </div>
+            <h2 className="capmap__big-card-title">{entry.skill}</h2>
+          </div>
+
+          <div className="capmap__big-card-actions">
+            <div className="capmap__big-card-bar-wrap" title={`${pct}% proficiency`}>
+              <div className="capmap__bar" aria-hidden="true">
+                <span
+                  className="capmap__bar-fill"
+                  style={{ width: `${Math.max(0, Math.min(100, pct))}%` }}
+                />
+              </div>
+            </div>
+            <button
+              type="button"
+              className="capmap__big-card-close"
+              onClick={onClose}
+              aria-label="Close skill card"
+              title="Close details"
+            >
+              <span aria-hidden="true">✕</span>
+              <span className="capmap__big-card-close-text">Close</span>
+            </button>
+          </div>
+        </div>
+
+        <div className="capmap__big-card-body">
+          {entry.explanation && (
+            <div className="capmap__big-card-lead">
+              <p className="capmap__explanation">{entry.explanation}</p>
+            </div>
+          )}
+
+          <div className="capmap__big-card-grid">
+            <div className="capmap__big-card-col">
+              {entry.industry_expectations.length > 0 && (
+                <section className="capmap__section capmap__section--card">
+                  <h4>Industry expects</h4>
+                  <ul>
+                    {entry.industry_expectations.map((exp) => (
+                      <li key={exp.capability_id}>
+                        ✓ <strong>{exp.title}</strong>
+                        {exp.relevance.length > 0 && (
+                          <span className="capmap__muted">
+                            {" "}
+                            — {exp.relevance.join("; ")}
+                          </span>
+                        )}
+                      </li>
+                    ))}
+                  </ul>
+                  {(entry.requirement.source || entry.requirement.evidence_strength) && (
+                    <p className="capmap__muted capmap__source-meta">
+                      Basis: {entry.requirement.source}
+                      {entry.requirement.evidence_strength
+                        ? ` (${entry.requirement.evidence_strength} evidence)`
+                        : ""}
+                      {entry.requirement.source_url ? (
+                        <>
+                          {" · "}
+                          <a
+                            href={entry.requirement.source_url}
+                            target="_blank"
+                            rel="noreferrer"
+                          >
+                            source
+                          </a>
+                        </>
+                      ) : null}
+                    </p>
+                  )}
+                </section>
+              )}
+
+              {entry.capabilities.length > 0 && (
+                <section className="capmap__section capmap__section--card">
+                  <h4>What you should be able to do</h4>
+                  <ul>
+                    {Array.from(
+                      new Set(
+                        entry.capabilities.flatMap((c) => c.observable_abilities),
+                      ),
+                    ).map((ability) => (
+                      <li key={ability}>{ability}</li>
+                    ))}
+                  </ul>
+                </section>
+              )}
+
+              {entry.what_inaura_knows && (
+                <section className="capmap__section capmap__section--card">
+                  <h4>What INAURA knows</h4>
+                  {entry.what_inaura_knows.summary && (
+                    <p className="capmap__explanation">
+                      {entry.what_inaura_knows.summary}
+                    </p>
+                  )}
+                  {entry.what_inaura_knows.demonstrated_areas.length > 0 && (
+                    <div className="capmap__subgroup">
+                      <p className="capmap__muted capmap__subgroup-title">
+                        <strong>Demonstrated</strong>
+                      </p>
+                      <ul>
+                        {entry.what_inaura_knows.demonstrated_areas.map((area) => (
+                          <li key={area.capability_id}>
+                            ✓ {area.capability_title}
+                          </li>
+                        ))}
+                      </ul>
+                    </div>
+                  )}
+                  {entry.what_inaura_knows.developing_areas.length > 0 && (
+                    <div className="capmap__subgroup">
+                      <p className="capmap__muted capmap__subgroup-title">
+                        <strong>Developing</strong>
+                      </p>
+                      <ul>
+                        {entry.what_inaura_knows.developing_areas.map((area) => (
+                          <li key={area.capability_id}>
+                            ◐ {area.capability_title}
+                          </li>
+                        ))}
+                      </ul>
+                    </div>
+                  )}
+                  {entry.what_inaura_knows.unverified_areas.length > 0 && (
+                    <div className="capmap__subgroup">
+                      <p className="capmap__muted capmap__subgroup-title">
+                        <strong>Unverified</strong>
+                      </p>
+                      <ul>
+                        {entry.what_inaura_knows.unverified_areas.map((area) => (
+                          <li key={area.capability_id}>
+                            ? {area.capability_title}
+                          </li>
+                        ))}
+                      </ul>
+                    </div>
+                  )}
+                </section>
+              )}
+            </div>
+
+            <div className="capmap__big-card-col">
+              {entry.demonstrated_capabilities.length > 0 && (
+                <section className="capmap__section capmap__section--card">
+                  <h4>What INAURA found</h4>
+                  <ul>
+                    {entry.demonstrated_capabilities.map((cap) => (
+                      <li key={cap.id}>
+                        ✓ <strong>{cap.title}</strong>
+                        {cap.evidence.slice(0, 2).map((ev, i) => (
+                          <span key={i} className="capmap__muted">
+                            {" "}
+                            — {ev.provider}
+                            {ev.repository ? ` · ${ev.repository}` : ""}
+                            {ev.depth >= 3 ? ` (${depthName(ev.depth)})` : ""}
+                          </span>
+                        ))}
+                        {explainById[cap.id] && (
+                          <WhyDetails explanation={explainById[cap.id]} />
+                        )}
+                      </li>
+                    ))}
+                  </ul>
+                </section>
+              )}
+
+              {entry.evidence_sources.length > 0 && (
+                <section className="capmap__section capmap__section--card">
+                  <h4>Evidence</h4>
+                  <ul className="capmap__evidence">
+                    {entry.evidence_sources.slice(0, 6).map((ev, i) => (
+                      <li key={i}>
+                        <strong>{ev.provider || "evidence"}</strong>
+                        {ev.repository ? (
+                          <>
+                            {" → "}
+                            {ev.repository}
+                          </>
+                        ) : null}
+                        {ev.files.slice(0, 3).map((f) => (
+                          <span key={f} className="capmap__file">
+                            {" → "}
+                            {f}
+                          </span>
+                        ))}
+                        {ev.files.length > 3 ? (
+                          <span className="capmap__muted">
+                            {" "}
+                            (+{ev.files.length - 3} more)
+                          </span>
+                        ) : null}
+                        <span className="capmap__muted">
+                          {" "}
+                          · {depthName(ev.depth)} evidence
+                        </span>
+                      </li>
+                    ))}
+                  </ul>
+                </section>
+              )}
+
+              {entry.missing_capabilities.length > 0 && (
+                <section className="capmap__section capmap__section--card">
+                  <h4>Still develop</h4>
+                  <ul>
+                    {entry.missing_capabilities.map((cap: MissingCapability) => (
+                      <li key={cap.id}>
+                        ⚠ <strong>{cap.title}</strong>{" "}
+                        <span className="capmap__muted">
+                          ({statusLabel(cap.status)} · priority{" "}
+                          {Math.round(cap.priority)})
+                        </span>
+                        {explainById[cap.id] && (
+                          <WhyDetails explanation={explainById[cap.id]} />
+                        )}
+                      </li>
+                    ))}
+                  </ul>
+                </section>
+              )}
+
+              {topAction && (
+                <section className="capmap__section capmap__next">
+                  <h4>Next action</h4>
+                  <p>{topAction}</p>
+                  {entry.missing_capabilities[0]?.resources.slice(0, 3).map((r) => (
+                    <div key={r.url} className="capmap__next-resource">
+                      <a href={r.url} target="_blank" rel="noreferrer">
+                        {r.title}
+                      </a>
+                      {r.provider ? ` — ${r.provider}` : ""}
+                    </div>
+                  ))}
+                </section>
+              )}
+
+              {entry.status === "insufficient_industry_data" && (
+                <p className="capmap__empty">
+                  INAURA does not have enough industry evidence to define
+                  capabilities for this skill, so none are invented here.
+                </p>
+              )}
+            </div>
+          </div>
+        </div>
+      </div>
+    );
+  },
+);
 
 export default function CapabilityMap() {
   const [roleInput, setRoleInput] = useState("");
   const [role, setRole] = useState<string | null>(null);
   const [skills, setSkills] = useState<SkillCapability[]>([]);
   const [summary, setSummary] = useState<{ total_skills: number } | null>(null);
-  const [expanded, setExpanded] = useState<Record<string, boolean>>({});
+  const [selectedSkill, setSelectedSkill] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const cardRef = useRef<HTMLDivElement>(null);
 
   const load = useCallback(async (targetRole: string) => {
     const trimmed = targetRole.trim();
@@ -371,12 +396,12 @@ export default function CapabilityMap() {
       setRole(data.role);
       setSkills(data.skills);
       setSummary(data.summary);
-      const first = data.skills[0]?.skill;
-      setExpanded(first ? { [first]: true } : {});
+      setSelectedSkill(null);
     } catch (e) {
       setError(e instanceof Error ? e.message : "Failed to load capability map");
       setSkills([]);
       setSummary(null);
+      setSelectedSkill(null);
     } finally {
       setLoading(false);
     }
@@ -398,6 +423,15 @@ export default function CapabilityMap() {
       active = false;
     };
   }, [load]);
+
+  useEffect(() => {
+    if (selectedSkill && cardRef.current) {
+      cardRef.current.scrollIntoView({ behavior: "smooth", block: "nearest" });
+    }
+  }, [selectedSkill]);
+
+  const selectedEntry =
+    skills.find((item) => item.skill === selectedSkill) ?? null;
 
   return (
     <div className="results">
@@ -464,18 +498,76 @@ export default function CapabilityMap() {
           </div>
         )}
 
-        {!loading &&
-          !error &&
-          skills.map((entry) => (
-            <SkillCard
-              key={entry.skill}
-              entry={entry}
-              expanded={!!expanded[entry.skill]}
-              onToggle={() =>
-                setExpanded((prev) => ({ ...prev, [entry.skill]: !prev[entry.skill] }))
-              }
-            />
-          ))}
+        {!loading && !error && skills.length > 0 && (
+          <>
+            <div className="capmap__selector-wrap">
+              <div className="capmap__selector-header">
+                <span className="capmap__selector-label">
+                  Skills ({skills.length})
+                </span>
+                <span className="capmap__selector-hint">
+                  {selectedSkill
+                    ? "Click the active skill or close button to collapse"
+                    : "Click any skill to view full details"}
+                </span>
+              </div>
+              <div
+                className="capmap__skill-list"
+                role="tablist"
+                aria-label="Skills in capability map"
+              >
+                {skills.map((entry) => {
+                  const isSelected = selectedSkill === entry.skill;
+                  return (
+                    <button
+                      key={entry.skill}
+                      type="button"
+                      role="tab"
+                      aria-selected={isSelected}
+                      className={`capmap__skill-pill ${
+                        isSelected ? "capmap__skill-pill--active" : ""
+                      }`}
+                      onClick={() =>
+                        setSelectedSkill((prev) =>
+                          prev === entry.skill ? null : entry.skill,
+                        )
+                      }
+                    >
+                      <span className="capmap__skill-pill-name">
+                        {entry.skill}
+                      </span>
+                      <span
+                        className={`capmap__skill-pill-dot capmap__dot--${entry.status}`}
+                        title={statusLabel(entry.status)}
+                        aria-hidden="true"
+                      />
+                    </button>
+                  );
+                })}
+              </div>
+            </div>
+
+            {selectedEntry ? (
+              <BigSkillCard
+                ref={cardRef}
+                entry={selectedEntry}
+                onClose={() => setSelectedSkill(null)}
+              />
+            ) : (
+              <div className="capmap__empty-prompt">
+                <div className="capmap__empty-prompt-icon" aria-hidden="true">
+                  🗺️
+                </div>
+                <h3>Select a skill to view details</h3>
+                <p>
+                  Click any skill name above to open its capability
+                  breakdown, industry expectations, verified evidence, and next
+                  actions.
+                </p>
+              </div>
+            )}
+          </>
+        )}
 
         {!loading && !error && summary && (
           <p style={{ color: "#64748b", fontSize: "0.85rem" }}>

@@ -196,7 +196,7 @@
   background: var(--accent-soft);
   border: 1px solid var(--accent-border);
   border-radius: 10px;
-  padding: 10px 12px;
+  padding: 12px 14px;
 }
 
 .capmap__next p {
@@ -211,4 +211,331 @@
   border: 1px dashed var(--line-strong);
   border-radius: 10px;
   padding: 10px 12px;
+}
+
+/* Skill Selector Bar at top */
+.capmap__selector-wrap {
+  margin-bottom: 24px;
+  background: var(--bg);
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  padding: 16px 20px;
+  box-shadow: var(--shadow-sm);
+}
+
+.capmap__selector-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 12px;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.capmap__selector-label {
+  font-size: 0.82rem;
+  font-weight: 750;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--ink-700);
+}
+
+.capmap__selector-hint {
+  font-size: 0.82rem;
+  color: var(--muted-2);
+}
+
+.capmap__skill-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-items: center;
+}
+
+.capmap__skill-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 16px;
+  border-radius: var(--radius-full);
+  border: 1px solid var(--line);
+  background: var(--bg-subtle);
+  color: var(--ink);
+  font-size: 0.9rem;
+  font-weight: 500;
+  cursor: pointer;
+  transition: all 0.18s ease;
+  user-select: none;
+  font-family: inherit;
+}
+
+.capmap__skill-pill:hover {
+  border-color: var(--line-strong);
+  background: var(--bg-muted);
+  transform: translateY(-1px);
+}
+
+.capmap__skill-pill:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+.capmap__skill-pill--active {
+  background: var(--ink);
+  color: #ffffff;
+  border-color: var(--ink);
+  box-shadow: 0 2px 8px rgba(15, 23, 42, 0.18);
+}
+
+.capmap__skill-pill--active:hover {
+  background: var(--ink-800);
+  border-color: var(--ink-800);
+}
+
+.capmap__skill-pill-name {
+  font-weight: 600;
+}
+
+.capmap__skill-pill-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  flex-shrink: 0;
+}
+
+.capmap__dot--demonstrated {
+  background: #16a34a;
+}
+
+.capmap__dot--developing {
+  background: #d97706;
+}
+
+.capmap__dot--evidence-gap,
+.capmap__dot--skill-gap {
+  background: #dc2626;
+}
+
+.capmap__dot--industry-gap {
+  background: #7c3aed;
+}
+
+.capmap__dot--insufficient_industry_data {
+  background: #94a3b8;
+}
+
+/* Empty prompt */
+.capmap__empty-prompt {
+  background: var(--bg-subtle);
+  border: 1px dashed var(--line-strong);
+  border-radius: var(--radius-lg);
+  padding: 48px 24px;
+  text-align: center;
+  color: var(--muted);
+  margin-bottom: 24px;
+}
+
+.capmap__empty-prompt-icon {
+  font-size: 2.4rem;
+  margin-bottom: 12px;
+}
+
+.capmap__empty-prompt h3 {
+  font-size: 1.15rem;
+  color: var(--ink);
+  margin: 0 0 6px;
+  font-weight: 700;
+}
+
+.capmap__empty-prompt p {
+  font-size: 0.9rem;
+  color: var(--muted-2);
+  max-width: 480px;
+  margin: 0 auto;
+  line-height: 1.5;
+}
+
+/* Big Detail Card */
+.capmap__big-card {
+  background: var(--bg);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow);
+  margin-bottom: 24px;
+  overflow: hidden;
+  animation: capmapFadeIn 0.22s cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+@keyframes capmapFadeIn {
+  from {
+    opacity: 0;
+    transform: translateY(6px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+.capmap__big-card-header {
+  padding: 22px 26px;
+  border-bottom: 1px solid var(--line);
+  background: var(--bg-subtle);
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 20px;
+  flex-wrap: wrap;
+}
+
+.capmap__big-card-title-group {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.capmap__big-card-tag-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.capmap__pct-badge {
+  font-size: 0.76rem;
+  font-weight: 700;
+  color: var(--muted);
+  background: var(--bg);
+  padding: 3px 10px;
+  border-radius: var(--radius-full);
+  border: 1px solid var(--line);
+}
+
+.capmap__big-card-title {
+  font-size: 1.6rem;
+  font-weight: 800;
+  color: var(--ink);
+  margin: 0;
+  letter-spacing: -0.02em;
+}
+
+.capmap__big-card-actions {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  margin-left: auto;
+}
+
+.capmap__big-card-bar-wrap {
+  width: 140px;
+}
+
+.capmap__big-card-close {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 12px;
+  border-radius: var(--radius-full);
+  border: 1px solid var(--line);
+  background: var(--bg);
+  color: var(--muted);
+  cursor: pointer;
+  font-size: 0.82rem;
+  font-weight: 600;
+  font-family: inherit;
+  transition: all 0.15s ease;
+}
+
+.capmap__big-card-close:hover {
+  background: var(--bg-muted);
+  color: var(--ink);
+  border-color: var(--line-strong);
+}
+
+.capmap__big-card-close-text {
+  font-size: 0.82rem;
+}
+
+.capmap__big-card-body {
+  padding: 26px;
+  display: flex;
+  flex-direction: column;
+  gap: 22px;
+}
+
+.capmap__big-card-lead {
+  background: var(--bg-subtle);
+  border-left: 3px solid var(--accent);
+  border-radius: 0 var(--radius-sm) var(--radius-sm) 0;
+  padding: 14px 18px;
+}
+
+.capmap__big-card-lead .capmap__explanation {
+  font-size: 0.95rem;
+  line-height: 1.6;
+  color: var(--ink-700);
+}
+
+.capmap__big-card-grid {
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: 20px;
+}
+
+@media (min-width: 840px) {
+  .capmap__big-card-grid {
+    grid-template-columns: 1fr 1fr;
+  }
+}
+
+.capmap__big-card-col {
+  display: flex;
+  flex-direction: column;
+  gap: 20px;
+}
+
+.capmap__section--card {
+  background: var(--bg-subtle);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+  padding: 18px 20px;
+}
+
+.capmap__section--card h4 {
+  margin: 0 0 10px;
+  font-size: 0.8rem;
+  font-weight: 750;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--muted-2);
+}
+
+.capmap__source-meta {
+  margin-top: 10px;
+  padding-top: 8px;
+  border-top: 1px dashed var(--line);
+}
+
+.capmap__source-meta a {
+  color: var(--accent);
+  text-decoration: underline;
+}
+
+.capmap__subgroup {
+  margin-top: 10px;
+}
+
+.capmap__subgroup-title {
+  margin: 4px 0 2px;
+}
+
+.capmap__next-resource {
+  margin-top: 6px;
+  font-size: 0.85rem;
+}
+
+.capmap__next-resource a {
+  color: var(--accent);
+  font-weight: 600;
+  text-decoration: underline;
 }
