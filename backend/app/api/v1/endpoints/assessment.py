@@ -154,7 +154,7 @@ async def start_skill_interview(
     payload: StartInterviewRequest, current_user: CurrentUser = Depends(get_current_user)
 ):
     """Create a skill-specific interview session with its adaptive plan."""
-    return interview_service.start_interview_session(
+    return await interview_service.start_interview_session(
         user_id=current_user.id,
         skill=payload.skill,
     )

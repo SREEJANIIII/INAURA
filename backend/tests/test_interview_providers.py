@@ -1,4 +1,4 @@
-"""Provider resilience: OpenRouter request, deterministic recovery.
+"""Provider resilience: NVIDIA NIM request, deterministic recovery.
 
 All provider I/O is injected fakes — no SDK imports, no network, no keys.
 Covers: success, retry, fallback, timeouts, auth short-circuit, malformed
@@ -35,6 +35,8 @@ class ProviderError(Exception):
 
 def _settings(openrouter_key="or-key"):
     s = MagicMock()
+    s.nvidia_api_key = openrouter_key
+    s.nvidia_model = "nvidia/nemotron-3-nano-omni-30b-a3b-reasoning"
     s.openrouter_api_key = openrouter_key
     s.openrouter_primary_model = "deepseek/deepseek-v3.2"
     s.openrouter_fallback_models = "google/gemini-2.5-flash,meta-llama/llama-3.3-70b-instruct"
@@ -65,13 +67,13 @@ def _run_chain(script, openrouter_key="or-key"):
     return result, calls
 
 
-def test_live_provider_chain_is_openrouter_only():
+def test_live_provider_chain_is_nvidia_only():
     settings = _settings()
-    with patch("app.services.assessment.interview_providers.make_openrouter_invoker",
-               return_value=(PROVIDER_OPENROUTER, object())) as make_openrouter:
+    with patch("app.services.assessment.interview_providers.make_nvidia_invoker",
+               return_value=("nvidia", object())) as make_nvidia:
         chain = provider_chain(settings)
-    assert [name for name, _ in chain] == [PROVIDER_OPENROUTER]
-    make_openrouter.assert_called_once_with(settings)
+    assert [name for name, _ in chain] == ["nvidia"]
+    make_nvidia.assert_called_once_with(settings)
 
 
 def test_openrouter_model_order_is_configured_for_one_request():
@@ -359,7 +361,7 @@ def test_recovery_evaluation_preserves_budget_and_plan():
     assert res["recovery"] is True
     assert res["provider_used"] == PROVIDER_DETERMINISTIC
     assert res["answered_count"] == 0  # unscored: budget preserved like pending
-    assert res["current_question"]["prompt"] == "What would you inspect first if this implementation suddenly became much slower in production?"
+    assert res["current_question"]["prompt"] == "What is logging?"
     assert "A substantive answer here" not in res["current_question"]["prompt"]
     assert res["note"] and "NVIDIA" not in res["note"] and "Traceback" not in res["note"]
 

@@ -641,11 +641,78 @@ def _snapshot_assessments(user_id: str, role: str) -> Tuple[List[dict], Dict[str
     return assessments, req_map, projects, evidence
 
 
-def start_session(user_id: str, target_role: Optional[str], question_count: int = 6) -> dict:
+MOCK_PLAN_SYSTEM = (
+    "You are a professional technical interviewer. Create an original interview "
+    "plan from the supplied evidence context. Do not use a fixed question bank, "
+    "generic filler, or repeated question patterns. Every question must be "
+    "specific to the supplied skills, projects, or evidence. Return JSON only "
+    "with a questions array; each item must contain question, question_type, "
+    "and target_skill."
+)
+
+
+async def generate_mock_plan(
+    ranked: List[dict],
+    projects: List[dict],
+    evidence: List[dict],
+    question_count: int,
+) -> List[dict]:
+    """Generate the live mock plan; never expose the deterministic templates."""
+    llm = _make_llm()
+    count = max(5, min(8, int(question_count or 6)))
+    context = {
+        "skills": [
+            {k: r.get(k) for k in ("skill", "priority", "gap", "confidence", "proficiency")}
+            for r in ranked[:6]
+        ],
+        "projects": projects[:8],
+        "evidence_types": sorted({str(e.get("evidence_type") or "") for e in evidence if isinstance(e, dict)}),
+        "question_count": count,
+    }
+    try:
+        raw = await llm.ainvoke([
+            {"role": "system", "content": MOCK_PLAN_SYSTEM},
+            {"role": "user", "content": json.dumps(context, default=str)},
+        ])
+        text = str(getattr(raw, "content", raw) or "")
+        blob = _extract_json_object(text)
+        data = json.loads(blob) if blob else {}
+        generated = data.get("questions") if isinstance(data, dict) else None
+        if not isinstance(generated, list) or len(generated) < count:
+            raise ValueError("AI returned too few interview questions")
+        rows = []
+        for index, item in enumerate(generated[:count], start=1):
+            question = str(item.get("question") or "").strip()
+            if len(question) < 20:
+                raise ValueError("AI returned an invalid interview question")
+            rows.append({
+                "id": f"q{index}",
+                "sequence": index,
+                "question": question[:800],
+                "question_type": str(item.get("question_type") or "technical")[:40],
+                "target_skill": str(item.get("target_skill") or "")[:120],
+                "source_evidence": "",
+                "priority": 0.0,
+                "interview_relevance": 0.0,
+                "is_follow_up": False,
+                "parent_question_id": None,
+            })
+        return rows
+    except HTTPException:
+        raise
+    except Exception as exc:
+        logger.warning("mock interview plan generation failed: %s", exc)
+        raise HTTPException(
+            status_code=503,
+            detail="AI interview question generation is unavailable. No predefined questions were used.",
+        ) from exc
+
+
+async def start_session(user_id: str, target_role: Optional[str], question_count: int = 6) -> dict:
     role = _resolve_role(user_id, target_role)
     assessments, req_map, projects, evidence = _snapshot_assessments(user_id, role)
     ranked = rank_skills_for_interview(assessments, req_map, limit=6)
-    plan = build_mock_plan(ranked, projects, evidence, question_count)
+    plan = await generate_mock_plan(ranked, projects, evidence, question_count)
     # Annotate priority / interview_relevance + source evidence onto plan
     rank_by_skill = {r["skill"].lower(): r for r in ranked}
     for q in plan:

@@ -51,12 +51,13 @@ INTERVIEW_VERSION = "interview-v2"
 
 INTERVIEW_RELIABILITY = reliability(ASSESSMENT_SOURCE)
 
-# One interview asks this many main questions (each with follow-ups).
-INTERVIEW_QUESTION_COUNT = 4
-# Maximum adaptive follow-ups allowed per session.
-INTERVIEW_MAX_FOLLOW_UPS = 4
-# Total question budget (base + follow-ups).
-INTERVIEW_TOTAL_BUDGET = 8
+# Question bounds are guardrails, not a predefined question plan.
+MIN_INTERVIEW_QUESTIONS = 4
+MAX_INTERVIEW_QUESTIONS = 8
+INTERVIEW_TOTAL_BUDGET = MAX_INTERVIEW_QUESTIONS  # compatibility alias for callers/tests
+# Legacy follow-up cap is retained as a generous safety ceiling; selection is
+# driven by the latest answer, not by this number.
+INTERVIEW_MAX_FOLLOW_UPS = MAX_INTERVIEW_QUESTIONS
 # Displayed estimate; the interview is self-paced within the TTL.
 INTERVIEW_ESTIMATED_MINUTES = 10
 INTERVIEW_TTL_MINUTES = 120
@@ -277,6 +278,65 @@ def build_interview_plan(
     knowledge_score: Optional[float] = None,
     practical_score: Optional[float] = None,
     projects: Optional[List[Dict[str, Any]]] = None,
+    initial_prompt: Optional[str] = None,
+) -> Dict[str, Any]:
+    """Build interview metadata and one personalized opening question.
+
+    Later questions are created only after an answer is evaluated. The
+    competency list is context/coverage metadata, never a question script.
+    """
+    canonical = normalize_skill(skill or "") or (skill or "").strip()
+    competencies = competencies_for_skill(canonical)
+    related: List[str] = []
+    for project in projects or []:
+        if not isinstance(project, dict):
+            continue
+        name = str(project.get("name") or "").strip()
+        blob = " ".join([
+            name,
+            str(project.get("description") or ""),
+            " ".join(str(t) for t in (project.get("technologies") or []) if t),
+        ])
+        if name and _mention(blob, canonical):
+            related.append(name[:120])
+    related = related[:3]
+    focus: List[str] = []
+    if _band(knowledge_score) == "weak":
+        focus.append("fundamentals")
+    if _band(practical_score) == "weak":
+        focus.append("practical_reasoning")
+    deep_mode = _band(knowledge_score) == "strong" and _band(practical_score) == "strong"
+    if not focus:
+        focus.append("deep_reasoning" if deep_mode else "applied_understanding")
+    opening = initial_prompt or (
+        f"Walk me through how you used {canonical} in {related[0]}. What did you personally implement?"
+        if related else
+        f"Walk me through a recent implementation where you used {canonical}. What did you build and what decisions did you make?"
+    )
+    return {
+        "skill": canonical,
+        "version": INTERVIEW_VERSION,
+        "competencies": competencies,
+        "focus_areas": focus,
+        "deep_mode": deep_mode,
+        "related_projects": related,
+        "estimated_minutes": INTERVIEW_ESTIMATED_MINUTES,
+        "questions": [{
+            "id": "q1",
+            "competency": competencies[0]["id"],
+            "prompt": opening,
+            "follow_ups": [],
+            "_is_initial": True,
+        }],
+    }
+
+
+def _build_legacy_fixed_plan(
+    skill: str,
+    evidence_summary: Optional[Dict[str, Any]] = None,
+    knowledge_score: Optional[float] = None,
+    practical_score: Optional[float] = None,
+    projects: Optional[List[Dict[str, Any]]] = None,
 ) -> Dict[str, Any]:
     """
     Build an evidence-adaptive, competency-anchored interview plan (pure).
@@ -407,7 +467,7 @@ def build_interview_plan(
         "deep_mode": deep_mode,
         "related_projects": related,
         "estimated_minutes": INTERVIEW_ESTIMATED_MINUTES,
-        "questions": questions[:INTERVIEW_QUESTION_COUNT],
+        "questions": questions,
     }
 
 
@@ -568,6 +628,7 @@ def parse_answer_evaluation(raw_text: str, question_id: str) -> Dict[str, Any]:
         "next_question_reason": str(data.get("next_question_reason") or "")[:300],
         "target_competency": str(data.get("target_competency") or "")[:80],
         "question_type": question_type,
+        "interview_sufficient": bool(data.get("interview_sufficient", False)),
         "demonstrated": _str_list(data.get("demonstrated")),
         "missing": _str_list(data.get("missing")),
         "misconceptions": _str_list(data.get("misconceptions"), limit=3),
@@ -601,7 +662,7 @@ EVAL_SYSTEM_PROMPT = (
     "and your evaluation of it — never a generic question from a fixed list when "
     "answer-specific information is available. Identify the strongest claim, gap, "
     "misconception, decision, or contradiction in the latest answer before considering "
-    "the planned question list. Priority order:\n"
+    "the untested competency list. Priority order:\n"
     "1. A critical misunderstanding revealed in the current answer -> clarify/probe it.\n"
     "2. A specific claim in the current answer that should be verified -> verify it.\n"
     "3. An important concept missing from the current answer -> probe it.\n"
@@ -634,6 +695,7 @@ EVAL_SYSTEM_PROMPT = (
     '  "next_question_reason": "one sentence: why this question now",\n'
     '  "target_competency": "competency id from the list, or empty string",\n'
     '  "question_type": "probe|deepen|verify|scenario|new_competency|clarify",\n'
+    '  "interview_sufficient": true_or_false,\n'
     '  "demonstrated": ["concepts clearly shown, max 5"],\n'
     '  "missing": ["important concepts absent, max 5"],\n'
     '  "misconceptions": ["suspected misunderstandings, max 3"]\n'
@@ -875,38 +937,24 @@ def decide_next_action(
     questions_answered: int,
     has_valid_adaptive_question: bool = False,
 ) -> str:
-    """Adaptive policy: follow_up | next | complete.
-
-    Follow up when the evaluator requests it, the answer shows a real gap,
-    and budget remains. Otherwise advance to the next planned question or
-    complete the interview.
-    """
-    if questions_answered >= INTERVIEW_TOTAL_BUDGET:
+    """Choose continue/complete using evidence sufficiency and hard bounds."""
+    if questions_answered >= MAX_INTERVIEW_QUESTIONS:
         return "complete"
-
-    if evaluation and (evaluation.get("follow_up_needed") or has_valid_adaptive_question):
-        weak = (
-            evaluation.get("technical_correctness", 1) < 0.50
-            or evaluation.get("depth", 1) < 0.45
-            or evaluation.get("contradiction", 0) > 0.55
-        )
-        confident = evaluation.get("confidence", 0) >= 0.40
-        has_question = bool(
-            str(evaluation.get("suggested_follow_up") or "").strip()
-            or has_valid_adaptive_question
-        )
-        if (
-            (weak or has_valid_adaptive_question)
-            and confident
-            and has_question
-            and follow_ups_used < INTERVIEW_MAX_FOLLOW_UPS
-            and questions_answered < INTERVIEW_TOTAL_BUDGET
+    if questions_answered < MIN_INTERVIEW_QUESTIONS:
+        if evaluation and (
+            has_valid_adaptive_question
+            or (
+                evaluation.get("follow_up_needed")
+                and str(evaluation.get("suggested_follow_up") or "").strip()
+                and float(evaluation.get("confidence") or 0) >= 0.40
+            )
         ):
             return "follow_up"
-
-    if current_index >= total_planned - 1:
+        return "next"
+    if evaluation and evaluation.get("interview_sufficient") is True:
         return "complete"
-
+    if has_valid_adaptive_question:
+        return "follow_up"
     return "next"
 
 
@@ -976,19 +1024,8 @@ async def generate_follow_up_question(
                 return fu[:600]
     except Exception:
         logger.debug("Follow-up generation failed, using fallback")
-    # Deterministic fallback: never interpolate or quote the raw answer.
-    planned_follow_ups = [str(q).strip() for q in (question.get("follow_ups") or []) if str(q).strip()]
-    if planned_follow_ups:
-        return planned_follow_ups[0][:600]
-    competency = str(question.get("competency") or "").lower()
-    skill = str(question.get("skill") or "").lower()
-    if "sql" in skill or "database" in competency:
-        return "Which part of this query would you inspect first if the dataset grew to millions of rows?"
-    if "python" in skill:
-        return "What would you inspect first if this implementation suddenly became much slower in production?"
-    if "rest" in competency or "api" in competency:
-        return "What happens if the API receives the same request twice, and how would you make that operation safe?"
-    return "What concrete implementation detail or failure mode would you verify next?"
+    # Never substitute a predefined question when generation is unavailable.
+    return None
 
 
 # ---------------------------------------------------------------------------
@@ -1390,8 +1427,52 @@ def _skill_id_for(c, canonical: str) -> Optional[str]:
     return None
 
 
-def start_interview_session(user_id: str, skill: str) -> dict:
-    """Create an interview session with its deterministic, evidence-adaptive plan."""
+INITIAL_QUESTION_SYSTEM_PROMPT = (
+    "You are a professional technical interviewer. Generate one original, "
+    "answerable opening question for a live interview. Ground it in the "
+    "skill and evidence context supplied by the application. Do not use a "
+    "fixed question pattern, generic textbook wording, or a question bank. "
+    "Return JSON only: {\"question\": \"...\"}."
+)
+
+
+async def generate_initial_question(
+    skill: str,
+    competencies: List[Dict[str, str]],
+    context: str,
+) -> str:
+    """Generate the first question at runtime; never fall back to a template."""
+    llm = _make_interview_llm()
+    prompt = (
+        f"Skill: {skill}\n"
+        f"Competencies: {', '.join(c['label'] for c in competencies[:3])}\n"
+        f"Evidence context: {context[:1800]}"
+    )
+    try:
+        if hasattr(llm, "ainvoke"):
+            raw = await llm.ainvoke([
+                {"role": "system", "content": INITIAL_QUESTION_SYSTEM_PROMPT},
+                {"role": "user", "content": prompt},
+            ])
+            text = str(getattr(raw, "content", raw) or "")
+        else:
+            raw = llm.invoke(prompt)
+            text = str(getattr(raw, "content", raw) or "")
+        blob = _extract_json_object(text)
+        question = str((json.loads(blob) if blob else {}).get("question") or "").strip()
+        if len(question) < ADAPTIVE_MIN_QUESTION_CHARS or not question.endswith("?"):
+            raise ValueError("invalid generated opening question")
+        return question[:600]
+    except Exception as exc:
+        logger.warning("initial interview question generation failed: %s", exc)
+        raise HTTPException(
+            status_code=503,
+            detail="AI interview question generation is unavailable. No predefined question was used.",
+        ) from exc
+
+
+async def start_interview_session(user_id: str, skill: str) -> dict:
+    """Create an interview session with a runtime-generated opening question."""
     canonical = normalize_skill(skill) or ""
     if not canonical:
         raise HTTPException(status_code=400, detail=f"Unknown skill '{skill}'")
@@ -1399,12 +1480,16 @@ def start_interview_session(user_id: str, skill: str) -> dict:
     knowledge_score = _effective_score("assessment_attempts", user_id, canonical)
     practical_score = _effective_score("assessment_practical_attempts", user_id, canonical)
     projects = _related_projects(user_id, canonical)
+    competencies = competencies_for_skill(canonical)
+    evidence_context = prior_summary_text(build_prior_snapshot(user_id, canonical), canonical)
+    initial_prompt = await generate_initial_question(canonical, competencies, evidence_context)
 
     plan = build_interview_plan(
         canonical,
         knowledge_score=knowledge_score,
         practical_score=practical_score,
         projects=[{"name": p.get("name"), "description": p.get("description"), "technologies": p.get("technologies")} for p in projects],
+        initial_prompt=initial_prompt,
     )
     problems = validate_plan(plan)
     if problems:
@@ -1621,6 +1706,21 @@ async def _answer_interview_question_locked(
         })
         stays_on_question = conversation_intent in {"interviewer_clarification", "candidate_question"}
         next_index = current_index if stays_on_question else current_index + 1
+        skipped_question = None
+        if conversation_intent == "skip_question" and len(questions) < MAX_INTERVIEW_QUESTIONS:
+            skipped_question = {
+                "id": f"{question_id}_skip_probe_{len(questions)}",
+                "competency": target_q.get("competency", ""),
+                "prompt": await generate_follow_up_question(
+                    {"skill": s.get("skill_name", ""), "competency": target_q.get("competency", "")},
+                    "", {}, allow_llm=False,
+                ),
+                "follow_ups": [],
+                "_is_adaptive": True,
+                "_adaptive_type": "probe",
+                "_parent_question_id": question_id,
+            }
+            questions.insert(current_index + 1, skipped_question)
         ending = conversation_intent == "end_interview" or next_index >= len(questions)
         update: Dict[str, Any] = {
             "transcript": existing_transcript,
@@ -1629,6 +1729,8 @@ async def _answer_interview_question_locked(
         if ending:
             now = datetime.now(timezone.utc).isoformat()
             update.update({"status": "completed", "validity": "low_confidence", "completed_at": now})
+        elif skipped_question is not None:
+            update["plan"] = plan
         response = {
             "session_id": session_id,
             "question_id": question_id,
@@ -1784,7 +1886,7 @@ async def _answer_interview_question_locked(
         evaluation and validate_next_question(evaluation, competencies, prior_prompts, text)
     )
     action = decide_next_action(
-        evaluation, current_index, len(questions), follow_ups_used, answered_count + 1,
+        evaluation, current_index, len(questions), follow_ups_used, answered_count,
         has_valid_adaptive_question=has_valid_adaptive,
     )
     adaptive_validation_reason = next_question_validation_reason(evaluation, prior_prompts, text)
@@ -1803,48 +1905,29 @@ async def _answer_interview_question_locked(
         if adaptive is not None:
             follow_up_question = adaptive
             is_adaptive = True
-    if follow_up_question is None and action == "follow_up" and evaluation:
-        fu_text = await generate_follow_up_question(
-            eval_input, text, evaluation, _llm=_llm, allow_llm=False)
-        if fu_text:
-            follow_up_question = {
-                "id": f"{question_id}_followup_{len(existing_evals)}",
-                "competency": f"{target_q.get('competency', '')}_followup",
-                "prompt": fu_text,
-                "follow_ups": [],
-                "_is_follow_up": True,
-                "_parent_question_id": question_id,
-            }
-            # Insert follow-up right after the current question (splice, not append)
-            questions.insert(current_index + 1, follow_up_question)
     if is_adaptive and follow_up_question is not None:
         # Adaptive splice (same position rule as legacy follow-ups).
         questions.insert(current_index + 1, follow_up_question)
 
-    # A successful provider response with a missing/rejected next_question is
-    # still an unusable adaptive decision. Keep the live path answer-grounded
-    # with a deterministic probe; never call a second LLM or silently expose
-    # the unrelated planned question in this case.
+    # A model-supplied suggested follow-up is still answer-derived, so it may
+    # be used without making a second provider call. No canned replacement is
+    # created when the model supplied nothing usable.
     if (
         follow_up_question is None
-        and action == "next"
+        and action != "complete"
         and evaluation
-        and adaptive_validation_reason != "accepted"
-        and current_index < len(questions) - 1
-        and follow_ups_used < INTERVIEW_MAX_FOLLOW_UPS
+        and len(questions) < MAX_INTERVIEW_QUESTIONS
     ):
-        deterministic_eval = dict(evaluation)
-        deterministic_eval["suggested_follow_up"] = ""
-        fallback_text = await generate_follow_up_question(
-            eval_input, text, deterministic_eval, allow_llm=False)
-        if fallback_text:
+        suggested_text = await generate_follow_up_question(
+            eval_input, text, evaluation, allow_llm=False)
+        if suggested_text:
             follow_up_question = {
                 "id": f"{question_id}_adaptive_fallback_{len(existing_evals)}",
                 "competency": target_q.get("competency", ""),
-                "prompt": fallback_text,
+                "prompt": suggested_text,
                 "follow_ups": [],
                 "_is_adaptive": True,
-                "_adaptive_reason": adaptive_validation_reason,
+                "_adaptive_reason": "model_suggested_follow_up",
                 "_adaptive_type": "probe",
                 "_parent_question_id": question_id,
             }
@@ -1967,13 +2050,18 @@ async def _answer_interview_question_locked(
 # ---------------------------------------------------------------------------
 
 def _make_interview_llm():
-    """Return a local-LLM wrapper for batch grading / legacy follow-up path.
+    """Return the shared NVIDIA NIM client for interview question generation.
 
     The original NVIDIA implementation is preserved below as comments.
     This wrapper posts to LOCAL_LLM_URL (default http://localhost:1234/api/v1/chat)
     via httpx and exposes the same .invoke() / .ainvoke() surface used by
     grade_interview_transcript and generate_follow_up_question.
     """
+    from ..mock_interview_service import _make_llm
+
+    return _make_llm()
+
+    # Legacy local-LLM wrapper retained below for rollback reference.
     from ...core.config import get_settings
     import httpx
     import json as _json

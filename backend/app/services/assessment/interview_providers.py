@@ -1,13 +1,13 @@
-"""Local LLM primary for interview reasoning/evaluation (http://localhost:1234/v1/chat/completions, legacy /api/v1/chat auto-adapted).
+"""NVIDIA NIM provider for interview reasoning/evaluation.
 
 The interview service talks to providers only through this module::
 
     USER ANSWER -> run_evaluation_chain() -> raw JSON text (+observability)
         -> interview.py parses/validates -> deterministic recovery if needed
 
-Current mode (per user request):
-  * LOCAL LLM at http://localhost:1234/api/v1/chat is the ONLY active provider.
-  * GEMINI and GROQ code is preserved below but COMMENTED OUT — not executed.
+Current mode:
+    * NVIDIA NIM is the ONLY active provider for interview reasoning.
+    * Other provider adapters are preserved for tests and rollback.
   * RAG / embedding pipeline (Gemini embeddings) is intentionally untouched.
   * NVIDIA remains TTS-only and Groq remains STT-only.
   * If OpenRouter fails or is unreachable: caller falls back to
@@ -42,7 +42,7 @@ logger = logging.getLogger("inaura.interview_llm")
 PROVIDER_GEMINI = "gemini"
 PROVIDER_NVIDIA = "nvidia"  # retained for non-live callers/tests; never in the live chain
 PROVIDER_GROQ = "groq"
-PROVIDER_LOCAL = "local_llm"
+PROVIDER_LOCAL = "local_llm"  # retained for compatibility with older diagnostics
 PROVIDER_DETERMINISTIC = "deterministic"
 
 TRANSIENT_CLASSES = frozenset({
@@ -569,6 +569,30 @@ def make_groq_invoker(settings: Any) -> Tuple[str, InvokeFn]:
 PROVIDER_OPENROUTER = "openrouter"
 
 
+def make_nvidia_invoker(settings: Any) -> Tuple[str, InvokeFn]:
+    """Build the server-side NVIDIA NIM interview invoker."""
+    try:
+        from langchain_nvidia_ai_endpoints import ChatNVIDIA
+    except ImportError as e:
+        raise HTTPException(status_code=503, detail=f"NVIDIA provider not installed: {e}")
+
+    api_key = _require_key(getattr(settings, "nvidia_api_key", None), "NVIDIA_API_KEY", PROVIDER_NVIDIA)
+    model = (getattr(settings, "nvidia_model", None) or "nvidia/nemotron-3-nano-omni-30b-a3b-reasoning").strip()
+
+    async def invoke(messages: List[Dict[str, str]]) -> str:
+        llm = ChatNVIDIA(
+            model=model,
+            api_key=api_key,
+            temperature=0.2,
+            max_completion_tokens=4096,
+        )
+        raw = await llm.ainvoke(messages)
+        return str(getattr(raw, "content", raw) or "")
+
+    invoke.__name__ = "nvidia_invoke"
+    return PROVIDER_NVIDIA, invoke
+
+
 def make_openrouter_invoker(settings: Any) -> Tuple[str, InvokeFn]:
     """Build one OpenRouter request with server-side ordered model fallback."""
     import httpx
@@ -622,10 +646,10 @@ def make_openrouter_invoker(settings: Any) -> Tuple[str, InvokeFn]:
 
 
 def provider_chain(settings: Any) -> List[Tuple[str, InvokeFn]]:
-    """Live reasoning uses one OpenRouter request with server-side fallbacks."""
+    """Live interview reasoning uses NVIDIA NIM only."""
     chain: List[Tuple[str, InvokeFn]] = []
     try:
-        chain.append(make_openrouter_invoker(settings))
+        chain.append(make_nvidia_invoker(settings))
     except HTTPException:
         pass
     return chain
@@ -660,8 +684,8 @@ async def run_evaluation_chain(
     if not chain:
         raise HTTPException(
             status_code=503,
-            detail="AI interview grading is not configured — set OPENROUTER_API_KEY "
-                   "and configure OPENROUTER_PRIMARY_MODEL / OPENROUTER_FALLBACK_MODELS. "
+                 detail="AI interview grading is not configured — set NVIDIA_API_KEY "
+                     "and configure NVIDIA_MODEL. "
                    "Your answers are saved and will be graded once grading is configured.",
         )
     attempts: List[ProviderAttempt] = []
