@@ -650,8 +650,11 @@ def test_follow_up_inserted_at_correct_position():
     assert nq.get("id") == "q0_followup_1"
     assert nq.get("competency") == "c1_followup"
     assert resp.get("action") == "FOLLOW_UP"
-    assert resp.get("spoken_response") is not None
-    assert "Why did you do that?" in resp["spoken_response"]
+    # Ack and question are separate fields: ack carries no question text,
+    # the question travels in current_question (frontend voices each once).
+    assert resp.get("spoken_response") == "I see."
+    assert "Why did you do that?" in nq.get("prompt", "")
+    assert "Why did you do that?" not in (resp.get("spoken_response") or "")
     # The persisted plan should have the follow-up inserted between q0 and q1
     update_call = mock_update.update.call_args
     saved_plan = update_call[0][0].get("plan")

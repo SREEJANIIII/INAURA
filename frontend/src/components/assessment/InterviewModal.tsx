@@ -10,6 +10,7 @@ import {
 import { useMediaDevices } from "../../hooks/useMediaDevices";
 import { useSpeechRecognition } from "../../hooks/useSpeechRecognition";
 import { useTextToSpeech } from "../../hooks/useTextToSpeech";
+import { withTimeout } from "../../services/tts";
 import "./InterviewModal.css";
 
 type Props = {
@@ -27,6 +28,7 @@ type Phase =
   | "completing"
   | "completed"
   | "device_error"
+  | "recoverable_error"
   | "error";
 
 type Question = {
@@ -37,6 +39,9 @@ type Question = {
 };
 
 const SILENCE_TIMEOUT_MS = 2800;
+/** Watchdogs so no phase can wedge forever (backend budgets are shorter). */
+const SPEAK_TIMEOUT_MS = 120000;
+const SUBMIT_TIMEOUT_MS = 150000;
 
 export default function InterviewModal({ skill, onClose, onCompleted }: Props) {
   const [phase, setPhase] = useState<Phase>("intro");
@@ -78,6 +83,13 @@ export default function InterviewModal({ skill, onClose, onCompleted }: Props) {
   const isSubmittingRef = useRef(false);
   const ttsRef = useRef(tts);
   const speechRef = useRef(speech);
+  // Speech-turn generation: stale async continuations (older question's
+  // audio/evaluation) can never advance a newer turn. Bumped on every new
+  // speak flow and on explicit stops/repeats/retries.
+  const turnRef = useRef(0);
+  // Last submitted transcript, so a recoverable failure can retry the SAME
+  // answer without asking the candidate to repeat themselves.
+  const lastTranscriptRef = useRef("");
 
   useEffect(() => { phaseRef.current = phase; });
   useEffect(() => { currentQuestionRef.current = currentQuestion; });
@@ -102,37 +114,46 @@ export default function InterviewModal({ skill, onClose, onCompleted }: Props) {
     }
   }, [phase, camState, setVideoRef, videoRef]);
 
+  // ---- Speak one utterance with a watchdog: true = spoken, false = voice
+  // failed gracefully (fallback UI), null = aborted (interview ended or a
+  // newer turn superseded this one). Never hangs: the timeout forces a path.
+  const speakOnce = useCallback(async (text: string): Promise<boolean | null> => {
+    if (!interviewActiveRef.current) return null;
+    try {
+      await withTimeout(ttsRef.current.speak(text), SPEAK_TIMEOUT_MS);
+      return interviewActiveRef.current ? true : null;
+    } catch {
+      if (!interviewActiveRef.current) return null;
+      setError("Voice playback is unavailable. You can continue by speaking or typing your answer.");
+      return false;
+    }
+  }, []);
+
   // ---- Speak then listen: guarded async transition ----
   // Voice is strictly an enhancement: if TTS fails, the session, the current
   // question, and speech recognition are preserved and the candidate answers
   // from the on-screen question text. TTS never consumes evaluation traffic.
   const speakThenListen = useCallback(async (text: string) => {
     if (!interviewActiveRef.current) return;
+    const turn = ++turnRef.current;
     speechRef.current.stop();
     setAiText(text);
     setPhase("ai_speaking");
-    let voiceOk = true;
-    try {
-      await ttsRef.current.speak(text);
-    } catch {
-      // Preserve the session and continue with the existing speech /
-      // typed-answer flow instead of invalidating the turn.
-      voiceOk = false;
-      setError("Voice playback is unavailable. You can continue by speaking or typing your answer.");
-    }
+    const voice = await speakOnce(text);
+    if (voice === null || turnRef.current !== turn) return;
     if (!interviewActiveRef.current) return;
     // On voice failure the question text stays on screen so it can still be
     // read and answered; on success it is cleared as before.
-    if (voiceOk) {
+    if (voice) {
       setAiText("");
     }
-    if (phaseRef.current === "ai_speaking" && interviewActiveRef.current) {
+    if (phaseRef.current === "ai_speaking" && interviewActiveRef.current && turnRef.current === turn) {
       speechRef.current.reset();
       isSubmittingRef.current = false;
       setPhase("listening");
       speechRef.current.start();
     }
-  }, []);
+  }, [speakOnce]);
 
   // ---- Submit answer to backend ----
   const submitAnswer = useCallback(async (transcript: string) => {
@@ -156,9 +177,13 @@ export default function InterviewModal({ skill, onClose, onCompleted }: Props) {
 
     speechRef.current.stop();
     setPhase("processing");
+    lastTranscriptRef.current = trimmed;
 
     try {
-      const res = await answerInterviewQuestion(sess.session_id, q.id, trimmed);
+      const res = await withTimeout(
+        answerInterviewQuestion(sess.session_id, q.id, trimmed),
+        SUBMIT_TIMEOUT_MS
+      );
       if (!interviewActiveRef.current) return;
       setAnsweredCount(res.answered_count);
 
@@ -168,7 +193,7 @@ export default function InterviewModal({ skill, onClose, onCompleted }: Props) {
           "Thank you. That concludes all questions for this interview. I am finalizing your evaluation now.";
         setPhase("ai_speaking");
         try {
-          await ttsRef.current.speak(closing);
+          await withTimeout(ttsRef.current.speak(closing), SPEAK_TIMEOUT_MS);
         } catch {
           setError("Voice playback is unavailable. Finalizing your interview.");
         }
@@ -188,20 +213,38 @@ export default function InterviewModal({ skill, onClose, onCompleted }: Props) {
       const nextQ = res.current_question;
       setCurrentQuestion(nextQ);
 
-      let spokenText = "";
-      if (res.spoken_response) {
-        // Natural transition: acknowledge previous answer, then state next question
-        spokenText =
-          (res.next_action === "next" || res.action === "NEXT") && nextQ
-            ? `${res.spoken_response} ${nextQ.prompt}`
-            : res.spoken_response;
-      } else if (res.evaluation?.follow_up_needed && res.evaluation.suggested_follow_up) {
-        spokenText = res.evaluation.suggested_follow_up;
-      } else if (nextQ) {
-        spokenText = nextQ.prompt;
+      // Ack and question are separate fields: voice each exactly once, in
+      // order, then listen. The question renders on screen exactly once.
+      const ack = (res.spoken_response || "").trim();
+      const qprompt = (nextQ?.prompt || "").trim();
+      if (!interviewActiveRef.current) return;
+      const turn = ++turnRef.current;
+      speechRef.current.stop();
+      setAiText(qprompt);
+      setPhase("ai_speaking");
+      let voiceOk = true;
+      if (ack) {
+        const v = await speakOnce(ack);
+        if (v === null || turnRef.current !== turn) return;
+        if (!interviewActiveRef.current) return;
+        voiceOk = v && voiceOk;
       }
-
-      await speakThenListen(spokenText);
+      if (qprompt) {
+        const v = await speakOnce(qprompt);
+        if (v === null || turnRef.current !== turn) return;
+        if (!interviewActiveRef.current) return;
+        voiceOk = v && voiceOk;
+      }
+      if (!interviewActiveRef.current || turnRef.current !== turn) return;
+      if (voiceOk) {
+        setAiText("");
+      }
+      if (phaseRef.current === "ai_speaking" && interviewActiveRef.current && turnRef.current === turn) {
+        speechRef.current.reset();
+        isSubmittingRef.current = false;
+        setPhase("listening");
+        speechRef.current.start();
+      }
     } catch (e) {
       if (!interviewActiveRef.current) return;
       isSubmittingRef.current = false;
@@ -209,12 +252,17 @@ export default function InterviewModal({ skill, onClose, onCompleted }: Props) {
       if (msg.includes("409") || msg.includes("not the current question")) {
         setError("Session out of sync. Recovering session...");
         setPhase("error");
+      } else if (msg.includes("Timed out")) {
+        // Recovery path: the SAME answer can be retried — the backend
+        // persisted it before evaluating, so nothing is lost.
+        setError("The interview service is taking too long. Your answer is saved — you can retry.");
+        setPhase("recoverable_error");
       } else {
         setError(msg);
         setPhase("error");
       }
     }
-  }, [speakThenListen, stopMedia, onCompleted]);
+  }, [speakOnce, speakThenListen, stopMedia, onCompleted]);
 
   // ---- Wire silence → submitAnswer ----
   useEffect(() => {
@@ -229,6 +277,7 @@ export default function InterviewModal({ skill, onClose, onCompleted }: Props) {
   const beginInterview = useCallback(async () => {
     if (interviewActiveRef.current) return;
     interviewActiveRef.current = true;
+    turnRef.current += 1;
     isSubmittingRef.current = false;
     setLoading(true);
     setError(null);
@@ -301,6 +350,17 @@ export default function InterviewModal({ skill, onClose, onCompleted }: Props) {
     }
   }, [skill, requestMedia, speakThenListen]);
 
+  // ---- Retry the last submitted answer after a recoverable failure ----
+  // The backend persists the raw answer before evaluating, so resubmitting
+  // the SAME transcript is idempotent — the candidate never repeats it.
+  const retryLastSubmit = useCallback(() => {
+    const transcript = lastTranscriptRef.current.trim();
+    if (!transcript || !interviewActiveRef.current) return;
+    setError(null);
+    setPhase("processing");
+    void submitAnswer(transcript);
+  }, [submitAnswer]);
+
   // ---- Manual typed submit (accessibility fallback) ----
   const submitTyped = useCallback(() => {
     if (typedAnswer.trim()) {
@@ -314,6 +374,7 @@ export default function InterviewModal({ skill, onClose, onCompleted }: Props) {
   const endInterview = useCallback(async () => {
     if (phaseRef.current === "processing" || phaseRef.current === "completing") return;
     interviewActiveRef.current = false;
+    turnRef.current += 1;
     isSubmittingRef.current = false;
     tts.stop();
     speech.stop();
@@ -343,6 +404,7 @@ export default function InterviewModal({ skill, onClose, onCompleted }: Props) {
     speech.stop();
     speech.reset();
     isSubmittingRef.current = false;
+    turnRef.current += 1;
     void speakThenListen(`Let me repeat the question. ${q.prompt}`);
   }, [tts, speech, speakThenListen]);
 
@@ -355,6 +417,7 @@ export default function InterviewModal({ skill, onClose, onCompleted }: Props) {
     tts.stop();
     speech.stop();
     speech.reset();
+    turnRef.current += 1;
     void speakThenListen(q.prompt);
   }, [tts, speech, speakThenListen]);
 
@@ -434,6 +497,7 @@ export default function InterviewModal({ skill, onClose, onCompleted }: Props) {
                 {phase === "processing" && "Analyzing your response..."}
                 {phase === "completing" && "Building your report..."}
                 {phase === "device_error" && "Device error"}
+                {phase === "recoverable_error" && "Connection issue — retry available"}
                 {phase === "error" && "Error"}
               </span>
             </div>
@@ -466,6 +530,14 @@ export default function InterviewModal({ skill, onClose, onCompleted }: Props) {
               <span>{error || "An error occurred during the interview"}</span>
               {currentQuestion && <Button onClick={retryVoice} variant="secondary" size="sm">Retry voice</Button>}
               <Button onClick={() => void beginInterview()} variant="primary" size="sm">Retry</Button>
+              <Button onClick={() => void endInterview()} variant="ghost" size="sm">End</Button>
+            </div>
+          )}
+
+          {phase === "recoverable_error" && (
+            <div className="iv__device-banner iv__device-banner--warn" style={{ flexWrap: "wrap", justifyContent: "center", padding: "12px 20px" }}>
+              <span>{error || "A temporary connection issue occurred. Your answer is saved."}</span>
+              <Button onClick={retryLastSubmit} variant="primary" size="sm">Retry</Button>
               <Button onClick={() => void endInterview()} variant="ghost" size="sm">End</Button>
             </div>
           )}
@@ -549,8 +621,13 @@ export default function InterviewModal({ skill, onClose, onCompleted }: Props) {
             )}
           </div>
 
-          {!speech.isSupported && phase === "listening" && (
+          {(!speech.isSupported || speech.state === "error") && phase === "listening" && (
             <div className="iv__call-typed">
+              {speech.state === "error" && (
+                <p className="iv__error" style={{ margin: "0 0 8px 0" }}>
+                  Microphone transcription had an issue — you can type your answer instead.
+                </p>
+              )}
               <input
                 className="iv__call-typed-input"
                 value={typedAnswer}

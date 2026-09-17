@@ -292,8 +292,10 @@ def test_locked_flow_speaks_gemini_derived_followup_not_planned_q2():
     assert res["current_question"] is not None
     assert "overriding" in res["current_question"]["prompt"].lower()
     assert res["current_question"]["prompt"] != "What are the main principles of OOP?"
-    # Exact spoken text == generated question (single source of truth).
-    assert res["spoken_response"] == res["current_question"]["prompt"]
+    # Ack/question separation: the ack never contains the question text;
+    # the exact generated question travels in current_question (voiced once).
+    assert "overriding" not in (res["spoken_response"] or "").lower()
+    assert res["provider_used"] is None  # injected mock: no provider tracked
 
 
 def test_multi_turn_later_question_uses_earlier_answers():

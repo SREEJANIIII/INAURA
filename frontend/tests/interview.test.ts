@@ -329,41 +329,43 @@ describe("4. Interview State Machine & Lifecycle Guards", () => {
 });
 
 describe("5. Backend Adaptive Action Integration", () => {
-  it("formats natural spoken response for follow-up and next question actions", () => {
-    const buildSpokenText = (res: {
+  it("voices ack and question as separate utterances, each exactly once", () => {
+    // New contract: spoken_response is ack-only, the question travels in
+    // current_question.prompt. The modal speaks each once, in order.
+    const buildUtterances = (res: {
       action: string;
       spoken_response?: string | null;
       current_question?: { prompt: string } | null;
-    }) => {
-      if (res.spoken_response) {
-        if (res.action === "NEXT" && res.current_question) {
-          return `${res.spoken_response} ${res.current_question.prompt}`;
-        }
-        return res.spoken_response;
-      }
-      return res.current_question?.prompt || "";
+    }): string[] => {
+      const out: string[] = [];
+      const ack = (res.spoken_response || "").trim();
+      const question = (res.current_question?.prompt || "").trim();
+      if (ack) out.push(ack);
+      if (question) out.push(question);
+      return out;
     };
 
-    // Follow-up probe
+    // Follow-up probe: ack-only + question, no duplication.
     const followUpRes = {
       action: "FOLLOW_UP",
-      spoken_response: "I see. Could you explain what happens when retrieval returns poor matches?",
+      spoken_response: "I see.",
       current_question: { prompt: "Could you explain what happens when retrieval returns poor matches?" },
     };
-    assert.strictEqual(
-      buildSpokenText(followUpRes),
-      "I see. Could you explain what happens when retrieval returns poor matches?"
-    );
+    assert.deepStrictEqual(buildUtterances(followUpRes), [
+      "I see.",
+      "Could you explain what happens when retrieval returns poor matches?",
+    ]);
 
-    // Next question
+    // Next question: ack-only + question, question appears exactly once.
     const nextRes = {
       action: "NEXT",
       spoken_response: "Thank you for explaining that. Let's move on to the next question.",
       current_question: { prompt: "How do you handle schema migrations with PostgreSQL?" },
     };
-    assert.strictEqual(
-      buildSpokenText(nextRes),
-      "Thank you for explaining that. Let's move on to the next question. How do you handle schema migrations with PostgreSQL?"
-    );
+    const utterances = buildUtterances(nextRes);
+    assert.strictEqual(utterances.length, 2);
+    const joined = utterances.join(" ");
+    const occurrences = joined.split("How do you handle schema migrations with PostgreSQL?").length - 1;
+    assert.strictEqual(occurrences, 1);
   });
 });

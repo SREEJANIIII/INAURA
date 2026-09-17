@@ -188,10 +188,13 @@ describe("SpeechAudioPlayer lifecycle", () => {
 
   it("no timers drive the speaking→listening transition", async () => {
     const { readFileSync } = await import("node:fs");
-    for (const file of ["../src/services/tts.ts", "../src/hooks/useTextToSpeech.ts"]) {
-      const src = readFileSync(new URL(file, import.meta.url), "utf8");
-      assert.ok(!src.includes("setTimeout"), `${file} must not use timers`);
-      assert.ok(!src.includes("setInterval"), `${file} must not use intervals`);
-    }
+    const src = readFileSync(new URL("../src/services/tts.ts", import.meta.url), "utf8");
+    // The guarded player (the only playback path) must be timer-free. The
+    // separate withTimeout watchdog utility is tested on its own below.
+    const playerBody = src.split("export class SpeechAudioPlayer")[1] ?? "";
+    assert.ok(!playerBody.includes("setTimeout"), "player must not use timers");
+    assert.ok(!playerBody.includes("setInterval"), "player must not use intervals");
+    const hook = readFileSync(new URL("../src/hooks/useTextToSpeech.ts", import.meta.url), "utf8");
+    assert.ok(!hook.includes("setTimeout"), "hook must not use timers");
   });
 });

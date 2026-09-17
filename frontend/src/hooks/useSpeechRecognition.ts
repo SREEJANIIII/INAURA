@@ -85,6 +85,20 @@ export function normalizeTechnicalTerms(text: string): string {
   return s;
 }
 
+/**
+ * Append a newly finalized transcript chunk, guarding against browsers that
+ * re-deliver the same final result (which would otherwise duplicate text).
+ * Genuinely new content (different words) is always appended.
+ */
+export function mergeFinalTranscript(existing: string, chunk: string): string {
+  const clean = chunk.trim();
+  if (!clean) return existing;
+  const base = existing.trim();
+  if (!base) return clean;
+  if (base === clean || base.endsWith(` ${clean}`)) return base;
+  return `${base} ${clean}`;
+}
+
 export function useSpeechRecognition(
   opts: UseSpeechRecognitionOptions = {}
 ): UseSpeechRecognitionResult {
@@ -205,9 +219,7 @@ export function useSpeechRecognition(
         }
 
         if (newFinal) {
-          const updated = finalTranscriptRef.current
-            ? `${finalTranscriptRef.current} ${newFinal}`.trim()
-            : newFinal.trim();
+          const updated = mergeFinalTranscript(finalTranscriptRef.current, newFinal);
           finalTranscriptRef.current = updated;
           setFinalTranscript(updated);
         }

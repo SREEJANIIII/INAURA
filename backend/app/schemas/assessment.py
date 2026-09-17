@@ -308,6 +308,8 @@ class AnswerInterviewEvaluation(BaseModel):
     brief_explanation: str = ""
     follow_up_needed: bool = False
     suggested_follow_up: str = ""
+    spoken_response: str = ""
+    next_question: str = ""
     next_question: str = ""
     next_question_reason: str = ""
     target_competency: str = ""
@@ -338,6 +340,10 @@ class AnswerInterviewResponse(BaseModel):
     completed: bool = False
     answered_count: int = 0
     total_questions: int = 0
+    is_adaptive: bool = False
+    provider_used: Optional[str] = None
+    fallback_used: bool = False
+    recovery: bool = False
     note: Optional[str] = None
     failure_category: Optional[str] = None
     provider_status: Optional[int] = None

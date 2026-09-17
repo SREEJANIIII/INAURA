@@ -364,6 +364,10 @@ export type AnswerInterviewResponse = {
   completed: boolean;
   answered_count: number;
   total_questions: number;
+  is_adaptive?: boolean | null;
+  provider_used?: string | null;
+  fallback_used?: boolean | null;
+  recovery?: boolean | null;
   note: string | null;
   failure_category?: string | null;
   provider_status?: number | null;

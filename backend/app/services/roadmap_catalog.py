@@ -5,6 +5,8 @@ All URLs are reputable official docs / open education / established platforms.
 Marked as "curated prototype resources".
 """
 
+from typing import Any, Dict, List
+
 # Effort heuristics (hours) — configurable, not empirically validated
 EFFORT_CONFIG = {
     "learn_small": 3,      # 2-4h

@@ -113,6 +113,19 @@ export function clearTtsInFlight(): void {
   inFlight.clear();
 }
 
+/**
+ * Race a promise against a timeout. Rejects with Error("Timed out") and
+ * always clears the timer. Used so no interview phase can wedge forever
+ * waiting on릿 network/audio/provider work.
+ */
+export function withTimeout<T>(promise: Promise<T>, ms: number): Promise<T> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const timeout = new Promise<T>((_, reject) => {
+    timer = setTimeout(() => reject(new Error("Timed out")), ms);
+  });
+  return Promise.race([promise, timeout]).finally(() => clearTimeout(timer));
+}
+
 // ---------------------------------------------------------------------------
 // Playback lifecycle (PARTs 15-17): exactly ONE completion signal —
 // audio.onended. No timers, no guessed durations, no render-driven stops.

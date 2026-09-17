@@ -8,8 +8,10 @@ import {
   ttsDedupeKey,
   ttsFailureKind,
   TTS_MIN_AUDIO_BYTES,
+  withTimeout,
   type FetchBlobFn,
 } from "../src/services/tts.ts";
+import { mergeFinalTranscript } from "../src/hooks/useSpeechRecognition.ts";
 
 function wavBlob(size: number, type = "audio/wav"): Blob {
   const bytes = new Uint8Array(size);
@@ -146,6 +148,33 @@ describe("TTS failures are never retried on the frontend", () => {
     assert.strictEqual(ttsFailureKind(503), "temporary");
     assert.strictEqual(ttsFailureKind(400), "invalid");
     assert.strictEqual(ttsFailureKind(null), "unknown");
+  });
+});
+
+describe("Watchdog timeouts", () => {
+  it("withTimeout resolves fast promises normally", async () => {
+    assert.strictEqual(await withTimeout(Promise.resolve("ok"), 1000), "ok");
+  });
+
+  it("withTimeout rejects hangs so no phase wedges forever", async () => {
+    await assert.rejects(withTimeout(new Promise(() => undefined), 20), /Timed out/);
+  });
+
+  it("withTimeout propagates real failures unchanged", async () => {
+    await assert.rejects(withTimeout(Promise.reject(new Error("boom")), 1000), /boom/);
+  });
+});
+
+describe("STT final-fragment dedupe", () => {
+  it("appends genuinely new content", () => {
+    assert.strictEqual(mergeFinalTranscript("", "hello world"), "hello world");
+    assert.strictEqual(mergeFinalTranscript("hello", "brave new world"), "hello brave new world");
+  });
+
+  it("drops re-delivered identical final chunks", () => {
+    assert.strictEqual(mergeFinalTranscript("hello world", "hello world"), "hello world");
+    assert.strictEqual(mergeFinalTranscript("say hello world", "hello world"), "say hello world");
+    assert.strictEqual(mergeFinalTranscript("anything", "   "), "anything");
   });
 });
 
