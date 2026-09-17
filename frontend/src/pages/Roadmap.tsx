@@ -1,35 +1,22 @@
-import { Fragment, useCallback, useEffect, useMemo, useState } from "react";
+/* eslint-disable react-hooks/set-state-in-effect */
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { Link } from "react-router-dom";
-import { getGaps, getLatestAnalysis, type AnalysisResult, type SkillGap } from "../services/analysis";
+import { getLatestAnalysis, type AnalysisResult } from "../services/analysis";
 import { getProfile, type Profile } from "../services/profile";
 import {
   generateRoadmap,
-  getEvidenceSummary,
   getLatestRoadmap,
   getRoadmapWeeks,
   reassessRoadmap,
   updateRoadmapTask,
-  type EvidenceSummary,
   type Roadmap,
   type RoadmapTask,
   type RoadmapWeek,
-  type SkillPersonalizationExplanation,
 } from "../services/roadmap";
 import Button from "../components/ui/Button";
 import "./Roadmap.css";
 
 const STAGES: RoadmapTask["task_type"][] = ["learn", "practice", "build", "validate"];
-const SOURCE_LABELS: Record<string, string> = {
-  github: "GitHub",
-  leetcode: "LeetCode",
-  codeforces: "Codeforces",
-  resume: "Resume",
-  linkedin: "LinkedIn",
-  kaggle: "Kaggle",
-  projects: "Projects",
-  certifications: "Certifications",
-  assessment: "Assessment",
-};
 
 function formatDate(value?: string | null) {
   if (!value) return "Unavailable";
@@ -37,19 +24,6 @@ function formatDate(value?: string | null) {
   return Number.isNaN(date.getTime())
     ? "Unavailable"
     : date.toLocaleDateString(undefined, { month: "short", day: "numeric", year: "numeric" });
-}
-
-function asPercent(value: number | null | undefined) {
-  const numeric = Number(value ?? 0);
-  const normalized = numeric <= 1 ? numeric * 100 : numeric;
-  return Math.round(Math.max(0, Math.min(100, normalized)));
-}
-
-function priorityTone(priority: number) {
-  if (priority >= 50) return "critical";
-  if (priority >= 25) return "high";
-  if (priority >= 10) return "medium";
-  return "low";
 }
 
 function errorMessage(error: unknown, fallback: string) {
@@ -75,322 +49,20 @@ function ProgressBar({ value, className = "" }: { value: number; className?: str
   );
 }
 
-function EvidenceSummarySection({ summary }: { summary: EvidenceSummary | null }) {
-  const analyzedSources = new Set((summary?.sources_analyzed ?? []).map((source) => source.source.toLowerCase()));
-  const unavailableSources = new Set((summary?.sources_unavailable ?? []).map((source) => source.toLowerCase()));
-  const availableSources = new Set((summary?.sources_available ?? []).map((source) => source.toLowerCase()));
-  const snapshotStates = Object.values(summary?.latest_snapshot?.learner_skill_states ?? {});
-  const sourceKeys = Array.from(new Set([
-    ...Object.keys(SOURCE_LABELS),
-    ...Array.from(analyzedSources),
-    ...Array.from(unavailableSources),
-  ]));
-  const analyzedCount = analyzedSources.size;
-  const totalSourceCount = new Set([...analyzedSources, ...unavailableSources, ...availableSources]).size;
-  const sourceCoverage = totalSourceCount ? (analyzedCount / totalSourceCount) * 100 : 0;
-  const skillCoverage = snapshotStates.length
-    ? snapshotStates.reduce((total, state) => total + asPercent(state.evidence_coverage), 0) / snapshotStates.length
-    : sourceCoverage;
-  const confidence = snapshotStates.length
-    ? snapshotStates.reduce((total, state) => total + asPercent(state.confidence), 0) / snapshotStates.length
-    : 0;
-
-  return (
-    <section className="roadmap__section" aria-labelledby="evidence-summary-title">
-      <div className="roadmap__section-heading">
-        <div>
-          <div className="roadmap__eyebrow">Evidence audit</div>
-          <h2 id="evidence-summary-title">Evidence summary</h2>
-          <p>Only sources INAURA actually accessed are marked as analyzed.</p>
-        </div>
-        <span className="roadmap__snapshot-date">Snapshot: {formatDate(summary?.latest_snapshot?.created_at)}</span>
-      </div>
-
-      <div className="roadmap__evidence-layout">
-        <div className="roadmap__source-list">
-          {sourceKeys.map((sourceKey) => {
-            const isAnalyzed = analyzedSources.has(sourceKey);
-            const isUnavailable = unavailableSources.has(sourceKey);
-            const status = isAnalyzed ? "Analyzed" : isUnavailable ? "Not connected" : "Available";
-            return (
-              <div className={`roadmap__source-row ${isAnalyzed ? "roadmap__source-row--analyzed" : ""}`} key={sourceKey}>
-                <span className="roadmap__source-icon" aria-hidden="true">{isAnalyzed ? "✓" : "○"}</span>
-                <span>{SOURCE_LABELS[sourceKey] ?? sourceKey}</span>
-                <span className="roadmap__source-status">{status}</span>
-              </div>
-            );
-          })}
-        </div>
-
-        <div className="roadmap__evidence-metrics">
-          <Metric label="Sources analyzed" value={`${analyzedCount}`} hint="Distinct sources used" />
-          <Metric label="Sources unavailable" value={`${unavailableSources.size}`} hint="Not treated as evidence" />
-          <Metric label="Evidence coverage" value={`${Math.round(skillCoverage)}%`} hint={`${Math.round(sourceCoverage)}% source coverage`} />
-          <Metric label="Overall confidence" value={`${Math.round(confidence)}%`} hint="Across captured skill states" />
-        </div>
-      </div>
-    </section>
-  );
-}
-
-function PersonalizationExplanationCard({ explanation }: { explanation: SkillPersonalizationExplanation }) {
-  const [showRaw, setShowRaw] = useState(false);
-
-  return (
-    <div className="roadmap__personalization-card">
-      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", flexWrap: "wrap", gap: "8px" }}>
-        <div>
-          <h4 style={{ margin: 0, fontSize: "0.95rem", color: "#0f172a" }}>
-            Personalized Diagnostic: {explanation.skill_name}
-          </h4>
-          <p style={{ margin: "2px 0 0", fontSize: "0.8rem", color: "#64748b" }}>
-            Current: {explanation.current_proficiency_pct}% | Required: {explanation.required_level_pct}% | Gap: {explanation.gap_pct}% | Confidence: {explanation.confidence_pct}%
-          </p>
-        </div>
-        <button
-          type="button"
-          className="roadmap__gap-details-btn"
-          onClick={() => setShowRaw((prev) => !prev)}
-        >
-          {showRaw ? "Hide summary block" : "View summary block"}
-        </button>
-      </div>
-
-      {showRaw && (
-        <pre className="roadmap__summary-pre">{explanation.readable_summary}</pre>
-      )}
-
-      {/* Demonstrated vs Missing Capabilities */}
-      <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(280px, 1fr))", gap: "12px", marginTop: "10px" }}>
-        <div className="roadmap__cap-section">
-          <div className="roadmap__cap-label" style={{ color: "#166534" }}>✓ What you already demonstrate</div>
-          <div className="roadmap__cap-pills">
-            {explanation.demonstrated_capabilities.length > 0 ? (
-              explanation.demonstrated_capabilities.map((cap, i) => (
-                <span key={i} className="roadmap__cap-pill roadmap__cap-pill--demonstrated">
-                  ✓ {cap}
-                </span>
-              ))
-            ) : (
-              <span style={{ fontSize: "0.78rem", color: "#64748b" }}>Foundational concepts only</span>
-            )}
-          </div>
-        </div>
-
-        <div className="roadmap__cap-section">
-          <div className="roadmap__cap-label" style={{ color: "#92400e" }}>⚠ Missing evidence (What to build next)</div>
-          <div className="roadmap__cap-pills">
-            {explanation.missing_capabilities.length > 0 ? (
-              explanation.missing_capabilities.map((cap, i) => (
-                <span key={i} className="roadmap__cap-pill roadmap__cap-pill--missing">
-                  + {cap}
-                </span>
-              ))
-            ) : (
-              <span style={{ fontSize: "0.78rem", color: "#166534" }}>Advanced production validation</span>
-            )}
-          </div>
-        </div>
-      </div>
-
-      {/* Metadata & Role Diagnostics */}
-      <div className="roadmap__meta-grid">
-        <div className="roadmap__meta-item">
-          <strong>Confidence Rationale</strong>
-          <span>{explanation.confidence_rationale}</span>
-        </div>
-        <div className="roadmap__meta-item">
-          <strong>Prerequisites Status</strong>
-          <span>{explanation.prerequisites_status}</span>
-        </div>
-        <div className="roadmap__meta-item">
-          <strong>Role Importance</strong>
-          <span>{explanation.importance_pct}% priority for {explanation.target_role}</span>
-        </div>
-        <div className="roadmap__meta-item">
-          <strong>Time & Pacing</strong>
-          <span>{explanation.allocated_hours}h allocated ({explanation.weekly_pacing})</span>
-        </div>
-      </div>
-
-      {/* Smallest Learning Unit & Validation Criteria */}
-      <div className="roadmap__trace-box">
-        <div style={{ marginBottom: "5px" }}>
-          <strong>Smallest useful learning unit:</strong> {explanation.smallest_learning_unit}
-        </div>
-        <div>
-          <strong>Validation criteria:</strong> {explanation.validation_criteria}
-        </div>
-      </div>
-
-      {/* Supporting Evidence Provenance */}
-      {explanation.supporting_evidence.length > 0 && (
-        <div className="roadmap__trace-box">
-          <strong>Supporting evidence sources:</strong>
-          <ul className="roadmap__trace-list">
-            {explanation.supporting_evidence.map((ev, i) => (
-              <li key={i}>{ev}</li>
-            ))}
-          </ul>
-        </div>
-      )}
-
-      {/* The 5 Whys Grid */}
-      <div className="roadmap__five-whys">
-        <div className="roadmap__why-item">
-          <div className="roadmap__why-header">❓ 1. Why am I learning this?</div>
-          <p className="roadmap__why-text">{explanation.five_whys?.why_learning}</p>
-        </div>
-        <div className="roadmap__why-item">
-          <div className="roadmap__why-header">⏱️ 2. Why now?</div>
-          <p className="roadmap__why-text">{explanation.five_whys?.why_now}</p>
-        </div>
-        <div className="roadmap__why-item">
-          <div className="roadmap__why-header">⌛ 3. Why this much time?</div>
-          <p className="roadmap__why-text">{explanation.five_whys?.why_time}</p>
-        </div>
-        <div className="roadmap__why-item">
-          <div className="roadmap__why-header">📚 4. Why this resource?</div>
-          <p className="roadmap__why-text">{explanation.five_whys?.why_resource}</p>
-        </div>
-        <div className="roadmap__why-item" style={{ gridColumn: "1 / -1" }}>
-          <div className="roadmap__why-header">🎯 5. How will INAURA know that I learned it?</div>
-          <p className="roadmap__why-text">{explanation.five_whys?.how_validated}</p>
-        </div>
-      </div>
-    </div>
-  );
-}
-
-function findExplanation(gap: SkillGap, explanations: SkillPersonalizationExplanation[]): SkillPersonalizationExplanation | undefined {
-  const cands = [
-    gap.canonical_name,
-    gap.skill,
-    gap.skills?.canonical_name,
-    gap.skills?.display_name,
-  ]
-    .filter(Boolean)
-    .map((s) => s!.toLowerCase().replace(/[\s-]+/g, "_"));
-
-  return explanations.find((exp) => {
-    const expSlugs = [
-      exp.canonical_name,
-      exp.skill_slug,
-      exp.skill_name,
-    ]
-      .filter(Boolean)
-      .map((s) => s!.toLowerCase().replace(/[\s-]+/g, "_"));
-    return cands.some((c) => expSlugs.includes(c));
-  });
-}
-
-function SkillGapOverview({
-  gaps,
-  explanations = [],
-}: {
-  gaps: SkillGap[];
-  explanations?: SkillPersonalizationExplanation[];
-}) {
-  const [expandedSkillId, setExpandedSkillId] = useState<string | null>(null);
-  const sortedGaps = [...gaps].sort((a, b) => (b.priority_score ?? 0) - (a.priority_score ?? 0));
-  return (
-    <section className="roadmap__section" aria-labelledby="skill-gaps-title">
-      <div className="roadmap__section-heading">
-        <div>
-          <div className="roadmap__eyebrow">What to focus on</div>
-          <h2 id="skill-gaps-title">Skill gap overview</h2>
-          <p>Prioritized from current evidence, role requirements, and confidence.</p>
-        </div>
-        <span className="roadmap__count-label">{sortedGaps.length} skill{sortedGaps.length === 1 ? "" : "s"}</span>
-      </div>
-
-      {sortedGaps.length === 0 ? (
-        <div className="roadmap__empty-inline">No priority gaps were returned by the latest analysis.</div>
-      ) : (
-        <div className="roadmap__table-wrap">
-          <table className="roadmap__gap-table">
-            <thead>
-              <tr>
-                <th>Skill</th>
-                <th>Current</th>
-                <th>Required</th>
-                <th>Gap</th>
-                <th>Confidence</th>
-                <th>Priority</th>
-                <th>Evidence</th>
-                <th>Diagnosis & Why</th>
-              </tr>
-            </thead>
-            <tbody>
-              {sortedGaps.map((gap) => {
-                const priority = Math.round(gap.priority_score ?? gap.priority ?? 0);
-                const skillName = gap.skill || gap.canonical_name || gap.skills?.display_name || "Unknown skill";
-                const explanation = findExplanation(gap, explanations);
-                const isExpanded = expandedSkillId === gap.id;
-                return (
-                  <Fragment key={gap.id}>
-                    <tr>
-                      <th scope="row">
-                        <div className="roadmap__skill-name">{skillName}</div>
-                        {gap.evidence_state_label && <div className="roadmap__table-note">{gap.evidence_state_label}</div>}
-                      </th>
-                      <td>{asPercent(gap.current_proficiency)}%</td>
-                      <td>{asPercent(gap.required_level)}%</td>
-                      <td className="roadmap__gap-value">{asPercent(gap.gap)}%</td>
-                      <td>{asPercent(gap.confidence)}%</td>
-                      <td><span className={`roadmap__priority roadmap__priority--${priorityTone(priority)}`}>{priority}</span></td>
-                      <td>{gap.evidence_count ?? 0}</td>
-                      <td>
-                        {explanation ? (
-                          <button
-                            type="button"
-                            className="roadmap__gap-details-btn"
-                            onClick={() => setExpandedSkillId(isExpanded ? null : gap.id)}
-                            aria-expanded={isExpanded}
-                          >
-                            {isExpanded ? "Hide Diagnosis" : "Why this skill?"}
-                          </button>
-                        ) : (
-                          <span className="roadmap__muted">—</span>
-                        )}
-                      </td>
-                    </tr>
-                    {isExpanded && explanation && (
-                      <tr className="roadmap__gap-card-row">
-                        <td colSpan={8}>
-                          <PersonalizationExplanationCard explanation={explanation} />
-                        </td>
-                      </tr>
-                    )}
-                  </Fragment>
-                );
-              })}
-            </tbody>
-          </table>
-        </div>
-      )}
-    </section>
-  );
-}
-
 type TaskUpdate = {
   status?: RoadmapTask["status"];
   completion_percentage?: number;
-  submission_url?: string;
-  submission_notes?: string;
 };
 
 type TaskCardProps = {
   task: RoadmapTask;
   updating: boolean;
   expanded: boolean;
-  proof: { url: string; notes: string };
   onToggleExpanded: () => void;
-  onProofChange: (proof: { url: string; notes: string }) => void;
   onUpdate: (patch: TaskUpdate) => void;
 };
 
-function TaskCard({ task, updating, expanded, proof, onToggleExpanded, onProofChange, onUpdate }: TaskCardProps) {
+function TaskCard({ task, updating, expanded, onToggleExpanded, onUpdate }: TaskCardProps) {
   const isComplete = task.status === "completed" || task.completion_percentage >= 100;
   return (
     <article className={`roadmap__task roadmap__task--${task.task_type}`}>
@@ -456,14 +128,6 @@ function TaskCard({ task, updating, expanded, proof, onToggleExpanded, onProofCh
               <h5>Validation criteria</h5>
               <p>{task.validation_method || "Self-check"}</p>
             </div>
-            <div>
-              <h5>Generated evidence</h5>
-              {task.evidence_generated ? (
-                <pre className="roadmap__evidence-json">{JSON.stringify(task.evidence_generated, null, 2)}</pre>
-              ) : (
-                <p className="roadmap__muted">No evidence generated yet.</p>
-              )}
-            </div>
           </div>
 
           {task.resources.length > 0 && (
@@ -480,45 +144,6 @@ function TaskCard({ task, updating, expanded, proof, onToggleExpanded, onProofCh
             </div>
           )}
 
-          <div className="roadmap__evidence-form">
-            <div>
-              <h5>Attach generated evidence</h5>
-              <p>Link a repository, submission, or artifact used to validate this task.</p>
-            </div>
-            <div className="roadmap__evidence-fields">
-              <label>
-                <span className="sr-only">Evidence URL</span>
-                <input
-                  type="url"
-                  placeholder="https://github.com/you/project"
-                  value={proof.url}
-                  onChange={(event) => onProofChange({ ...proof, url: event.target.value })}
-                />
-              </label>
-              <label>
-                <span className="sr-only">Evidence notes</span>
-                <input
-                  type="text"
-                  placeholder="What does this demonstrate?"
-                  value={proof.notes}
-                  onChange={(event) => onProofChange({ ...proof, notes: event.target.value })}
-                />
-              </label>
-              <Button
-                variant="secondary"
-                size="sm"
-                disabled={updating || (!proof.url.trim() && !proof.notes.trim())}
-                onClick={() => onUpdate({
-                  submission_url: proof.url.trim() || undefined,
-                  submission_notes: proof.notes.trim() || undefined,
-                  status: "completed",
-                  completion_percentage: 100,
-                })}
-              >
-                Save evidence
-              </Button>
-            </div>
-          </div>
         </div>
       )}
     </article>
@@ -529,13 +154,11 @@ type WeekContentProps = {
   week: RoadmapWeek;
   updating: string | null;
   expanded: Record<string, boolean>;
-  proofs: Record<string, { url: string; notes: string }>;
   onToggleExpanded: (taskId: string) => void;
-  onProofChange: (taskId: string, proof: { url: string; notes: string }) => void;
   onUpdateTask: (task: RoadmapTask, patch: TaskUpdate) => void;
 };
 
-function WeekContent({ week, updating, expanded, proofs, onToggleExpanded, onProofChange, onUpdateTask }: WeekContentProps) {
+function WeekContent({ week, updating, expanded, onToggleExpanded, onUpdateTask }: WeekContentProps) {
   return (
     <div className="roadmap__week-content">
       <div className="roadmap__week-heading">
@@ -571,9 +194,7 @@ function WeekContent({ week, updating, expanded, proofs, onToggleExpanded, onPro
                   task={task}
                   updating={updating === task.id}
                   expanded={Boolean(expanded[task.id])}
-                  proof={proofs[task.id] ?? { url: "", notes: "" }}
                   onToggleExpanded={() => onToggleExpanded(task.id)}
-                  onProofChange={(proof) => onProofChange(task.id, proof)}
                   onUpdate={(patch) => onUpdateTask(task, patch)}
                 />
               )) : <p className="roadmap__empty-stage">No {stage} tasks planned for this week.</p>}
@@ -591,31 +212,24 @@ export default function Roadmap() {
   const [selectedWeekNum, setSelectedWeekNum] = useState(1);
   const [analysis, setAnalysis] = useState<AnalysisResult | null>(null);
   const [profile, setProfile] = useState<Profile | null>(null);
-  const [evidenceSummary, setEvidenceSummary] = useState<EvidenceSummary | null>(null);
-  const [skillGaps, setSkillGaps] = useState<SkillGap[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [generating, setGenerating] = useState(false);
   const [reassessing, setReassessing] = useState(false);
   const [updating, setUpdating] = useState<string | null>(null);
   const [expanded, setExpanded] = useState<Record<string, boolean>>({});
-  const [proofs, setProofs] = useState<Record<string, { url: string; notes: string }>>({});
   const [showAdaptiveNotice, setShowAdaptiveNotice] = useState(false);
 
   const loadAll = useCallback(async () => {
     setLoading(true);
     setError(null);
     try {
-      const [prof, ana, evidence, gaps] = await Promise.all([
+      const [prof, ana] = await Promise.all([
         getProfile().catch(() => null),
         getLatestAnalysis().catch(() => null),
-        getEvidenceSummary().catch(() => null),
-        getGaps().catch(() => [] as SkillGap[]),
       ]);
       setProfile(prof);
       setAnalysis(ana);
-      setEvidenceSummary(evidence);
-      setSkillGaps(gaps);
 
       try {
         const latest = await getLatestRoadmap();
@@ -645,10 +259,6 @@ export default function Roadmap() {
   }, [loadAll]);
 
   const handleGenerate = async () => {
-    if (!analysis) {
-      setError("Run your INAURA analysis first to generate a personalized roadmap.");
-      return;
-    }
     if (!profile?.hours_per_week) {
       setError("Update your weekly availability to create a realistic timeline.");
       return;
@@ -656,7 +266,12 @@ export default function Roadmap() {
     setGenerating(true);
     setError(null);
     try {
-      await generateRoadmap(analysis.target_role, profile.hours_per_week);
+      const generated = await generateRoadmap(analysis?.target_role, profile.hours_per_week);
+      setRoadmap(generated);
+      if (generated.weeks?.length) {
+        setWeeks(generated.weeks);
+        setSelectedWeekNum(generated.current_week_index || generated.weeks[0].week_number);
+      }
       await loadAll();
     } catch (generateError) {
       setError(errorMessage(generateError, "Failed to generate roadmap"));
@@ -727,13 +342,12 @@ export default function Roadmap() {
       <header className="roadmap__header">
         <div className="container">
           <Link to="/analysis/results" className="roadmap__back">← Back to Analysis Results</Link>
-          <div className="roadmap__eyebrow roadmap__eyebrow--header">INAURA Evidence-Driven Adaptive Roadmap</div>
+          <div className="roadmap__eyebrow roadmap__eyebrow--header">INAURA Adaptive Learning Plan</div>
           <h1 className="roadmap__title">{roadmap?.title || "Personalized Weekly Roadmap"}</h1>
-          <p className="roadmap__subtitle">A focused weekly plan built from your audited evidence and target role requirements.</p>
+          <p className="roadmap__subtitle">A focused week-by-week plan built around the skills you need for your target role.</p>
           <div className="roadmap__header-meta">
             <span>Target role: <strong>{roadmap?.target_role || analysis?.target_role || "Not set"}</strong></span>
             <span>Generated: {formatDate(roadmap?.created_at)}</span>
-            <span>Evidence snapshot: {formatDate(evidenceSummary?.latest_snapshot?.created_at)}</span>
           </div>
         </div>
       </header>
@@ -744,7 +358,7 @@ export default function Roadmap() {
         {adaptiveNotice && roadmap && (
           <div className="roadmap__adaptive-alert" role="status">
             <span aria-hidden="true">⚡</span>
-            <div><strong>Your roadmap was updated based on new evidence.</strong><span> Completed work is preserved; only future work is adjusted.</span></div>
+            <div><strong>Your roadmap was updated.</strong><span> Completed work is preserved; only future work is adjusted.</span></div>
           </div>
         )}
 
@@ -755,19 +369,15 @@ export default function Roadmap() {
             <Metric label="Hours / week" value={hoursPerWeek ? `${hoursPerWeek}h` : "—"} />
             <Metric label="Estimated hours" value={roadmap ? `${roadmap.total_estimated_hours}h` : "—"} />
             <Metric label="Generated" value={formatDate(roadmap?.created_at)} />
-            <Metric label="Evidence snapshot" value={formatDate(evidenceSummary?.latest_snapshot?.created_at)} />
           </div>
           {roadmap && <div className="roadmap__overall-progress"><span>Overall progress</span><strong>{Math.round(progress)}%</strong><ProgressBar value={progress} /></div>}
         </section>
 
-        <EvidenceSummarySection summary={evidenceSummary} />
-        <SkillGapOverview gaps={skillGaps} explanations={roadmap?.skill_explanations} />
-
         {!roadmap ? (
           <section className="roadmap__empty">
-            <h2>Generate your evidence-driven roadmap</h2>
-            <p>{analysis ? "Turn your latest skill gaps into a realistic week-by-week plan." : "Run your INAURA analysis first, then return here to generate your plan."}</p>
-            <Button variant="primary" size="lg" onClick={handleGenerate} disabled={generating || !analysis || !profile?.hours_per_week}>
+            <h2>Generate your personalized roadmap</h2>
+            <p>{analysis ? "Turn your latest skill gaps into a realistic week-by-week plan." : "Your latest analysis will be used to build a realistic week-by-week plan."}</p>
+            <Button variant="primary" size="lg" onClick={handleGenerate} disabled={generating || !profile?.hours_per_week}>
               {generating ? "Assembling weekly plan…" : "Generate weekly roadmap"}
             </Button>
             {!profile?.hours_per_week && <div className="roadmap__empty-note">Set your hours per week in your profile before generating.</div>}
@@ -778,10 +388,10 @@ export default function Roadmap() {
               <div>
                 <div className="roadmap__eyebrow">Your plan</div>
                 <h2 id="weekly-roadmap-title">Weekly roadmap</h2>
-                <p>Complete tasks in order. Each week builds toward validated evidence.</p>
+                <p>Complete tasks in order. Each week builds toward practical, job-ready capability.</p>
               </div>
               <Button variant="secondary" size="sm" onClick={handleAdaptiveReassess} disabled={reassessing || generating}>
-                {reassessing ? "Updating…" : "Update with latest evidence"}
+                {reassessing ? "Updating…" : "Refresh your plan"}
               </Button>
             </div>
 
@@ -811,9 +421,7 @@ export default function Roadmap() {
                     week={activeWeek}
                     updating={updating}
                     expanded={expanded}
-                    proofs={proofs}
                     onToggleExpanded={(taskId) => setExpanded((current) => ({ ...current, [taskId]: !current[taskId] }))}
-                    onProofChange={(taskId, proof) => setProofs((current) => ({ ...current, [taskId]: proof }))}
                     onUpdateTask={handleUpdateTask}
                   />
                 )}
