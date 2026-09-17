@@ -224,3 +224,38 @@ async def delete_skill_override(
     except Exception:
         pass
     return None
+
+
+@router.post("/refresh")
+async def refresh_analysis(current_user: CurrentUser = Depends(get_current_user)):
+    """Refresh evidence audit, re-run analysis, and update learner skill states."""
+    state = analysis_service.get_state(current_user.id)
+    role = state.get("target_role") if state else None
+    if not role:
+        try:
+            c = get_supabase_client()
+            r = c.table("analysis_results").select("target_role").eq("user_id", current_user.id).order("created_at", desc=True).limit(1).execute()
+            if r.data and len(r.data) > 0:
+                role = r.data[0].get("target_role")
+        except Exception:
+            pass
+    if not role:
+        role = "Software Engineer"
+    result = await run_analysis(current_user.id, role)
+    return result
+
+
+@router.get("/evidence-summary")
+async def get_evidence_summary(current_user: CurrentUser = Depends(get_current_user)):
+    """Return honest evidence audit: sources analyzed, available, unavailable, and snapshot."""
+    from ....services import learner_state_service
+    sources_analyzed, sources_available, sources_unavailable = learner_state_service.audit_user_sources(current_user.id)
+    snapshot = learner_state_service.get_latest_evidence_snapshot(current_user.id)
+    return {
+        "user_id": current_user.id,
+        "sources_analyzed": sources_analyzed,
+        "sources_available": sources_available,
+        "sources_unavailable": sources_unavailable,
+        "latest_snapshot": snapshot,
+    }
+

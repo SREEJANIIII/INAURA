@@ -13,9 +13,13 @@ class Settings(BaseSettings):
     embedding_api_key: str | None = None
     embedding_model: str | None = None
     embedding_dimension: int | None = None
-    # Experimental AI review (isolated /ai-review-test feature only)
+    # Legacy Gemini configuration. Kept for the experimental /ai-review-test
+    # feature and as a future interview-provider fallback.
     google_api_key: str | None = None
     gemini_model: str = "gemini-2.5-flash"
+    # NVIDIA NIM interview evaluator.
+    nvidia_api_key: str | None = None
+    nvidia_model: str = "nvidia/nemotron-3-nano-omni-30b-a3b-reasoning"
     # Interview TTS — NVIDIA-hosted voice (TEXT -> SPEECH only).
     # Gemini keeps using GOOGLE_API_KEY/gemini-2.5-flash for evaluation.
     # NVIDIA_API_KEY is backend-only and never reaches the frontend.
