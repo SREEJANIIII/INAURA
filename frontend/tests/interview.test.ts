@@ -329,8 +329,7 @@ describe("4. Interview State Machine & Lifecycle Guards", () => {
 });
 
 describe("5. Backend Adaptive Action Integration", () => {
-  it("voices ack and question as separate utterances, each exactly once", () => {
-    // New contract: spoken_response is ack-only, the question travels in
+  it("voices ack and question as separate utterances, each exactly once", () => {    // New contract: spoken_response is ack-only, the question travels in
     // current_question.prompt. The modal speaks each once, in order.
     const buildUtterances = (res: {
       action: string;
@@ -367,5 +366,65 @@ describe("5. Backend Adaptive Action Integration", () => {
     const joined = utterances.join(" ");
     const occurrences = joined.split("How do you handle schema migrations with PostgreSQL?").length - 1;
     assert.strictEqual(occurrences, 1);
+  });
+});
+
+describe("6. Interview completion contract (Q1 early-end regression)", () => {
+  type AnswerRes = {
+    completed: boolean;
+    next_action: string;
+    action?: string | null;
+    current_question: { id: string; prompt: string } | null;
+  };
+
+  // Mirrors InterviewModal's completion predicate: the interview completes
+  // ONLY on the server's explicit terminal state — never because the
+  // initial plan holds a single question or a non-terminal turn arrives
+  // without a question payload.
+  const shouldComplete = (res: AnswerRes): boolean =>
+    res.completed || res.next_action === "complete" || res.action === "COMPLETE";
+
+  it("does not interpret questions.length === 1 as completion", () => {
+    // The live plan intentionally starts with only Q1.
+    const initialQuestions = [{ id: "q1", prompt: "Walk me through an implementation." }];
+    assert.strictEqual(initialQuestions.length, 1);
+    const afterQ1: AnswerRes = {
+      completed: false,
+      next_action: "next",
+      action: "NEXT",
+      current_question: { id: "q2_coverage", prompt: "Follow-up?" },
+    };
+    assert.strictEqual(shouldComplete(afterQ1), false);
+  });
+
+  it("completes on explicit terminal state after the minimum", () => {
+    const done: AnswerRes = {
+      completed: true,
+      next_action: "complete",
+      action: "COMPLETE",
+      current_question: null,
+    };
+    assert.strictEqual(shouldComplete(done), true);
+  });
+
+  it("missing current_question on a non-terminal turn is retryable, not completion", () => {
+    const gap: AnswerRes = {
+      completed: false,
+      next_action: "next",
+      action: "NEXT",
+      current_question: null,
+    };
+    assert.strictEqual(shouldComplete(gap), false);
+  });
+
+  it("progress total is server-driven and grows past the initial plan", () => {
+    // Initial plan holds only Q1: floor of 1, never 0/0 once started.
+    let totalQuestions = Math.max(1, 1);
+    assert.strictEqual(totalQuestions, 1);
+    // After answering Q1 the server reports the grown plan total.
+    const res = { answered_count: 1, total_questions: 2 };
+    totalQuestions = Math.max(totalQuestions, res.total_questions, res.answered_count);
+    assert.strictEqual(totalQuestions, 2);
+    assert.ok(totalQuestions > 1);
   });
 });

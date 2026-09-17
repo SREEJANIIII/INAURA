@@ -1327,6 +1327,79 @@ def select_adaptive_insertion(
     }
 
 
+def _coverage_fallback_question(
+    questions: List[Dict[str, Any]],
+    competencies: List[Dict[str, str]],
+    skill: str,
+    current_index: int,
+    target_q: Optional[Dict[str, Any]] = None,
+) -> Optional[Dict[str, Any]]:
+    """Deterministic coverage question guaranteeing interview continuation.
+
+    The live plan intentionally starts with only Q1; later questions normally
+    come from Gemini's per-answer evaluation. When that yields nothing usable
+    (missing/invalid next_question, no suggested follow-up, provider outage),
+    the turn would otherwise return current_question=None and clients would
+    end the interview early. This fallback covers the next untested
+    competency instead — it is NOT a fixed Q2/Q3/Q4 script: the competency is
+    chosen from what this session has not tested yet.
+    """
+    if len(questions) >= MAX_INTERVIEW_QUESTIONS:
+        return None
+    if not competencies:
+        return None
+    used = {
+        str(q.get("competency") or "")
+        for q in questions
+        if isinstance(q, dict) and q.get("competency")
+    }
+    nxt: Optional[Dict[str, str]] = None
+    for c_ in competencies:
+        if isinstance(c_, dict) and str(c_.get("id") or "") and str(c_.get("id")) not in used:
+            nxt = c_
+            break
+    if nxt is None:
+        nxt = competencies[(current_index + 1) % len(competencies)]
+    if not isinstance(nxt, dict):
+        return None
+    comp_id = str(nxt.get("id") or "")
+    if not comp_id:
+        return None
+    label = str(nxt.get("label") or comp_id).strip() or comp_id
+    skill_name = str(skill or "").strip() or "this skill"
+    prior_prompts = [str(q.get("prompt") or "") for q in questions if isinstance(q, dict)]
+    prompt = (
+        f"Let's look at another aspect of {skill_name}: {label}. "
+        f"Can you walk me through how you have handled that in your own work?"
+    )
+    if _is_duplicate_question(prompt, prior_prompts) or _is_generic_adaptive_question(prompt):
+        prompt = (
+            f"Moving to {label} in {skill_name}: describe a specific situation where "
+            f"you dealt with this and what you decided."
+        )
+    existing_ids = {str(q.get("id")) for q in questions if isinstance(q, dict)}
+    base = f"q{len(questions) + 1}_coverage"
+    qid = base
+    n = 1
+    while qid in existing_ids:
+        n += 1
+        qid = f"{base}_{n}"
+    parent_id = None
+    if isinstance(target_q, dict):
+        parent_id = target_q.get("id")
+    elif 0 <= current_index < len(questions) and isinstance(questions[current_index], dict):
+        parent_id = questions[current_index].get("id")
+    return {
+        "id": qid,
+        "competency": comp_id,
+        "prompt": prompt,
+        "follow_ups": [],
+        "_is_coverage": True,
+        "_adaptive_type": "coverage",
+        "_parent_question_id": parent_id,
+    }
+
+
 # ---------------------------------------------------------------------------
 # Signal strength from per-answer evaluation
 # ---------------------------------------------------------------------------
@@ -1725,7 +1798,23 @@ async def _answer_interview_question_locked(
                 "_parent_question_id": question_id,
             }
             questions.insert(current_index + 1, skipped_question)
-        ending = conversation_intent == "end_interview" or next_index >= len(questions)
+        # Only an explicit end-interview intent ends the interview here. The
+        # live plan intentionally starts with a single question, so
+        # next_index >= len(questions) means "no next question generated yet" —
+        # never "interview complete". Insert a coverage question instead
+        # (unless the hard cap is reached).
+        ending = conversation_intent == "end_interview"
+        coverage_question = None
+        if not ending and next_index >= len(questions):
+            if len(questions) < MAX_INTERVIEW_QUESTIONS:
+                coverage_question = _coverage_fallback_question(
+                    questions, competencies, str(s.get("skill_name") or ""),
+                    current_index, target_q,
+                )
+                if coverage_question is not None:
+                    questions.insert(current_index + 1, coverage_question)
+            if next_index >= len(questions):
+                ending = True
         update: Dict[str, Any] = {
             "transcript": existing_transcript,
             "current_index": len(questions) if ending else next_index,
@@ -1733,7 +1822,7 @@ async def _answer_interview_question_locked(
         if ending:
             now = datetime.now(timezone.utc).isoformat()
             update.update({"status": "completed", "validity": "low_confidence", "completed_at": now})
-        elif skipped_question is not None:
+        elif skipped_question is not None or coverage_question is not None:
             update["plan"] = plan
         response = {
             "session_id": session_id,
@@ -1939,13 +2028,51 @@ async def _answer_interview_question_locked(
             is_adaptive = True
             action = "follow_up"
 
+    # Continuation guarantee: the initial plan intentionally holds only Q1,
+    # so when Gemini yields no usable next question (missing/invalid
+    # next_question, no suggested follow-up, or provider outage with
+    # evaluation=None), new_index would run past the plan and the response
+    # would carry current_question=None — which clients read as completion.
+    # len(plan["questions"]) == 1 means "only Q1 generated so far", never
+    # "interview has one question". Cover the next untested competency
+    # instead. A pre-planned next question is always preferred: this fires
+    # only when nothing is available at current_index + 1 (or when a probe
+    # was decided but no probe text exists). The decided action is preserved.
+    if (
+        follow_up_question is None
+        and action != "complete"
+        and len(questions) < MAX_INTERVIEW_QUESTIONS
+        and (action == "follow_up" or current_index + 1 >= len(questions))
+    ):
+        coverage = _coverage_fallback_question(
+            questions, competencies, canonical, current_index, target_q,
+        )
+        if coverage is not None:
+            questions.insert(current_index + 1, coverage)
+            follow_up_question = coverage
+
     # Update session state
     new_index = current_index
     if action == "next":
         new_index = current_index + 1
-    elif action == "follow_up" and follow_up_question is not None:
-        new_index = current_index + 1  # Point to the just-inserted follow-up
+    elif action == "follow_up":
+        if follow_up_question is not None:
+            new_index = current_index + 1  # Point to the just-inserted follow-up
+        else:
+            # A probe was decided but nothing could be inserted (plan at the
+            # hard cap): nothing left to ask, so complete instead of
+            # repeating the just-answered question.
+            action = "complete"
+            new_index = len(questions)
     elif action == "complete":
+        new_index = len(questions)
+
+    # Last-resort invariant: a non-terminal turn MUST carry a next question.
+    # Reaching here means the plan is exhausted (hard cap) with nothing to
+    # ask, so complete instead of returning current_question=None (which
+    # clients treat as the end of the interview).
+    if action != "complete" and not (0 <= new_index < len(questions)):
+        action = "complete"
         new_index = len(questions)
 
     update: Dict[str, Any] = {

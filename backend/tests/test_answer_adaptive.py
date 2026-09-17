@@ -351,5 +351,8 @@ def test_gemini_failure_falls_back_to_deterministic_plan():
     res = _run_locked(session, "q1", "Some answer here.", _FailLLM())
     assert res["evaluation_pending"] is True
     assert res["is_adaptive"] is False
-    # Deterministic plan still advances the interview.
+    # Provider outage must NOT end the interview: the turn advances to the
+    # next available question instead of returning current_question=None.
+    assert res["completed"] is False
+    assert res["current_question"] is not None
     assert res["current_question"]["prompt"] == "What are the main principles of OOP?"
