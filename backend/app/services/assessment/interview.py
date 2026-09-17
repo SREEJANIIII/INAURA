@@ -584,18 +584,23 @@ EVAL_SYSTEM_PROMPT = (
     "In the SAME response you must also decide the single most informative NEXT "
     "question. The next question MUST be derived from the candidate's CURRENT answer "
     "and your evaluation of it — never a generic question from a fixed list when "
-    "answer-specific information is available. Priority order:\n"
+    "answer-specific information is available. Identify the strongest claim, gap, "
+    "misconception, decision, or contradiction in the latest answer before considering "
+    "the planned question list. Priority order:\n"
     "1. A critical misunderstanding revealed in the current answer -> clarify/probe it.\n"
     "2. A specific claim in the current answer that should be verified -> verify it.\n"
     "3. An important concept missing from the current answer -> probe it.\n"
     "4. Something correctly demonstrated -> go deeper (application, reasoning, "
     "trade-offs, edge cases, implementation verification).\n"
-    "5. A competency not yet tested in this interview -> cover it.\n"
+    "5. A competency not yet tested in this interview -> cover it only after the "
+    "latest answer has no credible claim or gap worth probing.\n"
     "Rules for next_question: 1-2 sentences, one primary concept, answerable in "
     "1-2 minutes, speak-ready (no preamble), reference specific answer content "
     "(project names, technologies, claims) rather than generic definitions. "
     "Strong answers earn HARDER questions (fundamentals->application->reasoning->"
-    "trade-offs); weak answers earn ONE targeted probe isolating the gap.\n\n"
+    "trade-offs->failure modes->alternatives->production scenarios); weak answers "
+    "earn ONE concrete probe isolating the gap. Do not ask 'can you explain more?', "
+    "or generic benefits/challenges/importance questions.\n\n"
     "Return JSON ONLY with this exact shape:\n"
     "{\n"
     '  "technical_correctness": 0.0-1.0,\n'
@@ -889,7 +894,10 @@ def decide_next_action(
             or evaluation.get("contradiction", 0) > 0.55
         )
         confident = evaluation.get("confidence", 0) >= 0.40
-        has_question = bool(str(evaluation.get("suggested_follow_up") or "").strip())
+        has_question = bool(
+            str(evaluation.get("suggested_follow_up") or "").strip()
+            or has_valid_adaptive_question
+        )
         if (
             (weak or has_valid_adaptive_question)
             and confident
@@ -963,12 +971,23 @@ async def generate_follow_up_question(
                 return fu[:600]
     except Exception:
         logger.debug("Follow-up generation failed, using fallback")
-    # Fallback: derive from evaluation dimensions
+    # Fallback: keep the question grounded in the actual answer. This path is
+    # used only when the evaluator could not supply a question of its own.
+    answer_excerpt = re.sub(r"\s+", " ", transcript.strip()).strip(" .?!")[:140]
+    demonstrated = next((str(x).strip() for x in evaluation.get("demonstrated", []) if str(x).strip()), "")
+    missing = next((str(x).strip() for x in evaluation.get("missing", []) if str(x).strip()), "")
+    misconceptions = next((str(x).strip() for x in evaluation.get("misconceptions", []) if str(x).strip()), "")
+    if misconceptions:
+        return f"You said {answer_excerpt!r}. What assumption there would you revisit, and what would happen in a concrete failure case?"
+    if missing:
+        return f"You mentioned {demonstrated or answer_excerpt!r}. How would you implement the missing piece—{missing}—in this project?"
+    if answer_excerpt:
+        return f"You said {answer_excerpt!r}. What trade-off or edge case did that create in your implementation?"
     if evaluation.get("technical_correctness", 1) < 0.50:
-        return f"Can you walk through the core technical details of your approach to {question.get('skill', 'this topic')} more concretely?"
+        return f"What concrete implementation detail supports your answer about {question.get('skill', 'this topic')}?"
     if evaluation.get("depth", 1) < 0.50:
-        return f"What deeper trade-offs or alternatives did you consider when making your decision?"
-    return f"Can you provide a specific example that illustrates the point you just made?"
+        return "Which trade-off did you make, and what alternative did you reject?"
+    return "What concrete implementation detail would you verify next?"
 
 
 # ---------------------------------------------------------------------------
@@ -1008,6 +1027,19 @@ def _is_duplicate_question(candidate: str, prior_prompts: List[str]) -> bool:
             if overlap >= 0.80:
                 return True
     return False
+
+
+def _is_generic_adaptive_question(candidate: str) -> bool:
+    """Reject filler probes that do not challenge answer-specific content."""
+    norm = _normalize_question_text(candidate)
+    generic = (
+        "can you explain more",
+        "what are the benefits",
+        "what are the challenges",
+        "why is this important",
+        "can you tell me more",
+    )
+    return any(norm == phrase or norm.startswith(phrase + " ") for phrase in generic)
 
 
 def summarize_adaptive_state(
@@ -1133,6 +1165,8 @@ def validate_next_question(
     if not (ADAPTIVE_MIN_QUESTION_CHARS <= len(text) <= ADAPTIVE_MAX_QUESTION_CHARS):
         return None
     if contains_injection_markers(text):
+        return None
+    if _is_generic_adaptive_question(text):
         return None
     if _is_duplicate_question(text, prior_prompts):
         return None

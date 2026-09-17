@@ -712,3 +712,74 @@ def test_follow_up_plan_persisted_to_db():
     saved_plan = update_payload["plan"]
     assert len(saved_plan["questions"]) == 2
     assert saved_plan["questions"][1]["_is_follow_up"] is True
+
+
+# ===========================================================================
+# 8. Answer-grounded counter-question quality
+# ===========================================================================
+
+@pytest.mark.parametrize("evaluation, expected", [
+    ({"next_question": "You mentioned Redis caching. How did you choose the TTL and handle stale data?",
+      "next_question_reason": "deepen the implementation and test an edge case",
+      "question_type": "scenario", "target_competency": "debugging"}, "Redis"),
+    ({"next_question": "You said the service was scalable. Which concrete service boundary made that possible?",
+      "next_question_reason": "challenge an unsupported claim",
+      "question_type": "verify", "target_competency": "debugging"}, "scalable"),
+    ({"next_question": "You used FastAPI and PostgreSQL. Walk through one request from the API to the database.",
+      "next_question_reason": "verify project implementation depth",
+      "question_type": "probe", "target_competency": "debugging"}, "FastAPI"),
+    ({"next_question": "Earlier you said no user data was stored, but now you mention preferences in PostgreSQL. What is persisted?",
+      "next_question_reason": "resolve a contradiction in prior answers",
+      "question_type": "clarify", "target_competency": "debugging"}, "Earlier"),
+])
+def test_answer_grounded_counter_questions_are_specific(evaluation, expected):
+    evaluation = _make_evaluation(evaluation)
+    competencies = [{"id": "debugging", "label": "Debugging"}]
+    result = iv.validate_next_question(evaluation, competencies, [_make_question()["prompt"]])
+    assert result is not None
+    assert expected.lower() in result["text"].lower()
+    assert result["reason"]
+
+
+def test_generic_adaptive_question_is_rejected_and_prior_question_is_not_repeated():
+    generic = _make_evaluation({"next_question": "Can you explain more about this?"})
+    competencies = [{"id": "debugging", "label": "Debugging"}]
+    prior = [_make_question()["prompt"]]
+    assert iv.validate_next_question(generic, competencies, prior) is None
+
+    repeated = _make_evaluation({"next_question": _make_question()["prompt"]})
+    assert iv.validate_next_question(repeated, competencies, prior) is None
+
+
+def test_valid_adaptive_question_controls_action_without_legacy_suggestion():
+    evaluation = _make_evaluation({
+        "follow_up_needed": False,
+        "suggested_follow_up": "",
+        "next_question": "You mentioned JWT. What prevents replay of a stolen valid token?",
+        "confidence": 0.9,
+    })
+    assert iv.decide_next_action(
+        evaluation, current_index=3, total_planned=4, follow_ups_used=0,
+        questions_answered=4, has_valid_adaptive_question=True,
+    ) == "follow_up"
+
+
+def test_deterministic_fallback_references_answer_and_missing_depth():
+    evaluation = _make_evaluation({
+        "technical_correctness": 0.3,
+        "depth": 0.2,
+        "suggested_follow_up": "",
+        "missing": ["cache invalidation"],
+        "demonstrated": ["Redis"],
+    })
+    class _FallbackLLM:
+        async def ainvoke(self, _):
+            raise RuntimeError("API error")
+
+    question = asyncio.run(iv.generate_follow_up_question(
+        _make_question(), "We used Redis for performance.", evaluation,
+        _llm=_FallbackLLM(),
+    ))
+    assert question is not None
+    assert "Redis" in question
+    assert "cache invalidation" in question
