@@ -20,19 +20,18 @@ class Settings(BaseSettings):
     # NVIDIA NIM interview evaluator (primary).
     nvidia_api_key: str | None = None
     nvidia_model: str = "nvidia/nemotron-3-nano-omni-30b-a3b-reasoning"
-    # Groq interview fallback (used only when NVIDIA fails).
+    # Groq is retained for Whisper STT; it is not an interview reasoning fallback.
     groq_api_key: str | None = None
     groq_model: str = "llama-3.3-70b-versatile"
     groq_stt_model: str = "whisper-large-v3-turbo"
     # Interview LLM resilience budgets (seconds).
     interview_llm_timeout_seconds: int = 20
     interview_llm_total_budget_seconds: int = 75
-    # Local LLM for interview (user's PC). Set to http://localhost:1234/api/v1/chat per user request.
-    # When this is set, interview evaluation uses the local endpoint instead of Gemini/Groq.
-    # RAG/embedding pipeline is intentionally NOT affected by this setting.
-    local_llm_url: str = "http://localhost:1234/api/v1/chat"
-    local_llm_model: str = "local-model"
-    local_llm_api_key: str | None = None
+    # OpenRouter is the sole live interview reasoning provider. Its models
+    # array performs model fallback server-side; it does not affect TTS/RAG.
+    openrouter_api_key: str | None = None
+    openrouter_primary_model: str = "deepseek/deepseek-v3.2"
+    openrouter_fallback_models: str = "google/gemini-2.5-flash,meta-llama/llama-3.3-70b-instruct"
     # Interview TTS — NVIDIA-hosted voice (TEXT -> SPEECH only).
     # NVIDIA_API_KEY is backend-only and never reaches the frontend.
     tts_provider: str = "nvidia"
@@ -60,8 +59,8 @@ class Settings(BaseSettings):
 
     def model_post_init(self, __context):  # type: ignore
         # Treat placeholder values from .env.example as not set
-        placeholders = {"your-anon-key", "your-service-role-key", "your-jwt-secret", "YOUR_JWT_SECRET", "your-project.supabase.co", "your-embedding-key", "your-google-api-key", "your-nvidia-api-key", "your-groq-api-key"}
-        for field in ["supabase_url", "supabase_anon_key", "supabase_service_role_key", "supabase_jwt_secret", "embedding_api_key", "google_api_key", "nvidia_api_key", "groq_api_key", "github_token"]:
+        placeholders = {"your-anon-key", "your-service-role-key", "your-jwt-secret", "YOUR_JWT_SECRET", "your-project.supabase.co", "your-embedding-key", "your-google-api-key", "your-nvidia-api-key", "your-groq-api-key", "your-openrouter-api-key"}
+        for field in ["supabase_url", "supabase_anon_key", "supabase_service_role_key", "supabase_jwt_secret", "embedding_api_key", "google_api_key", "nvidia_api_key", "groq_api_key", "openrouter_api_key", "github_token"]:
             val = getattr(self, field)
             if val and any(ph in val for ph in placeholders):
                 setattr(self, field, None)

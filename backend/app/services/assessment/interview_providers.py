@@ -5,11 +5,13 @@ The interview service talks to providers only through this module::
     USER ANSWER -> run_evaluation_chain() -> raw JSON text (+observability)
         -> interview.py parses/validates -> deterministic recovery if needed
 
-Current mode (per user request):
-  * LOCAL LLM at http://localhost:1234/api/v1/chat is the ONLY active provider.
-  * GEMINI and GROQ code is preserved below but COMMENTED OUT — not executed.
+Current mode:
+  * OpenRouter is the only active interview reasoning provider.
+  * OpenRouter sends the primary model plus ordered model fallbacks in one
+    request; if the request fails, INAURA uses deterministic recovery.
   * RAG / embedding pipeline (Gemini embeddings) is intentionally untouched.
-  * If local LLM fails or is unreachable: caller falls back to
+  * NVIDIA remains TTS-only and Groq remains STT-only.
+  * If OpenRouter fails or is unreachable: caller falls back to
     deterministic recovery. Total time is bounded by per-attempt timeouts
     plus an overall deadline.
   * Timeouts are enforced with asyncio.wait_for so they never depend on
@@ -179,6 +181,7 @@ def log_llm_event(
     session_id: Optional[str],
     question_id: Optional[str],
     provider: str,
+    model: Optional[str] = None,
     latency_ms: float,
     success: bool,
     failure_class: Optional[str] = None,
@@ -189,6 +192,7 @@ def log_llm_event(
         "session_id": session_id,
         "question_id": question_id,
         "provider": provider,
+        "model": model,
         "latency_ms": round(latency_ms, 1),
         "success": success,
         "failure_class": failure_class,
@@ -454,47 +458,68 @@ def make_groq_invoker(settings: Any) -> Tuple[str, InvokeFn]:
     return PROVIDER_GROQ, invoke
 
 
-def provider_chain(settings: Any) -> List[Tuple[str, InvokeFn]]:
-    """Live reasoning order: Local LLM only (Gemini/Groq commented out in production).
+PROVIDER_OPENROUTER = "openrouter"
 
-    Gemini/Groq entries below are COMMENTED OUT per user request to use
-    http://localhost:1234/api/v1/chat. They are kept for easy rollback and
-    for existing tests that mock them (when local LLM is not configured in
-    the test MagicMock, the chain falls back to gemini/groq so tests pass).
-    RAG / embeddings remain on Gemini and are NOT affected.
-    """
+
+def make_openrouter_invoker(settings: Any) -> Tuple[str, InvokeFn]:
+    """Build one OpenRouter request with server-side ordered model fallback."""
+    import httpx
+
+    api_key = _require_key(
+        getattr(settings, "openrouter_api_key", None),
+        "OPENROUTER_API_KEY", PROVIDER_OPENROUTER,
+    )
+    primary = (getattr(settings, "openrouter_primary_model", None)
+               or "deepseek/deepseek-v3.2").strip()
+    raw_fallbacks = getattr(settings, "openrouter_fallback_models", "") or ""
+    fallbacks = [model.strip() for model in str(raw_fallbacks).split(",") if model.strip()]
+    fallbacks = [model for model in fallbacks if model != primary]
+
+    async def invoke(messages: List[Dict[str, str]]) -> str:
+        payload = {
+            "model": primary,
+            "models": fallbacks,
+            "messages": messages,
+            "temperature": 0.2,
+            "max_tokens": 4096,
+            "stream": False,
+        }
+        headers = {
+            "Authorization": f"Bearer {api_key}",
+            "Content-Type": "application/json",
+        }
+        async with httpx.AsyncClient(timeout=30) as client:
+            response = await client.post(
+                "https://openrouter.ai/api/v1/chat/completions",
+                json=payload,
+                headers=headers,
+            )
+        if response.status_code != 200:
+            raise RuntimeError(f"OpenRouter error {response.status_code}: {response.text[:500]}")
+        data = response.json()
+        invoke.last_model = str(data.get("model") or primary) if isinstance(data, dict) else primary
+        choices = data.get("choices") if isinstance(data, dict) else None
+        if not isinstance(choices, list) or not choices:
+            raise RuntimeError("OpenRouter returned no choices")
+        message = choices[0].get("message") if isinstance(choices[0], dict) else None
+        content = message.get("content") if isinstance(message, dict) else None
+        if not isinstance(content, str) or not content.strip():
+            raise RuntimeError("OpenRouter returned empty content")
+        return content
+
+    invoke.__name__ = "openrouter_invoke"
+    invoke.last_model = primary
+    invoke.fallback_models = tuple(fallbacks)
+    return PROVIDER_OPENROUTER, invoke
+
+
+def provider_chain(settings: Any) -> List[Tuple[str, InvokeFn]]:
+    """Live reasoning uses one OpenRouter request with server-side fallbacks."""
     chain: List[Tuple[str, InvokeFn]] = []
-    # --- LOCAL LLM (ACTIVE) -------------------------------------------------
     try:
-        chain.append(make_local_llm_invoker(settings))
+        chain.append(make_openrouter_invoker(settings))
     except HTTPException:
         pass
-    # --- GEMINI (COMMENTED OUT — preserved for future rollback) -------------
-    # NOTE: This block is intentionally commented. Uncomment to re-enable.
-    # try:
-    #     chain.append(make_gemini_invoker(settings))
-    # except HTTPException:
-    #     pass
-    # --- GROQ FALLBACK (COMMENTED OUT — preserved for future rollback) ------
-    # NOTE: This block is intentionally commented. Uncomment to re-enable.
-    # try:
-    #     chain.append(make_groq_invoker(settings))
-    # except HTTPException:
-    #     pass
-
-    # Fallback for tests / when local LLM is not configured (e.g., MagicMock
-    # in test suite without local_llm_url string). This does NOT affect
-    # production where local_llm_url defaults to http://localhost:1234/api/v1/chat
-    # and make_local_llm_invoker succeeds, so gemini/groq are never reached.
-    if not chain:
-        try:
-            chain.append(make_gemini_invoker(settings))
-        except HTTPException:
-            pass
-        try:
-            chain.append(make_groq_invoker(settings))
-        except HTTPException:
-            pass
     return chain
 
 
@@ -527,8 +552,8 @@ async def run_evaluation_chain(
     if not chain:
         raise HTTPException(
             status_code=503,
-            detail="AI interview grading is not configured — set LOCAL_LLM_URL "
-                   "(e.g., http://localhost:1234/api/v1/chat). "
+            detail="AI interview grading is not configured — set OPENROUTER_API_KEY "
+                   "and configure OPENROUTER_PRIMARY_MODEL / OPENROUTER_FALLBACK_MODELS. "
                    "Your answers are saved and will be graded once grading is configured.",
         )
     attempts: List[ProviderAttempt] = []
@@ -549,6 +574,7 @@ async def run_evaluation_chain(
                 if accept_text is not None and not accept_text(text):
                     attempts.append(ProviderAttempt(name, latency, False, "malformed_output", None, False))
                     log_llm_event(session_id=session_id, question_id=question_id, provider=name,
+                                  model=getattr(invoke, "last_model", None),
                                   latency_ms=latency, success=False,
                                   failure_class="malformed_output", retry_count=0,
                                   fallback_used=position > 0)
@@ -556,6 +582,7 @@ async def run_evaluation_chain(
                     break
                 attempts.append(ProviderAttempt(name, latency, True, None, None, retries_used > 0))
                 log_llm_event(session_id=session_id, question_id=question_id, provider=name,
+                              model=getattr(invoke, "last_model", None),
                               latency_ms=latency, success=True,
                               retry_count=len(attempts) - 1, fallback_used=position > 0)
                 return ChainResult(text=text, provider_used=name, attempts=attempts,
@@ -567,6 +594,7 @@ async def run_evaluation_chain(
                 failure_class, status, retry_after = classify_provider_error(exc)
                 last_failure = failure_class
                 log_llm_event(session_id=session_id, question_id=question_id, provider=name,
+                              model=getattr(invoke, "last_model", None),
                               latency_ms=latency, success=False, failure_class=failure_class,
                               retry_count=len(attempts), fallback_used=position > 0)
                 attempts.append(ProviderAttempt(name, latency, False, failure_class, status, retries_used > 0))
