@@ -27,11 +27,12 @@ class Settings(BaseSettings):
     # Interview LLM resilience budgets (seconds).
     interview_llm_timeout_seconds: int = 20
     interview_llm_total_budget_seconds: int = 75
-    # Local LLM for interview (user's PC). Set to http://localhost:1234/api/v1/chat per user request.
+    # Local LLM for interview (user's PC). LM Studio default is http://localhost:1234/v1/chat/completions
+    # Legacy path http://localhost:1234/api/v1/chat also supported (auto-adapts payload: messages -> input).
     # When this is set, interview evaluation uses the local endpoint instead of Gemini/Groq.
     # RAG/embedding pipeline is intentionally NOT affected by this setting.
-    local_llm_url: str = "http://localhost:1234/api/v1/chat"
-    local_llm_model: str = "local-model"
+    local_llm_url: str = "http://localhost:1234/v1/chat/completions"
+    local_llm_model: str = "ling-3.0-tiny"
     local_llm_api_key: str | None = None
     # Interview TTS — NVIDIA-hosted voice (TEXT -> SPEECH only).
     # NVIDIA_API_KEY is backend-only and never reaches the frontend.
