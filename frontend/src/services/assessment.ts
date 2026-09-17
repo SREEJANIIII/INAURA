@@ -337,6 +337,10 @@ export type AnswerInterviewEvaluation = {
   brief_explanation: string;
   follow_up_needed: boolean;
   suggested_follow_up: string;
+  next_question?: string;
+  next_question_reason?: string;
+  target_competency?: string;
+  question_type?: string;
 };
 
 export type AnswerInterviewQuestion = {

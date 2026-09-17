@@ -112,3 +112,136 @@ export function fetchTtsAudio(
 export function clearTtsInFlight(): void {
   inFlight.clear();
 }
+
+// ---------------------------------------------------------------------------
+// Playback lifecycle (PARTs 15-17): exactly ONE completion signal —
+// audio.onended. No timers, no guessed durations, no render-driven stops.
+// ---------------------------------------------------------------------------
+
+export type AudioLike = {
+  play(): Promise<void> | void;
+  pause(): void;
+  src: string;
+  onended: (() => void) | null;
+  onerror: (() => void) | null;
+};
+
+export type AudioFactory = (url: string) => AudioLike;
+
+export type ObjectUrlFactory = {
+  create(blob: Blob): string;
+  revoke(url: string): void;
+};
+
+const defaultUrls: ObjectUrlFactory = {
+  create: (blob) => URL.createObjectURL(blob),
+  revoke: (url) => URL.revokeObjectURL(url),
+};
+
+/**
+ * Stable playback controller. One generation per play() call: only the
+ * current generation's events can settle its promise or touch shared refs.
+ * stop() resolves (never rejects, never hangs) the active playback and
+ * tears it down. Object URLs are revoked only after their playback ends
+ * or is superseded — never mid-playback.
+ */
+export class SpeechAudioPlayer {
+  private generation = 0;
+  private audio: AudioLike | null = null;
+  private url: string | null = null;
+  private activeResolve: (() => void) | null = null;
+  private readonly createAudio: AudioFactory;
+  private readonly urls: ObjectUrlFactory;
+
+  constructor(createAudio: AudioFactory, urls: ObjectUrlFactory = defaultUrls) {
+    this.createAudio = createAudio;
+    this.urls = urls;
+  }
+
+  play(blob: Blob): Promise<void> {
+    // A genuinely new playback supersedes any current one.
+    this.stop();
+    const gen = ++this.generation;
+    return new Promise<void>((resolve, reject) => {
+      this.activeResolve = resolve;
+      let audio: AudioLike;
+      try {
+        const url = this.urls.create(blob);
+        this.url = url;
+        audio = this.createAudio(url);
+      } catch {
+        this.settle(gen, null);
+        reject(new Error("AI voice playback failed."));
+        return;
+      }
+      this.audio = audio;
+      audio.onended = () => {
+        if (this.settle(gen, audio)) resolve();
+      };
+      audio.onerror = () => {
+        if (this.settle(gen, audio)) reject(new Error("AI voice playback failed."));
+      };
+      try {
+        const started = audio.play();
+        if (started && typeof (started as Promise<void>).catch === "function") {
+          (started as Promise<void>).catch((error: unknown) => {
+            if (this.settle(gen, audio)) {
+              reject(error instanceof Error ? error : new Error("AI voice playback failed."));
+            }
+          });
+        }
+      } catch (error: unknown) {
+        if (this.settle(gen, audio)) {
+          reject(error instanceof Error ? error : new Error("AI voice playback failed."));
+        }
+      }
+    });
+  }
+
+  stop(): void {
+    this.generation += 1;
+    const resolve = this.activeResolve;
+    this.activeResolve = null;
+    this.teardown();
+    // Settle superseded playback silently so awaiting callers continue into
+    // their lifecycle guards instead of hanging forever.
+    if (resolve) {
+      try {
+        resolve();
+      } catch {
+        /* ignore */
+      }
+    }
+  }
+
+  /** Detach + pause + revoke. Only the owning generation may settle. */
+  private settle(gen: number, audio: AudioLike | null): boolean {
+    if (gen !== this.generation) return false;
+    if (audio !== null && this.audio !== null && this.audio !== audio) return false;
+    this.activeResolve = null;
+    this.teardown();
+    return true;
+  }
+
+  private teardown(): void {
+    const audio = this.audio;
+    this.audio = null;
+    if (audio) {
+      audio.onended = null;
+      audio.onerror = null;
+      try {
+        audio.pause();
+      } catch {
+        /* ignore */
+      }
+    }
+    if (this.url !== null) {
+      try {
+        this.urls.revoke(this.url);
+      } catch {
+        /* ignore */
+      }
+      this.url = null;
+    }
+  }
+}

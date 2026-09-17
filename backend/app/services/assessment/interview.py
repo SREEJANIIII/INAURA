@@ -504,11 +504,26 @@ def prior_summary_text(snapshot: List[Dict[str, Any]], skill: str) -> str:
 # Per-answer Gemini evaluation (adaptive interview)
 # ---------------------------------------------------------------------------
 
+def _str_list(value: Any, limit: int = 5, each: int = 80) -> list:
+    """Bounded list of short strings from model output (tolerant of junk)."""
+    out: list = []
+    if isinstance(value, list):
+        for item in value:
+            text = str(item or "").strip()
+            if text:
+                out.append(text[:each])
+            if len(out) >= limit:
+                break
+    return out
+
+
 def parse_answer_evaluation(raw_text: str, question_id: str) -> Dict[str, Any]:
     """Strict-parse Gemini JSON into structured per-answer evaluation.
 
-    Returns a validated dict with numeric scores and optional follow-up.
-    Raises ValueError on invalid output — never fabricates scores.
+    Returns a validated dict with numeric scores, an optional follow-up, and
+    an optional adaptive next-question decision — all produced by the SAME
+    model call. Raises ValueError on invalid output — never fabricates scores.
+    New adaptive fields default to empty when absent (backward compatible).
     """
     blob = _extract_json_object(raw_text or "")
     if not blob:
@@ -519,6 +534,10 @@ def parse_answer_evaluation(raw_text: str, question_id: str) -> Dict[str, Any]:
 
     def _score(key: str, default: float = 0.0) -> float:
         return _clamp01(data.get(key, default)) or default
+
+    question_type = str(data.get("question_type") or "").strip().lower()
+    if question_type not in ("probe", "deepen", "verify", "scenario", "new_competency", "clarify"):
+        question_type = ""
 
     return {
         "question_id": question_id,
@@ -533,6 +552,13 @@ def parse_answer_evaluation(raw_text: str, question_id: str) -> Dict[str, Any]:
         "brief_explanation": str(data.get("brief_explanation") or data.get("explanation") or "")[:500],
         "follow_up_needed": bool(data.get("follow_up_needed", False)),
         "suggested_follow_up": str(data.get("suggested_follow_up") or "")[:600],
+        "next_question": str(data.get("next_question") or "")[:600],
+        "next_question_reason": str(data.get("next_question_reason") or "")[:300],
+        "target_competency": str(data.get("target_competency") or "")[:80],
+        "question_type": question_type,
+        "demonstrated": _str_list(data.get("demonstrated")),
+        "missing": _str_list(data.get("missing")),
+        "misconceptions": _str_list(data.get("misconceptions"), limit=3),
     }
 
 
@@ -544,6 +570,21 @@ EVAL_SYSTEM_PROMPT = (
     "Score each dimension 0.0 to 1.0. Set follow_up_needed=true when the answer is "
     "vague, shallow, contradictory, or when one targeted probe would reveal deeper "
     "understanding. suggested_follow_up must reference specific content from the answer.\n\n"
+    "In the SAME response you must also decide the single most informative NEXT "
+    "question. The next question MUST be derived from the candidate's CURRENT answer "
+    "and your evaluation of it — never a generic question from a fixed list when "
+    "answer-specific information is available. Priority order:\n"
+    "1. A critical misunderstanding revealed in the current answer -> clarify/probe it.\n"
+    "2. A specific claim in the current answer that should be verified -> verify it.\n"
+    "3. An important concept missing from the current answer -> probe it.\n"
+    "4. Something correctly demonstrated -> go deeper (application, reasoning, "
+    "trade-offs, edge cases, implementation verification).\n"
+    "5. A competency not yet tested in this interview -> cover it.\n"
+    "Rules for next_question: 1-2 sentences, one primary concept, answerable in "
+    "1-2 minutes, speak-ready (no preamble), reference specific answer content "
+    "(project names, technologies, claims) rather than generic definitions. "
+    "Strong answers earn HARDER questions (fundamentals->application->reasoning->"
+    "trade-offs); weak answers earn ONE targeted probe isolating the gap.\n\n"
     "Return JSON ONLY with this exact shape:\n"
     "{\n"
     '  "technical_correctness": 0.0-1.0,\n'
@@ -556,7 +597,14 @@ EVAL_SYSTEM_PROMPT = (
     '  "confidence": 0.0-1.0,\n'
     '  "brief_explanation": "2-3 sentences max",\n'
     '  "follow_up_needed": true/false,\n'
-    '  "suggested_follow_up": "targeted question or empty string"\n'
+    '  "suggested_follow_up": "targeted question or empty string",\n'
+    '  "next_question": "the single most informative next question",\n'
+    '  "next_question_reason": "one sentence: why this question now",\n'
+    '  "target_competency": "competency id from the list, or empty string",\n'
+    '  "question_type": "probe|deepen|verify|scenario|new_competency|clarify",\n'
+    '  "demonstrated": ["concepts clearly shown, max 5"],\n'
+    '  "missing": ["important concepts absent, max 5"],\n'
+    '  "misconceptions": ["suspected misunderstandings, max 3"]\n'
     "}"
 )
 
@@ -569,8 +617,13 @@ async def evaluate_answer_llm(
     _llm: Any = None,
     session_id: Optional[str] = None,
     question_id: Optional[str] = None,
+    adaptive_context: str = "",
 ) -> Dict[str, Any]:
     """Evaluate one interview answer via Gemini.
+
+    ONE model call returns scores AND the adaptive next-question decision.
+    ``adaptive_context`` carries bounded recent history, demonstrated/weak
+    concepts, tested competencies, projects, and remaining budget.
 
     Returns structured evaluation dict. Raises HTTPException on failure —
     callers must handle 502/503 gracefully without fabricating scores.
@@ -586,6 +639,8 @@ async def evaluate_answer_llm(
         f"Question: {question.get('prompt', '')}\n\n"
         f"Candidate answer:\n{transcript[:4000]}"
     )
+    if adaptive_context and adaptive_context.strip():
+        user_prompt += f"\n\nINTERVIEW CONTEXT (bounded, most recent last):\n{adaptive_context.strip()[:2500]}"
     started = perf_counter()
     try:
         if hasattr(llm, "ainvoke"):
@@ -724,6 +779,219 @@ async def generate_follow_up_question(
     if evaluation.get("depth", 1) < 0.50:
         return f"What deeper trade-offs or alternatives did you consider when making your decision?"
     return f"Can you provide a specific example that illustrates the point you just made?"
+
+
+# ---------------------------------------------------------------------------
+# Answer-adaptive next-question generation (single Gemini call)
+# ---------------------------------------------------------------------------
+
+# Detailed recent turns kept in the adaptive context; older turns collapse
+# to compact demonstrated/weak/tested lists. All bounds keep prompts small.
+ADAPTIVE_HISTORY_TURNS = 3
+ADAPTIVE_MAX_INSERTS = INTERVIEW_MAX_FOLLOW_UPS
+ADAPTIVE_MAX_QUESTION_CHARS = 600
+ADAPTIVE_MIN_QUESTION_CHARS = 20
+
+
+def _normalize_question_text(text: str) -> str:
+    cleaned = re.sub(r"[^a-z0-9\s]", " ", str(text or "").lower())
+    return re.sub(r"\s+", " ", cleaned).strip()
+
+
+def _is_duplicate_question(candidate: str, prior_prompts: List[str]) -> bool:
+    """Reject identical, near-duplicate, or reworded prior questions."""
+    norm = _normalize_question_text(candidate)
+    if not norm:
+        return True
+    cand_words = set(norm.split())
+    for prior in prior_prompts or []:
+        other = _normalize_question_text(prior)
+        if not other:
+            continue
+        if norm == other:
+            return True
+        if len(norm) >= 40 and (norm in other or other in norm):
+            return True
+        other_words = set(other.split())
+        if len(cand_words) >= 5 and len(other_words) >= 5:
+            overlap = len(cand_words & other_words) / max(len(cand_words), len(other_words))
+            if overlap >= 0.80:
+                return True
+    return False
+
+
+def summarize_adaptive_state(
+    transcript: List[Dict[str, Any]],
+    evaluation_results: List[Dict[str, Any]],
+) -> Dict[str, List[str]]:
+    """Session-level adaptive state derived from stored turns (bounded).
+
+    No schema migration: computed on the fly from transcript[] and
+    evaluation_results[]. Purpose: demonstrated -> go deeper, weak -> probe,
+    untested -> cover, contradiction -> clarify, specific claim -> verify.
+    """
+    demonstrated: List[str] = []
+    weak: List[str] = []
+    tested_competencies: List[str] = []
+    misconceptions: List[str] = []
+    questions_asked: List[str] = []
+
+    def _extend_unique(bucket: List[str], items: List[str], limit: int) -> None:
+        for item in items or []:
+            text = str(item or "").strip()
+            if text and text.lower() not in {b.lower() for b in bucket}:
+                bucket.append(text[:80])
+            if len(bucket) >= limit:
+                break
+
+    eval_by_q: Dict[str, Dict[str, Any]] = {}
+    for entry in evaluation_results or []:
+        if isinstance(entry, dict) and entry.get("question_id"):
+            ev = entry.get("evaluation")
+            if isinstance(ev, dict):
+                eval_by_q[str(entry["question_id"])] = ev
+
+    for turn in transcript or []:
+        if not isinstance(turn, dict):
+            continue
+        prompt = str(turn.get("prompt") or "")
+        if prompt:
+            questions_asked.append(prompt[:200])
+        comp = str(turn.get("competency") or "").replace("_followup", "")
+        if comp and comp not in tested_competencies:
+            tested_competencies.append(comp)
+        ev = eval_by_q.get(str(turn.get("question_id") or ""))
+        if not ev:
+            continue
+        if isinstance(ev.get("demonstrated"), list):
+            _extend_unique(demonstrated, [str(x) for x in ev["demonstrated"]], 8)
+        if isinstance(ev.get("missing"), list):
+            _extend_unique(weak, [str(x) for x in ev["missing"]], 8)
+        if isinstance(ev.get("misconceptions"), list):
+            _extend_unique(misconceptions, [str(x) for x in ev["misconceptions"]], 5)
+
+    return {
+        "demonstrated": demonstrated[:8],
+        "weak": weak[:8],
+        "tested_competencies": tested_competencies[:10],
+        "misconceptions": misconceptions[:5],
+        "questions_asked": questions_asked[-8:],
+    }
+
+
+def build_adaptive_context(
+    canonical: str,
+    transcript: List[Dict[str, Any]],
+    evaluation_results: List[Dict[str, Any]],
+    competencies: List[Dict[str, str]],
+    related_projects: List[str],
+    questions_remaining: int,
+) -> str:
+    """Compact bounded context so later questions use earlier answers."""
+    state = summarize_adaptive_state(transcript, evaluation_results)
+    lines: List[str] = []
+    comp_ids = [str(c.get("id") or "") for c in competencies or [] if c.get("id")]
+    untested = [c for c in comp_ids if c not in state["tested_competencies"]]
+    if related_projects:
+        lines.append(f"Related projects: {', '.join(related_projects[:3])}")
+    if state["demonstrated"]:
+        lines.append(f"Already demonstrated: {'; '.join(state['demonstrated'][:6])}")
+    if state["weak"]:
+        lines.append(f"Still weak/missing: {'; '.join(state['weak'][:6])}")
+    if state["misconceptions"]:
+        lines.append(f"Suspected misconceptions: {'; '.join(state['misconceptions'][:3])}")
+    if untested:
+        lines.append(f"Competencies not yet tested: {', '.join(untested[:5])}")
+    lines.append(f"Questions remaining (incl. this turn): {max(0, questions_remaining)}")
+
+    # Latest turns in detail; older turns already compacted above.
+    detailed = [t for t in (transcript or []) if isinstance(t, dict)][-ADAPTIVE_HISTORY_TURNS:]
+    eval_by_q: Dict[str, Dict[str, Any]] = {}
+    for entry in evaluation_results or []:
+        if isinstance(entry, dict) and isinstance(entry.get("evaluation"), dict):
+            eval_by_q[str(entry.get("question_id") or "")] = entry["evaluation"]
+    for turn in detailed:
+        qid = str(turn.get("question_id") or "")
+        lines.append(f"Q: {str(turn.get('prompt') or '')[:250]}")
+        lines.append(f"A: {str(turn.get('answer') or '')[:250]}")
+        ev = eval_by_q.get(qid)
+        if ev:
+            lines.append(
+                "Eval: correctness=%.2f depth=%.2f reasoning=%.2f contradiction=%.2f; %s" % (
+                    float(ev.get("technical_correctness") or 0),
+                    float(ev.get("depth") or 0),
+                    float(ev.get("reasoning") or 0),
+                    float(ev.get("contradiction") or 0),
+                    str(ev.get("brief_explanation") or "")[:200],
+                )
+            )
+    text = "RECENT INTERVIEW HISTORY (most recent last):\n" + "\n".join(lines)
+    return text[:2500]
+
+
+def validate_next_question(
+    evaluation: Dict[str, Any],
+    competencies: List[Dict[str, str]],
+    prior_prompts: List[str],
+) -> Optional[Dict[str, str]]:
+    """Validate the model's answer-derived next question.
+
+    Returns {text, competency, reason, question_type} or None when the
+    deterministic fallback must be used instead.
+    """
+    text = str(evaluation.get("next_question") or "").strip()
+    if not (ADAPTIVE_MIN_QUESTION_CHARS <= len(text) <= ADAPTIVE_MAX_QUESTION_CHARS):
+        return None
+    if _is_duplicate_question(text, prior_prompts):
+        return None
+    comp_ids = {str(c.get("id") or "") for c in competencies or [] if c.get("id")}
+    target = str(evaluation.get("target_competency") or "").strip()
+    if target not in comp_ids:
+        target = ""
+    qtype = str(evaluation.get("question_type") or "").strip() or "probe"
+    return {
+        "text": text,
+        "competency": target,
+        "reason": str(evaluation.get("next_question_reason") or "")[:300],
+        "question_type": qtype,
+    }
+
+
+def select_adaptive_insertion(
+    evaluation: Dict[str, Any],
+    questions: List[Dict[str, Any]],
+    current_index: int,
+    competencies: List[Dict[str, str]],
+    current_competency: str = "",
+) -> Optional[Dict[str, Any]]:
+    """Choose the answer-derived next question to splice in, or None.
+
+    Priority (PART 7): the validated model decision wins; the deterministic
+    plan stays as fallback. Bounded by INTERVIEW_TOTAL_BUDGET and
+    ADAPTIVE_MAX_INSERTS so questioning can never recurse unboundedly.
+    """
+    if not isinstance(evaluation, dict):
+        return None
+    if len(questions) >= INTERVIEW_TOTAL_BUDGET:
+        return None
+    adaptive_used = sum(1 for q in questions if isinstance(q, dict) and q.get("_is_adaptive"))
+    if adaptive_used >= ADAPTIVE_MAX_INSERTS:
+        return None
+    prior_prompts = [str(q.get("prompt") or "") for q in questions if isinstance(q, dict)]
+    valid = validate_next_question(evaluation, competencies, prior_prompts)
+    if valid is None:
+        return None
+    competency = valid["competency"] or current_competency
+    return {
+        "id": f"adaptive_{current_index + 1}_{adaptive_used + 1}",
+        "competency": competency,
+        "prompt": valid["text"],
+        "follow_ups": [],
+        "_is_adaptive": True,
+        "_adaptive_reason": valid["reason"],
+        "_adaptive_type": valid["question_type"],
+        "_parent_question_id": questions[current_index].get("id") if 0 <= current_index < len(questions) else None,
+    }
 
 
 # ---------------------------------------------------------------------------
@@ -1045,6 +1313,22 @@ async def _answer_interview_question_locked(
     canonical = normalize_skill(s.get("skill_name") or "") or str(s.get("skill_name") or "")
     prior_text = prior_summary_text(prior_snap, canonical)
 
+    # Compact adaptive context: recent turns + demonstrated/weak/tested state
+    # + projects + remaining budget, so the next question uses this answer
+    # AND all previous answers (bounded; never the full raw transcript).
+    existing_transcript = s.get("transcript") or []
+    existing_evals = s.get("evaluation_results") or []
+    related_names = list((plan.get("related_projects") or [])[:3])
+    evals_with_values = [e for e in existing_evals if isinstance(e, dict) and isinstance(e.get("evaluation"), dict)]
+    adaptive_context = build_adaptive_context(
+        canonical,
+        existing_transcript,
+        existing_evals,
+        competencies,
+        [str(n) for n in related_names if str(n).strip()],
+        max(0, INTERVIEW_TOTAL_BUDGET - len(evals_with_values)),
+    )
+
     # Competency label for the prompt
     comp_label = ""
     for c_ in competencies:
@@ -1072,6 +1356,7 @@ async def _answer_interview_question_locked(
         evaluation = await evaluate_answer_llm(
             eval_input, text, prior_text, competencies, _llm=_llm,
             session_id=session_id, question_id=question_id,
+            adaptive_context=adaptive_context,
         )
     except HTTPException as e:
         if e.status_code in (502, 503):
@@ -1125,9 +1410,20 @@ async def _answer_interview_question_locked(
     answered_count = len([e for e in existing_evals if isinstance(e, dict) and e.get("evaluation") is not None])
     action = decide_next_action(evaluation, current_index, len(questions), follow_ups_used, answered_count + 1)
 
-    # Generate follow-up if needed
+    # Next question: the evaluation's answer-derived question wins whenever
+    # valid (normal path). Legacy suggested-follow-up and the deterministic
+    # plan remain as fallbacks — never a second Gemini call on the hot path.
     follow_up_question = None
-    if action == "follow_up" and evaluation:
+    is_adaptive = False
+    if action != "complete" and evaluation:
+        adaptive = select_adaptive_insertion(
+            evaluation, questions, current_index, competencies,
+            current_competency=str(target_q.get("competency") or ""),
+        )
+        if adaptive is not None:
+            follow_up_question = adaptive
+            is_adaptive = True
+    if follow_up_question is None and action == "follow_up" and evaluation:
         fu_text = await generate_follow_up_question(eval_input, text, evaluation, _llm=_llm)
         if fu_text:
             follow_up_question = {
@@ -1140,6 +1436,9 @@ async def _answer_interview_question_locked(
             }
             # Insert follow-up right after the current question (splice, not append)
             questions.insert(current_index + 1, follow_up_question)
+    if is_adaptive and follow_up_question is not None:
+        # Adaptive splice (same position rule as legacy follow-ups).
+        questions.insert(current_index + 1, follow_up_question)
 
     # Update session state
     new_index = current_index
@@ -1174,7 +1473,10 @@ async def _answer_interview_question_locked(
 
     # Build natural spoken transition for AI interviewer
     spoken_response = None
-    if action == "follow_up" and follow_up_question is not None:
+    if is_adaptive and follow_up_question is not None:
+        # Adaptive questions are generated speak-ready; voice them exactly.
+        spoken_response = follow_up_question.get("prompt", "")
+    elif action == "follow_up" and follow_up_question is not None:
         fu_prompt = follow_up_question.get("prompt", "")
         spoken_response = f"I see. {fu_prompt}"
     elif action == "next" and next_question is not None:
@@ -1196,6 +1498,7 @@ async def _answer_interview_question_locked(
         "completed": completed,
         "answered_count": answered_count,
         "total_questions": len(questions),
+        "is_adaptive": is_adaptive,
         "note": note,
         "failure_category": failure_category,
         "provider_status": provider_status,

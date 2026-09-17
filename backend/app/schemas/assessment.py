@@ -308,6 +308,13 @@ class AnswerInterviewEvaluation(BaseModel):
     brief_explanation: str = ""
     follow_up_needed: bool = False
     suggested_follow_up: str = ""
+    next_question: str = ""
+    next_question_reason: str = ""
+    target_competency: str = ""
+    question_type: str = ""
+    demonstrated: List[str] = []
+    missing: List[str] = []
+    misconceptions: List[str] = []
 
 
 class AnswerInterviewQuestionOut(BaseModel):

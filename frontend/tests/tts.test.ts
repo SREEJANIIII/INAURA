@@ -187,13 +187,13 @@ describe("TTS failure preserves the adaptive interview", () => {
 });
 
 describe("Playback lifecycle guards", () => {
-  it("hook releases audio resources and guards stale responses", async () => {
+  it("hook delegates playback lifecycle to the guarded player", async () => {
     const { readFileSync } = await import("node:fs");
     const src = readFileSync(new URL("../src/hooks/useTextToSpeech.ts", import.meta.url), "utf8");
-    assert.ok(src.includes("revokeObjectURL"));
+    assert.ok(src.includes("SpeechAudioPlayer"));
     assert.ok(src.includes("requestRef"));
-    assert.ok(src.includes("audio.onended"));
-    assert.ok(!src.includes("speechSynthesis"));
+    assert.ok(!src.includes("setTimeout"));
+    // Resource release + stale guards are unit-tested against the player.
   });
 
   it("no interview code calls browser speech synthesis", async () => {
