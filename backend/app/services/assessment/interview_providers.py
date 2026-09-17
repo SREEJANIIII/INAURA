@@ -37,7 +37,8 @@ from fastapi import HTTPException
 
 logger = logging.getLogger("inaura.interview_llm")
 
-PROVIDER_NVIDIA = "nvidia"
+PROVIDER_GEMINI = "gemini"
+PROVIDER_NVIDIA = "nvidia"  # retained for non-live callers/tests; never in the live chain
 PROVIDER_GROQ = "groq"
 PROVIDER_DETERMINISTIC = "deterministic"
 
@@ -214,20 +215,20 @@ def _require_key(value: Any, env_name: str, provider: str) -> str:
     return key
 
 
-def make_nvidia_invoker(settings: Any, provider_label: str = PROVIDER_NVIDIA) -> Tuple[str, InvokeFn]:
-    """Build the NVIDIA NIM invoker. Raises 503 when unconfigured."""
-    from langchain_nvidia_ai_endpoints import ChatNVIDIA
+def make_gemini_invoker(settings: Any) -> Tuple[str, InvokeFn]:
+    """Build the Gemini invoker used by live interview reasoning."""
+    from langchain_google_genai import ChatGoogleGenerativeAI
 
-    api_key = _require_key(getattr(settings, "nvidia_api_key", None), "NVIDIA_API_KEY", provider_label)
-    model = (getattr(settings, "nvidia_model", None) or "nvidia/nemotron-3-nano-omni-30b-a3b-reasoning").strip()
+    api_key = _require_key(getattr(settings, "google_api_key", None), "GOOGLE_API_KEY", PROVIDER_GEMINI)
+    model = (getattr(settings, "gemini_model", None) or "gemini-2.5-flash").strip()
 
     async def invoke(messages: List[Dict[str, str]]) -> str:
-        llm = ChatNVIDIA(model=model, api_key=api_key, temperature=0.6, top_p=0.95)
+        llm = ChatGoogleGenerativeAI(model=model, google_api_key=api_key, temperature=0.2, max_retries=0)
         raw = await llm.ainvoke(messages)
         return str(getattr(raw, "content", raw) or "")
 
-    invoke.__name__ = "nvidia_invoke"
-    return PROVIDER_NVIDIA, invoke
+    invoke.__name__ = "gemini_invoke"
+    return PROVIDER_GEMINI, invoke
 
 
 def make_groq_invoker(settings: Any) -> Tuple[str, InvokeFn]:
@@ -247,10 +248,10 @@ def make_groq_invoker(settings: Any) -> Tuple[str, InvokeFn]:
 
 
 def provider_chain(settings: Any) -> List[Tuple[str, InvokeFn]]:
-    """Ordered (name, invoke) providers. Groq included only when configured."""
+    """Live reasoning order: Gemini, then Groq when configured."""
     chain: List[Tuple[str, InvokeFn]] = []
     try:
-        chain.append(make_nvidia_invoker(settings))
+        chain.append(make_gemini_invoker(settings))
     except HTTPException:
         pass
     try:
@@ -261,7 +262,8 @@ def provider_chain(settings: Any) -> List[Tuple[str, InvokeFn]]:
 
 
 # ---------------------------------------------------------------------------
-# Orchestration: NVIDIA -> (one retry) -> Groq -> deterministic marker
+# Orchestration: Gemini -> Groq -> deterministic marker. Each provider is
+# attempted at most once so one answer cannot trigger a correction/retry call.
 # ---------------------------------------------------------------------------
 
 async def run_evaluation_chain(
@@ -272,6 +274,7 @@ async def run_evaluation_chain(
     question_id: Optional[str] = None,
     timeout_s: Optional[float] = None,
     total_budget_s: Optional[float] = None,
+    accept_text: Optional[Callable[[str], bool]] = None,
 ) -> ChainResult:
     """Run providers in order with bounded retries. Never raises for provider
     failures — returns provider_used="deterministic" when all fail. Raises
@@ -305,6 +308,14 @@ async def run_evaluation_chain(
             try:
                 text = await asyncio.wait_for(invoke(messages), timeout=min(per_attempt, remaining))
                 latency = (perf_counter() - started) * 1000
+                if accept_text is not None and not accept_text(text):
+                    attempts.append(ProviderAttempt(name, latency, False, "malformed_output", None, False))
+                    log_llm_event(session_id=session_id, question_id=question_id, provider=name,
+                                  latency_ms=latency, success=False,
+                                  failure_class="malformed_output", retry_count=0,
+                                  fallback_used=position > 0)
+                    last_failure = "malformed_output"
+                    break
                 attempts.append(ProviderAttempt(name, latency, True, None, None, retries_used > 0))
                 log_llm_event(session_id=session_id, question_id=question_id, provider=name,
                               latency_ms=latency, success=True,
@@ -320,13 +331,6 @@ async def run_evaluation_chain(
                 log_llm_event(session_id=session_id, question_id=question_id, provider=name,
                               latency_ms=latency, success=False, failure_class=failure_class,
                               retry_count=len(attempts), fallback_used=position > 0)
-                # Exactly ONE same-provider retry, NVIDIA only, transient only.
-                if (position == 0 and retries_used == 0 and is_transient(failure_class)
-                        and (deadline - perf_counter()) > min(5.0, per_attempt)):
-                    retries_used += 1
-                    attempts.append(ProviderAttempt(name, latency, False, failure_class, status, True))
-                    await asyncio.sleep(backoff_delay_seconds(False, retry_after, 0))
-                    continue
                 attempts.append(ProviderAttempt(name, latency, False, failure_class, status, retries_used > 0))
                 break
 

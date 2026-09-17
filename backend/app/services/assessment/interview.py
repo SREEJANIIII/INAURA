@@ -518,6 +518,14 @@ def _str_list(value: Any, limit: int = 5, each: int = 80) -> list:
     return out
 
 
+def _evaluation_text_is_parseable(raw_text: str, question_id: str) -> bool:
+    try:
+        parse_answer_evaluation(raw_text, question_id)
+        return True
+    except (TypeError, ValueError, json.JSONDecodeError):
+        return False
+
+
 def parse_answer_evaluation(raw_text: str, question_id: str) -> Dict[str, Any]:
     """Strict-parse NVIDIA NIM JSON into structured per-answer evaluation.
 
@@ -796,7 +804,7 @@ async def evaluate_answer_resilient(
     question_id: Optional[str] = None,
     adaptive_context: str = "",
 ) -> Tuple[Dict[str, Any], Dict[str, Any]]:
-    """Evaluate via NVIDIA -> Groq chain with deterministic recovery.
+    """Evaluate via Gemini -> Groq chain with deterministic recovery.
 
     Returns (evaluation, info) where info carries provider_used,
     fallback_used, and failure_class for observability. Raises HTTPException
@@ -804,18 +812,14 @@ async def evaluate_answer_resilient(
     a deterministic evaluation instead of raising.
     """
     from ...core.config import get_settings
-    from .interview_providers import (
-        PROVIDER_DETERMINISTIC,
-        correct_once,
-        provider_chain,
-        run_evaluation_chain,
-    )
+    from .interview_providers import PROVIDER_DETERMINISTIC, run_evaluation_chain
 
     settings = get_settings()
     messages, _ = _build_eval_messages(
         question, transcript, prior_summary, competencies, adaptive_context)
     result = await run_evaluation_chain(
-        messages, settings=settings, session_id=session_id, question_id=question_id)
+        messages, settings=settings, session_id=session_id, question_id=question_id,
+        accept_text=lambda raw: _evaluation_text_is_parseable(raw, str(question.get("id") or "")))
 
     def _tag(evaluation: Dict[str, Any]) -> Dict[str, Any]:
         evaluation["_provider_used"] = result.provider_used
@@ -843,22 +847,8 @@ async def evaluate_answer_resilient(
     try:
         return _tag(parse_answer_evaluation(result.text, str(question.get("id") or ""))), info
     except ValueError:
-        logger.warning("interview: unparseable %s evaluation, requesting correction",
+        logger.warning("interview: unparseable %s evaluation; using deterministic recovery",
                        result.provider_used)
-    invokers = {name: fn for name, fn in provider_chain(settings)}
-    corrected = await correct_once(
-        result.provider_used, invokers, messages, EVAL_CORRECTION_NOTE,
-        session_id=session_id, question_id=question_id)
-    if corrected:
-        try:
-            fixed = parse_answer_evaluation(corrected, str(question.get("id") or ""))
-            fixed["_provider_used"] = result.provider_used
-            fixed["_fallback_used"] = result.fallback_used
-            fixed["_failure_class"] = "malformed_output"
-            info["failure_class"] = "malformed_output"
-            return fixed, info
-        except ValueError:
-            pass
     deterministic = deterministic_evaluation(question, transcript, "malformed_output")
     info["provider_used"] = PROVIDER_DETERMINISTIC
     info["fallback_used"] = True
@@ -933,6 +923,7 @@ async def generate_follow_up_question(
     transcript: str,
     evaluation: Dict[str, Any],
     _llm: Any = None,
+    allow_llm: bool = True,
 ) -> Optional[str]:
     """Generate a targeted follow-up question based on the answer evaluation.
 
@@ -943,7 +934,7 @@ async def generate_follow_up_question(
     if suggested:
         return suggested
 
-    llm = _llm if _llm is not None else _make_interview_llm()
+    llm = (_llm if _llm is not None else _make_interview_llm()) if allow_llm else None
     user_prompt = (
         f"Skill: {question.get('skill', '')}\n"
         f"Question asked: {question.get('prompt', '')}\n"
@@ -954,6 +945,8 @@ async def generate_follow_up_question(
         f"Brief explanation: {evaluation.get('brief_explanation', '')[:300]}"
     )
     try:
+        if not allow_llm:
+            raise RuntimeError("live path disables secondary follow-up generation")
         if hasattr(llm, "ainvoke"):
             raw = await llm.ainvoke([
                 {"role": "system", "content": FOLLOWUP_SYSTEM_PROMPT},
@@ -1664,7 +1657,8 @@ async def _answer_interview_question_locked(
             follow_up_question = adaptive
             is_adaptive = True
     if follow_up_question is None and action == "follow_up" and evaluation:
-        fu_text = await generate_follow_up_question(eval_input, text, evaluation, _llm=_llm)
+        fu_text = await generate_follow_up_question(
+            eval_input, text, evaluation, _llm=_llm, allow_llm=False)
         if fu_text:
             follow_up_question = {
                 "id": f"{question_id}_followup_{len(existing_evals)}",

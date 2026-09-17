@@ -17,7 +17,7 @@ from app.services.assessment import interview as iv
 from app.services.assessment.interview_providers import (
     PROVIDER_DETERMINISTIC,
     PROVIDER_GROQ,
-    PROVIDER_NVIDIA,
+    PROVIDER_GEMINI,
     backoff_delay_seconds,
     classify_provider_error,
     contains_injection_markers,
@@ -32,10 +32,10 @@ class ProviderError(Exception):
         self.status_code = status_code
 
 
-def _settings(nvidia_key="nv-key", groq_key="gq-key"):
+def _settings(gemini_key="gem-key", groq_key="gq-key"):
     s = MagicMock()
-    s.nvidia_api_key = nvidia_key
-    s.nvidia_model = "nvidia/test-model"
+    s.google_api_key = gemini_key
+    s.gemini_model = "gemini-test-model"
     s.groq_api_key = groq_key
     s.groq_model = "llama-3.3-70b-versatile"
     s.interview_llm_timeout_seconds = 5
@@ -53,11 +53,11 @@ def _fake_invoker(name: str, script: List[Any], calls: List[str]):
     return invoke
 
 
-def _run_chain(nvidia_script, groq_script, nvidia_key="nv-key", groq_key="gq-key"):
+def _run_chain(gemini_script, groq_script, gemini_key="gem-key", groq_key="gq-key"):
     calls: List[str] = []
-    settings = _settings(nvidia_key, groq_key)
-    with patch("app.services.assessment.interview_providers.make_nvidia_invoker",
-               return_value=(PROVIDER_NVIDIA, _fake_invoker("nvidia", nvidia_script, calls))), \
+    settings = _settings(gemini_key, groq_key)
+    with patch("app.services.assessment.interview_providers.make_gemini_invoker",
+               return_value=(PROVIDER_GEMINI, _fake_invoker("gemini", gemini_script, calls))), \
          patch("app.services.assessment.interview_providers.make_groq_invoker",
                return_value=(PROVIDER_GROQ, _fake_invoker("groq", groq_script, calls))), \
          patch("app.services.assessment.interview_providers.asyncio.sleep", new=AsyncMock()):
@@ -71,64 +71,64 @@ def _run_chain(nvidia_script, groq_script, nvidia_key="nv-key", groq_key="gq-key
 # A–J: provider matrix
 # ===========================================================================
 
-def test_A_nvidia_success_never_calls_groq():
+def test_A_gemini_success_never_calls_groq():
     result, calls = _run_chain(['{"ok": true}'], ['{"should": "not happen"}'])
     assert result.text == '{"ok": true}'
-    assert result.provider_used == PROVIDER_NVIDIA
+    assert result.provider_used == PROVIDER_GEMINI
     assert result.fallback_used is False
-    assert calls == ["nvidia"]
+    assert calls == ["gemini"]
     assert len(result.attempts) == 1 and result.attempts[0].success is True
 
 
-def test_B_nvidia_429_retries_then_succeeds():
+def test_B_gemini_failure_falls_back_to_groq():
     result, calls = _run_chain(
-        [ProviderError(429, "Too Many Requests: rate limit"), '{"recovered": true}'], [])
+        [ProviderError(429, "Too Many Requests: rate limit")], ['{"recovered": true}'])
     assert result.text == '{"recovered": true}'
-    assert result.provider_used == PROVIDER_NVIDIA
-    assert calls == ["nvidia", "nvidia"]
+    assert result.provider_used == PROVIDER_GROQ
+    assert calls == ["gemini", "groq"]
     assert result.attempts[0].failure_class == "rate_limited"
 
 
-def test_C_nvidia_503_retry_then_groq():
+def test_C_gemini_503_then_groq():
     result, calls = _run_chain(
-        [ProviderError(503, "Service Unavailable"), ProviderError(503, "still down")],
+        [ProviderError(503, "Service Unavailable")],
         ['{"from": "groq"}'])
     assert result.text == '{"from": "groq"}'
     assert result.provider_used == PROVIDER_GROQ
     assert result.fallback_used is True
-    assert calls == ["nvidia", "nvidia", "groq"]
+    assert calls == ["gemini", "groq"]
 
 
-def test_D_nvidia_timeout_goes_to_groq():
+def test_D_gemini_timeout_goes_to_groq():
     result, calls = _run_chain(
-        [asyncio.TimeoutError("timed out"), asyncio.TimeoutError("timed out")],
+        [asyncio.TimeoutError("timed out")],
         ['{"from": "groq"}'])
     assert result.provider_used == PROVIDER_GROQ
     assert result.attempts[0].failure_class == "timeout"
-    assert calls == ["nvidia", "nvidia", "groq"]
+    assert calls == ["gemini", "groq"]
 
 
 def test_E_auth_error_skips_pointless_retry():
     result, calls = _run_chain(
         [ProviderError(401, "unauthorized: invalid api key")], ['{"from": "groq"}'])
     assert result.provider_used == PROVIDER_GROQ
-    assert calls == ["nvidia", "groq"]  # exactly one NVIDIA attempt
+    assert calls == ["gemini", "groq"]  # exactly one Gemini attempt
     assert result.attempts[0].failure_class == "authentication_error"
 
 
-def test_F_nvidia_failure_groq_success_marks_fallback():
-    result, _ = _run_chain([ProviderError(500, "server error")] * 2, ['{"ok": 1}'])
+def test_F_gemini_failure_groq_success_marks_fallback():
+    result, _ = _run_chain([ProviderError(500, "server error")], ['{"ok": 1}'])
     assert result.provider_used == PROVIDER_GROQ and result.fallback_used is True
 
 
 def test_G_both_fail_yields_deterministic_marker():
     result, calls = _run_chain(
-        [ProviderError(503, "down"), ProviderError(503, "down")],
+        [ProviderError(503, "down")],
         [ProviderError(500, "groq down")])
     assert result.text is None
     assert result.provider_used == PROVIDER_DETERMINISTIC
     assert result.fallback_used is True
-    assert calls == ["nvidia", "nvidia", "groq"]
+    assert calls == ["gemini", "groq"]
     assert result.attempts[-1].failure_class == "temporary_unavailable"
 
 
@@ -161,8 +161,8 @@ def test_classification_matrix():
 def _resilient_eval(nvidia_script, groq_script, **overrides):
     settings = _settings()
     calls: List[str] = []
-    with patch("app.services.assessment.interview_providers.make_nvidia_invoker",
-               return_value=(PROVIDER_NVIDIA, _fake_invoker("nvidia", nvidia_script, calls))), \
+    with patch("app.services.assessment.interview_providers.make_gemini_invoker",
+               return_value=(PROVIDER_GEMINI, _fake_invoker("gemini", nvidia_script, calls))), \
          patch("app.services.assessment.interview_providers.make_groq_invoker",
                return_value=(PROVIDER_GROQ, _fake_invoker("groq", groq_script, calls))), \
          patch("app.services.assessment.interview_providers.asyncio.sleep", new=AsyncMock()):
@@ -187,11 +187,11 @@ def _good_payload():
     })
 
 
-def test_I_malformed_nvidia_output_corrected_once():
-    (evaluation, info), calls = _resilient_eval(["not json at all", _good_payload()], [])
+def test_I_malformed_gemini_output_uses_groq_once():
+    (evaluation, info), calls = _resilient_eval(["not json at all"], [_good_payload()])
     assert evaluation["technical_correctness"] == 0.7
-    assert info["provider_used"] == PROVIDER_NVIDIA
-    assert calls == ["nvidia", "nvidia"]  # initial + one strict correction
+    assert info["provider_used"] == PROVIDER_GROQ
+    assert calls == ["gemini", "groq"]
 
 
 def test_J_persistently_malformed_output_recovers_deterministically():
@@ -206,7 +206,7 @@ def test_J_persistently_malformed_output_recovers_deterministically():
 
 def test_H_total_outage_recovers_without_asking_user_to_repeat():
     (evaluation, info), _ = _resilient_eval(
-        [ProviderError(503, "down"), ProviderError(503, "down")],
+        [ProviderError(503, "down")],
         [ProviderError(500, "down")])
     assert evaluation["_recovery"] is True
     assert evaluation["_failure_class"] == "temporary_unavailable"
