@@ -195,7 +195,10 @@ def log_llm_event(
         "retry_count": retry_count,
         "fallback_used": fallback_used,
     }
-    logger.info("interview_llm_event %s", json.dumps(event, separators=(",", ":")))
+    logger.info("[INTERVIEW_LLM] %s", " ".join(
+        f"{key}={json.dumps(value, separators=(',', ':'))}"
+        for key, value in event.items()
+    ))
     return event
 
 
@@ -678,6 +681,10 @@ async def run_evaluation_chain(
                 attempts.append(ProviderAttempt(name, latency, False, failure_class, status, retries_used > 0))
                 break
 
+    log_llm_event(session_id=session_id, question_id=question_id,
+                  provider=PROVIDER_DETERMINISTIC, latency_ms=0.0,
+                  success=False, failure_class=last_failure or "unknown_provider_error",
+                  fallback_used=True)
     return ChainResult(text=None, provider_used=PROVIDER_DETERMINISTIC, attempts=attempts,
                        failure_class=last_failure or "unknown_provider_error", fallback_used=True)
 
