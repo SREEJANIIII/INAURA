@@ -233,7 +233,7 @@ def _session_row():
     }
 
 
-def _run_locked(session, question_id, answer, eval_dict):
+def _run_locked(session, question_id, answer, eval_dict, evaluate_mock=None):
     from unittest.mock import MagicMock as MM
 
     fake = MM()
@@ -247,7 +247,7 @@ def _run_locked(session, question_id, answer, eval_dict):
          patch.object(iv, "_claim_answer", return_value=("claimed", None)), \
          patch.object(iv, "_finish_answer_claim", return_value=None), \
          patch.object(iv, "_release_answer_claim", return_value=None), \
-         patch.object(iv, "evaluate_answer_llm", new=AsyncMock(return_value=eval_dict)):
+         patch.object(iv, "evaluate_answer_llm", new=evaluate_mock or AsyncMock(return_value=eval_dict)):
         return asyncio.run(iv._answer_interview_question_locked(
             "u1", "sess-1", question_id, answer, _llm=MM()))
 
@@ -272,6 +272,30 @@ def test_O_spoken_ack_and_question_never_duplicate():
     assert res["spoken_response"] == "Got it."
     assert res["current_question"]["prompt"] not in (res["spoken_response"] or "")
     assert res["is_adaptive"] is True
+
+
+def test_end_intent_uses_zero_llm_calls_and_completes():
+    evaluator = AsyncMock(side_effect=AssertionError("control intent must not call an LLM"))
+    res = _run_locked(
+        _session_row(), "q1", "Can we end this interview? I'm not comfortable answering this.",
+        _eval_dict(), evaluate_mock=evaluator,
+    )
+    assert evaluator.await_count == 0
+    assert res["completed"] is True
+    assert res["current_question"] is None
+    assert res["conversation_intent"] == "end_interview"
+
+
+def test_skip_or_repeat_intent_moves_to_planned_question_without_llm():
+    evaluator = AsyncMock(side_effect=AssertionError("control intent must not call an LLM"))
+    res = _run_locked(
+        _session_row(), "q1", "Why are you asking the same question? I already answered that.",
+        _eval_dict(), evaluate_mock=evaluator,
+    )
+    assert evaluator.await_count == 0
+    assert res["completed"] is False
+    assert res["current_question"]["id"] == "q2"
+    assert res["conversation_intent"] == "skip_or_repeat"
 
 
 def test_K_duplicate_submission_replays_stored_result():
@@ -314,7 +338,7 @@ def test_recovery_evaluation_preserves_budget_and_plan():
     assert res["recovery"] is True
     assert res["provider_used"] == PROVIDER_DETERMINISTIC
     assert res["answered_count"] == 0  # unscored: budget preserved like pending
-    assert res["current_question"]["prompt"] == "What is logging?"  # deterministic plan
+    assert "A substantive answer here" in res["current_question"]["prompt"]  # deterministic answer-grounded probe
     assert res["note"] and "NVIDIA" not in res["note"] and "Traceback" not in res["note"]
 
 

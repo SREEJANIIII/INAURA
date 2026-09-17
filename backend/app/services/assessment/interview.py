@@ -1000,6 +1000,28 @@ def _normalize_question_text(text: str) -> str:
     return re.sub(r"\s+", " ", cleaned).strip()
 
 
+_END_INTERVIEW_INTENTS = (
+    "end interview", "stop interview", "terminate interview", "i want to stop",
+    "can we end", "end this", "i don't want to continue", "i do not want to continue",
+)
+_SKIP_INTERVIEW_INTENTS = (
+    "skip this question", "i don't want to answer", "i do not want to answer",
+    "not comfortable answering", "ask something else", "already answered",
+    "asking the same question", "repeating the question", "you're repeating",
+    "you are repeating",
+)
+
+
+def classify_conversation_intent(transcript: str) -> str:
+    """Classify interview-control language before it can become evidence."""
+    lowered = re.sub(r"\s+", " ", str(transcript or "").lower()).strip()
+    if any(phrase in lowered for phrase in _END_INTERVIEW_INTENTS):
+        return "end_interview"
+    if any(phrase in lowered for phrase in _SKIP_INTERVIEW_INTENTS):
+        return "skip_or_repeat"
+    return "technical_answer"
+
+
 def _is_duplicate_question(candidate: str, prior_prompts: List[str]) -> bool:
     """Reject identical, near-duplicate, or reworded prior questions."""
     norm = _normalize_question_text(candidate)
@@ -1033,6 +1055,14 @@ def _is_generic_adaptive_question(candidate: str) -> bool:
         "can you tell me more",
     )
     return any(norm == phrase or norm.startswith(phrase + " ") for phrase in generic)
+
+
+def _restates_answer(question: str, answer: str) -> bool:
+    """Reject probes that merely repeat the candidate's statement."""
+    stop = {"a", "an", "the", "and", "or", "to", "of", "in", "for", "is", "was", "we", "used", "because", "what", "why", "how"}
+    q_words = {w for w in _normalize_question_text(question).split() if len(w) > 2 and w not in stop}
+    a_words = {w for w in _normalize_question_text(answer).split() if len(w) > 2 and w not in stop}
+    return len(q_words) >= 4 and len(q_words & a_words) / len(q_words) >= 0.75
 
 
 def summarize_adaptive_state(
@@ -1148,6 +1178,7 @@ def validate_next_question(
     evaluation: Dict[str, Any],
     competencies: List[Dict[str, str]],
     prior_prompts: List[str],
+    answer_text: str = "",
 ) -> Optional[Dict[str, str]]:
     """Validate the model's answer-derived next question.
 
@@ -1163,6 +1194,8 @@ def validate_next_question(
         return None
     if _is_duplicate_question(text, prior_prompts):
         return None
+    if answer_text and _restates_answer(text, answer_text):
+        return None
     comp_ids = {str(c.get("id") or "") for c in competencies or [] if c.get("id")}
     target = str(evaluation.get("target_competency") or "").strip()
     if target not in comp_ids:
@@ -1176,12 +1209,35 @@ def validate_next_question(
     }
 
 
+def next_question_validation_reason(
+    evaluation: Optional[Dict[str, Any]], prior_prompts: List[str], answer_text: str = ""
+) -> str:
+    """Return a safe diagnostic reason without recording question/answer text."""
+    text = str((evaluation or {}).get("next_question") or "").strip()
+    if not text:
+        return "missing"
+    if len(text) < ADAPTIVE_MIN_QUESTION_CHARS:
+        return "too_short"
+    if len(text) > ADAPTIVE_MAX_QUESTION_CHARS:
+        return "too_long"
+    if contains_injection_markers(text):
+        return "injection_marker"
+    if _is_generic_adaptive_question(text):
+        return "generic"
+    if _is_duplicate_question(text, prior_prompts):
+        return "duplicate"
+    if answer_text and _restates_answer(text, answer_text):
+        return "restates_answer"
+    return "accepted"
+
+
 def select_adaptive_insertion(
     evaluation: Dict[str, Any],
     questions: List[Dict[str, Any]],
     current_index: int,
     competencies: List[Dict[str, str]],
     current_competency: str = "",
+    answer_text: str = "",
 ) -> Optional[Dict[str, Any]]:
     """Choose the answer-derived next question to splice in, or None.
 
@@ -1197,7 +1253,7 @@ def select_adaptive_insertion(
     if adaptive_used >= ADAPTIVE_MAX_INSERTS:
         return None
     prior_prompts = [str(q.get("prompt") or "") for q in questions if isinstance(q, dict)]
-    valid = validate_next_question(evaluation, competencies, prior_prompts)
+    valid = validate_next_question(evaluation, competencies, prior_prompts, answer_text)
     if valid is None:
         return None
     competency = valid["competency"] or current_competency
@@ -1527,6 +1583,62 @@ async def _answer_interview_question_locked(
     if claimed_response is not None:
         return claimed_response
 
+    # Conversation-control language is never technical evidence and must be
+    # handled before any provider or adaptive-question work.
+    conversation_intent = classify_conversation_intent(text)
+    if conversation_intent in {"end_interview", "skip_or_repeat"}:
+        existing_transcript = s.get("transcript") or []
+        existing_transcript.append({
+            "question_id": question_id,
+            "competency": target_q.get("competency"),
+            "prompt": target_q.get("prompt"),
+            "answer": text[:8000],
+            "answered": True,
+            "conversation_intent": conversation_intent,
+        })
+        next_index = current_index + 1
+        ending = conversation_intent == "end_interview" or next_index >= len(questions)
+        update: Dict[str, Any] = {
+            "transcript": existing_transcript,
+            "current_index": len(questions) if ending else next_index,
+        }
+        if ending:
+            now = datetime.now(timezone.utc).isoformat()
+            update.update({"status": "completed", "validity": "low_confidence", "completed_at": now})
+        response = {
+            "session_id": session_id,
+            "question_id": question_id,
+            "next_action": "complete" if ending else "next",
+            "action": "COMPLETE" if ending else "NEXT",
+            "spoken_response": "Understood. We'll end the interview here." if ending else "Understood. Let's move to a different area.",
+            "ai_available": True,
+            "evaluation": None,
+            "evaluation_pending": False,
+            "current_index": update["current_index"],
+            "current_question": None if ending else {
+                "id": questions[next_index].get("id"),
+                "competency": questions[next_index].get("competency", ""),
+                "prompt": questions[next_index].get("prompt", ""),
+                "follow_ups": questions[next_index].get("follow_ups", []),
+            },
+            "completed": ending,
+            "answered_count": len([t for t in existing_transcript if isinstance(t, dict) and t.get("answered")]),
+            "total_questions": len(questions),
+            "is_adaptive": False,
+            "provider_used": None,
+            "fallback_used": False,
+            "recovery": False,
+            "conversation_intent": conversation_intent,
+            "intent_guard_triggered": True,
+        }
+        try:
+            c.table(INTERVIEW_SESSIONS_TABLE).update(update).eq("id", session_id).eq("user_id", user_id).execute()
+        except Exception as e:
+            _release_answer_claim(c, session_id, question_id)
+            raise HTTPException(status_code=500, detail=f"Failed to save interview control turn: {str(e)[:200]}")
+        _finish_answer_claim(c, session_id, question_id, response)
+        return response
+
     # Build prior evidence summary for corroboration
     prior_snap = s.get("prior_snapshot") or []
     canonical = normalize_skill(s.get("skill_name") or "") or str(s.get("skill_name") or "")
@@ -1637,11 +1749,14 @@ async def _answer_interview_question_locked(
     answered_count = len([e for e in existing_evals
                          if isinstance(e, dict) and _is_real_evaluation(e.get("evaluation"))])
     prior_prompts = [str(q.get("prompt") or "") for q in questions if isinstance(q, dict)]
-    has_valid_adaptive = bool(evaluation and validate_next_question(evaluation, competencies, prior_prompts))
+    has_valid_adaptive = bool(
+        evaluation and validate_next_question(evaluation, competencies, prior_prompts, text)
+    )
     action = decide_next_action(
         evaluation, current_index, len(questions), follow_ups_used, answered_count + 1,
         has_valid_adaptive_question=has_valid_adaptive,
     )
+    adaptive_validation_reason = next_question_validation_reason(evaluation, prior_prompts, text)
 
     # Next question: the evaluation's answer-derived question wins whenever
     # valid (normal path). Legacy suggested-follow-up and the deterministic
@@ -1652,6 +1767,7 @@ async def _answer_interview_question_locked(
         adaptive = select_adaptive_insertion(
             evaluation, questions, current_index, competencies,
             current_competency=str(target_q.get("competency") or ""),
+            answer_text=text,
         )
         if adaptive is not None:
             follow_up_question = adaptive
@@ -1673,6 +1789,37 @@ async def _answer_interview_question_locked(
     if is_adaptive and follow_up_question is not None:
         # Adaptive splice (same position rule as legacy follow-ups).
         questions.insert(current_index + 1, follow_up_question)
+
+    # A successful provider response with a missing/rejected next_question is
+    # still an unusable adaptive decision. Keep the live path answer-grounded
+    # with a deterministic probe; never call a second LLM or silently expose
+    # the unrelated planned question in this case.
+    if (
+        follow_up_question is None
+        and action == "next"
+        and evaluation
+        and adaptive_validation_reason != "accepted"
+        and current_index < len(questions) - 1
+        and follow_ups_used < INTERVIEW_MAX_FOLLOW_UPS
+    ):
+        deterministic_eval = dict(evaluation)
+        deterministic_eval["suggested_follow_up"] = ""
+        fallback_text = await generate_follow_up_question(
+            eval_input, text, deterministic_eval, allow_llm=False)
+        if fallback_text:
+            follow_up_question = {
+                "id": f"{question_id}_adaptive_fallback_{len(existing_evals)}",
+                "competency": target_q.get("competency", ""),
+                "prompt": fallback_text,
+                "follow_ups": [],
+                "_is_adaptive": True,
+                "_adaptive_reason": adaptive_validation_reason,
+                "_adaptive_type": "probe",
+                "_parent_question_id": question_id,
+            }
+            questions.insert(current_index + 1, follow_up_question)
+            is_adaptive = True
+            action = "follow_up"
 
     # Update session state
     new_index = current_index
@@ -1763,6 +1910,10 @@ async def _answer_interview_question_locked(
         "misconceptions": (evaluation or {}).get("misconceptions", [])[:3],
         "adaptive_question_accepted": is_adaptive,
         "adaptive_question_rejected": bool((evaluation or {}).get("next_question")) and not is_adaptive,
+        "next_question_present": bool(str((evaluation or {}).get("next_question") or "").strip()),
+        "next_question_length": len(str((evaluation or {}).get("next_question") or "").strip()),
+        "next_question_validation": adaptive_validation_reason,
+        "action": action,
         "next_question_id": (next_question or {}).get("id") if next_question else None,
         "provider_used": provider_used,
         "fallback_used": fallback_used,
