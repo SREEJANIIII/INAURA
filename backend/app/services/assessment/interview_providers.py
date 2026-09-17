@@ -1,14 +1,13 @@
-"""Local LLM primary for interview reasoning/evaluation (http://localhost:1234/api/v1/chat).
+"""Local LLM primary for interview reasoning/evaluation (http://localhost:1234/v1/chat/completions, legacy /api/v1/chat auto-adapted).
 
 The interview service talks to providers only through this module::
 
     USER ANSWER -> run_evaluation_chain() -> raw JSON text (+observability)
         -> interview.py parses/validates -> deterministic recovery if needed
 
-Current mode:
-  * OpenRouter is the only active interview reasoning provider.
-  * OpenRouter sends the primary model plus ordered model fallbacks in one
-    request; if the request fails, INAURA uses deterministic recovery.
+Current mode (per user request):
+  * LOCAL LLM at http://localhost:1234/api/v1/chat is the ONLY active provider.
+  * GEMINI and GROQ code is preserved below but COMMENTED OUT — not executed.
   * RAG / embedding pipeline (Gemini embeddings) is intentionally untouched.
   * NVIDIA remains TTS-only and Groq remains STT-only.
   * If OpenRouter fails or is unreachable: caller falls back to
@@ -225,10 +224,10 @@ def _require_key(value: Any, env_name: str, provider: str) -> str:
 
 
 # ===========================================================================
-# LOCAL LLM PROVIDER (ACTIVE) — http://localhost:1234/api/v1/chat
-# Uses plain httpx to call the user's local LLM. No cloud SDK required.
-# Payload is OpenAI-compatible (messages, model, temperature). Response
-# parsing is tolerant to multiple shapes (OpenAI, custom, etc.).
+# LOCAL LLM PROVIDER (ACTIVE) — http://localhost:1234/v1/chat/completions (ling-3.0-tiny)
+# Legacy http://localhost:1234/api/v1/chat also supported (auto-adapts).
+# Uses plain httpx. Payload adapts messages->input for LM Studio Responses API
+# (error "'input' is required" + invalid_union) and tolerates both shapes.
 # This is the ONLY active provider for interview reasoning per user request.
 # RAG / embeddings remain on Gemini and are NOT affected.
 # ===========================================================================
@@ -268,101 +267,210 @@ def make_local_llm_invoker(settings: Any) -> Tuple[str, InvokeFn]:
                    "Your answers are saved and will be graded once grading is configured.",
         )
     raw_model = getattr(settings, "local_llm_model", None)
-    model = raw_model.strip() if isinstance(raw_model, str) and raw_model.strip() else "local-model"
+    model = raw_model.strip() if isinstance(raw_model, str) and raw_model.strip() else "ling-3.0-tiny"
     api_key = getattr(settings, "local_llm_api_key", None)
     api_key = api_key.strip() if isinstance(api_key, str) else ""
+
+    def _needs_input_retry(text: str) -> bool:
+        lowered = (text or "").lower()
+        return ("'input' is required" in lowered or '"input" is required' in lowered
+                or "invalid_union" in lowered and "input" in lowered)
+
+    def _extract_content(data: Any) -> Optional[str]:
+        """Extract assistant text from chat/completions OR responses API."""
+        if isinstance(data, dict):
+            # --- Responses API: {"output": [{"content":[{"type":"output_text","text":"..."}]}]} ---
+            # Also: {"output_text": "..."} direct field
+            if isinstance(data.get("output_text"), str) and data["output_text"].strip():
+                return str(data["output_text"])
+            output = data.get("output")
+            if isinstance(output, list) and output:
+                for item in output:
+                    if isinstance(item, dict):
+                        # Case: {"type":"message","content":[{"type":"output_text","text":"..."}]}
+                        cont = item.get("content")
+                        if isinstance(cont, list):
+                            for c in cont:
+                                if isinstance(c, dict) and c.get("text"):
+                                    # output_text or text
+                                    txt = c.get("text") or c.get("output_text") or ""
+                                    if isinstance(txt, str) and txt.strip():
+                                        return txt
+                                if isinstance(c, str) and c.strip():
+                                    return c
+                        if isinstance(item.get("text"), str) and item["text"].strip():
+                            return str(item["text"])
+                        # Some servers: {"output": "raw string"}
+                        if isinstance(item, str) and item.strip():
+                            return item
+            # Also handle {"response": {"output_text": "..."}}
+            resp_field = data.get("response")
+            if isinstance(resp_field, dict):
+                maybe = _extract_content(resp_field)
+                if maybe:
+                    return maybe
+            # --- Chat Completions: {"choices": [{"message": {"content": "..."}}]} ---
+            # ling-3.0-tiny returns reasoning in reasoning_content + final JSON in content; fallback accordingly
+            choices = data.get("choices")
+            if isinstance(choices, list) and choices:
+                first = choices[0]
+                if isinstance(first, dict):
+                    msg = first.get("message")
+                    if isinstance(msg, dict):
+                        c = msg.get("content")
+                        rc = msg.get("reasoning_content") or msg.get("reasoning") or msg.get("reasoning_text")
+                        # Prefer content if it looks like JSON, else fallback to reasoning_content that contains JSON
+                        if isinstance(c, str) and c.strip():
+                            if "{" in c and "}" in c:
+                                return str(c)
+                            # content exists but no JSON — check reasoning for JSON
+                            if isinstance(rc, str) and rc.strip() and "{" in rc and "technical_correctness" in rc:
+                                return str(rc)
+                            return str(c)
+                        if isinstance(rc, str) and rc.strip():
+                            return str(rc)
+                    if first.get("text"):
+                        return str(first["text"])
+                    if first.get("content"):
+                        return str(first["content"])
+                    if first.get("delta") and isinstance(first["delta"], dict) and first["delta"].get("content"):
+                        return str(first["delta"]["content"])
+            for key in ("content", "response", "message", "text", "answer", "completion"):
+                val = data.get(key)
+                if isinstance(val, str) and val.strip():
+                    return val
+                if isinstance(val, dict) and val.get("content"):
+                    maybe = str(val["content"])
+                    if maybe.strip():
+                        return maybe
+                # handle {"output": "string"} single
+                if key == "output" and isinstance(val, str) and val.strip():
+                    return val
+            # Some servers wrap in {"data": {"content": "..."}}
+            data_inner = data.get("data")
+            if isinstance(data_inner, dict):
+                for key in ("content", "response", "message", "text"):
+                    val = data_inner.get(key)
+                    if isinstance(val, str) and val.strip():
+                        return val
+            if len(data) == 1:
+                sole = next(iter(data.values()))
+                if isinstance(sole, str) and sole.strip():
+                    return sole
+        if isinstance(data, str) and data.strip():
+            return data
+        if isinstance(data, list) and data:
+            first = data[0]
+            if isinstance(first, dict):
+                for key in ("content", "response", "message", "text"):
+                    if first.get(key):
+                        return str(first[key])
+            if isinstance(first, str):
+                return first
+        return None
+
+    def _candidate_urls(primary: str) -> List[str]:
+        urls: List[str] = []
+        seen = set()
+        for cand in [primary,
+                     primary.replace("/api/v1/chat", "/v1/chat/completions"),
+                     primary.replace("/api/v1/chat", "/v1/responses"),
+                     "http://localhost:1234/v1/chat/completions",
+                     "http://localhost:1234/v1/responses"]:
+            if cand and cand not in seen:
+                seen.add(cand)
+                urls.append(cand)
+        return urls
 
     async def invoke(messages: List[Dict[str, str]]) -> str:
         headers: Dict[str, str] = {"Content-Type": "application/json"}
         if api_key:
             headers["Authorization"] = f"Bearer {api_key}"
 
-        # OpenAI-compatible payload; many local servers (LM Studio, Ollama, etc.)
-        # accept this shape even if they expose /api/v1/chat
-        payload = {
+        # Payload variants
+        payload_messages = {
             "model": model,
             "messages": messages,
             "temperature": 0.2,
             "max_tokens": 4096,
             "stream": False,
         }
+        # For Responses API (/v1/responses or /api/v1/chat) LM Studio expects "input"
+        # Convert messages to a single string (system + user) and also as array form
+        input_as_string = "\n\n".join(f"{m.get('role','user')}: {m.get('content','')}" for m in messages)
+        payload_input_string = {
+            "model": model,
+            "input": input_as_string,
+            "temperature": 0.2,
+            "max_tokens": 4096,
+            "stream": False,
+        }
+        payload_input_array = {
+            "model": model,
+            "input": messages,
+            "temperature": 0.2,
+            "stream": False,
+        }
 
-        async with httpx.AsyncClient(timeout=30) as client:
-            resp = await client.post(url, json=payload, headers=headers)
-            if resp.status_code != 200:
-                # Surface status so classify_provider_error can categorize it
-                raise RuntimeError(f"Local LLM error {resp.status_code}: {resp.text[:500]}")
-            try:
-                data = resp.json()
-            except Exception:
-                # If response is not JSON, return raw text
-                text = resp.text or ""
-                if text.strip():
-                    return text
-                raise RuntimeError("Local LLM returned non-JSON empty response")
-
-            # --- Tolerate multiple response shapes ---------------------------------
-            # OpenAI: {"choices": [{"message": {"content": "..."}}]}
-            # Custom: {"content": "..."}, {"response": "..."}, {"message": "..."}, {"text": "..."}
-            # Some servers: {"choices": [{"text": "..."}]}
-            # Fallback: str(data)
-            content: Optional[str] = None
-            if isinstance(data, dict):
-                # OpenAI choices
-                choices = data.get("choices")
-                if isinstance(choices, list) and choices:
-                    first = choices[0]
-                    if isinstance(first, dict):
-                        msg = first.get("message")
-                        if isinstance(msg, dict) and msg.get("content"):
-                            content = str(msg["content"])
-                        elif first.get("text"):
-                            content = str(first["text"])
-                        elif first.get("content"):
-                            content = str(first["content"])
-                        elif first.get("delta") and isinstance(first["delta"], dict) and first["delta"].get("content"):
-                            content = str(first["delta"]["content"])
-                if content is None:
-                    for key in ("content", "response", "message", "text", "output", "answer", "completion"):
-                        val = data.get(key)
-                        if isinstance(val, str) and val.strip():
-                            content = val
-                            break
-                        if isinstance(val, dict) and val.get("content"):
-                            content = str(val["content"])
-                            break
-                if content is None:
-                    # Some servers wrap in {"data": {"content": "..."}}
-                    data_inner = data.get("data")
-                    if isinstance(data_inner, dict):
-                        for key in ("content", "response", "message", "text"):
-                            val = data_inner.get(key)
-                            if isinstance(val, str) and val.strip():
-                                content = val
-                                break
-                if content is None:
-                    # Last resort: if the entire dict is the content (e.g., raw string JSON)
-                    # try to find any string value that looks like JSON with our schema
-                    if len(data) == 1:
-                        sole = next(iter(data.values()))
-                        if isinstance(sole, str) and sole.strip():
-                            content = sole
-            if content is not None:
-                return content
-            # If data is a list or string directly
-            if isinstance(data, str) and data.strip():
-                return data
-            if isinstance(data, list) and data:
-                # e.g., [{"content": "..."}]
-                first = data[0]
-                if isinstance(first, dict):
-                    for key in ("content", "response", "message", "text"):
-                        if first.get(key):
-                            return str(first[key])
-                if isinstance(first, str):
-                    return first
-            # Fallback to stringified JSON — caller will try to extract JSON object
-            return json.dumps(data) if isinstance(data, (dict, list)) else str(data)
+        last_exc: Optional[Exception] = None
+        for attempt_url in _candidate_urls(url):
+            for payload in (payload_messages, payload_input_string, payload_input_array):
+                try:
+                    async with httpx.AsyncClient(timeout=30) as client:
+                        resp = await client.post(attempt_url, json=payload, headers=headers)
+                    if resp.status_code != 200:
+                        body = resp.text or ""
+                        # If server says 'input' is required, immediately try input payload on same URL
+                        if resp.status_code == 400 and _needs_input_retry(body) and payload is payload_messages:
+                            # retry with input payload on same URL — continue to next payload
+                            last_exc = RuntimeError(f"Local LLM error {resp.status_code}: {body[:500]}")
+                            # Also try alternative URL with messages in next outer loop
+                            if attempt_url == url:
+                                logger.warning("local_llm: %s expects 'input', retrying with input payload at %s", model, attempt_url)
+                            continue
+                        # 404 -> try next URL (wrong path)
+                        if resp.status_code == 404 and attempt_url == url:
+                            last_exc = RuntimeError(f"Local LLM error 404 at {attempt_url}: {body[:300]}")
+                            break  # break payload loop, go to next URL
+                        raise RuntimeError(f"Local LLM error {resp.status_code}: {body[:500]}")
+                    try:
+                        data = resp.json()
+                    except Exception:
+                        text = resp.text or ""
+                        if text.strip():
+                            return text
+                        raise RuntimeError("Local LLM returned non-JSON empty response")
+                    content = _extract_content(data)
+                    if content is not None:
+                        if attempt_url != url:
+                            logger.info("local_llm: succeeded via fallback URL %s (primary %s failed)", attempt_url, url)
+                        return content
+                    # Fallback to stringified JSON — caller will try to extract JSON object
+                    return json.dumps(data) if isinstance(data, (dict, list)) else str(data)
+                except RuntimeError as e:
+                    last_exc = e
+                    # If input-required error, keep trying input variants
+                    if _needs_input_retry(str(e)):
+                        continue
+                    # For other 400/404, try next payload/URL
+                    if "404" in str(e) or "input" in str(e).lower():
+                        break
+                    raise
+                except Exception as e:
+                    last_exc = e
+                    raise
+            # if we got 404, continue to next URL
+            if last_exc and "404" in str(last_exc):
+                continue
+            # if last error was input-required and we exhausted payloads, try next URL
+            if last_exc and _needs_input_retry(str(last_exc)):
+                continue
+            if last_exc is None:
+                continue
+        # Exhausted all candidates
+        if last_exc:
+            raise last_exc
+        raise RuntimeError("Local LLM: all endpoint/payload variants failed")
 
     invoke.__name__ = "local_llm_invoke"
     return PROVIDER_LOCAL, invoke

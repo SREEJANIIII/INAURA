@@ -27,11 +27,12 @@ class Settings(BaseSettings):
     # Interview LLM resilience budgets (seconds).
     interview_llm_timeout_seconds: int = 20
     interview_llm_total_budget_seconds: int = 75
-    # OpenRouter is the sole live interview reasoning provider. Its models
-    # array performs model fallback server-side; it does not affect TTS/RAG.
-    openrouter_api_key: str | None = None
-    openrouter_primary_model: str = "deepseek/deepseek-v3.2"
-    openrouter_fallback_models: str = "google/gemini-2.5-flash,meta-llama/llama-3.3-70b-instruct"
+    # Local LLM for interview (user's PC). Set to http://localhost:1234/api/v1/chat per user request.
+    # When this is set, interview evaluation uses the local endpoint instead of Gemini/Groq.
+    # RAG/embedding pipeline is intentionally NOT affected by this setting.
+    local_llm_url: str = "http://localhost:1234/api/v1/chat"
+    local_llm_model: str = "local-model"
+    local_llm_api_key: str | None = None
     # Interview TTS — NVIDIA-hosted voice (TEXT -> SPEECH only).
     # NVIDIA_API_KEY is backend-only and never reaches the frontend.
     tts_provider: str = "nvidia"
