@@ -384,3 +384,14 @@ export function answerInterviewQuestion(session_id: string, question_id: string,
     }
   );
 }
+
+export function transcribeInterviewAudio(audio: Blob, session_id?: string, question_id?: string) {
+  const body = new FormData();
+  body.append("audio", audio, "interview-answer.webm");
+  if (session_id) body.append("session_id", session_id);
+  if (question_id) body.append("question_id", question_id);
+  return apiFetch<{ text: string; provider: string; model: string }>("/analysis/assessment/interview/stt", {
+    method: "POST",
+    body,
+  });
+}

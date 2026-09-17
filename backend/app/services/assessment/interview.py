@@ -871,6 +871,7 @@ def decide_next_action(
     total_planned: int,
     follow_ups_used: int,
     questions_answered: int,
+    has_valid_adaptive_question: bool = False,
 ) -> str:
     """Adaptive policy: follow_up | next | complete.
 
@@ -881,7 +882,7 @@ def decide_next_action(
     if questions_answered >= INTERVIEW_TOTAL_BUDGET:
         return "complete"
 
-    if evaluation and evaluation.get("follow_up_needed"):
+    if evaluation and (evaluation.get("follow_up_needed") or has_valid_adaptive_question):
         weak = (
             evaluation.get("technical_correctness", 1) < 0.50
             or evaluation.get("depth", 1) < 0.45
@@ -890,7 +891,7 @@ def decide_next_action(
         confident = evaluation.get("confidence", 0) >= 0.40
         has_question = bool(str(evaluation.get("suggested_follow_up") or "").strip())
         if (
-            weak
+            (weak or has_valid_adaptive_question)
             and confident
             and has_question
             and follow_ups_used < INTERVIEW_MAX_FOLLOW_UPS
@@ -1608,7 +1609,12 @@ async def _answer_interview_question_locked(
     )
     answered_count = len([e for e in existing_evals
                          if isinstance(e, dict) and _is_real_evaluation(e.get("evaluation"))])
-    action = decide_next_action(evaluation, current_index, len(questions), follow_ups_used, answered_count + 1)
+    prior_prompts = [str(q.get("prompt") or "") for q in questions if isinstance(q, dict)]
+    has_valid_adaptive = bool(evaluation and validate_next_question(evaluation, competencies, prior_prompts))
+    action = decide_next_action(
+        evaluation, current_index, len(questions), follow_ups_used, answered_count + 1,
+        has_valid_adaptive_question=has_valid_adaptive,
+    )
 
     # Next question: the evaluation's answer-derived question wins whenever
     # valid (normal path). Legacy suggested-follow-up and the deterministic
@@ -1717,6 +1723,22 @@ async def _answer_interview_question_locked(
         if isinstance(entry, dict) and entry.get("question_id") == question_id:
             entry["response"] = response
             break
+    logger.info("interview_turn_event %s", json.dumps({
+        "turn_id": str(uuid.uuid4()),
+        "session_id": session_id,
+        "question_id": question_id,
+        "transcript_sha256": transcript_hash,
+        "transcript_length": len(text),
+        "follow_up_needed": bool((evaluation or {}).get("follow_up_needed")),
+        "demonstrated": (evaluation or {}).get("demonstrated", [])[:5],
+        "missing": (evaluation or {}).get("missing", [])[:5],
+        "misconceptions": (evaluation or {}).get("misconceptions", [])[:3],
+        "adaptive_question_accepted": is_adaptive,
+        "adaptive_question_rejected": bool((evaluation or {}).get("next_question")) and not is_adaptive,
+        "next_question_id": (next_question or {}).get("id") if next_question else None,
+        "provider_used": provider_used,
+        "fallback_used": fallback_used,
+    }, separators=(",", ":")))
     _finish_answer_claim(c, session_id, question_id, response)
     try:
         c.table(INTERVIEW_SESSIONS_TABLE).update(update).eq("id", session_id).eq("user_id", user_id).execute()

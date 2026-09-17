@@ -214,6 +214,12 @@ class InterviewTTSRequest(BaseModel):
     question_id: str = Field(default="", max_length=120)
 
 
+class InterviewSTTResponse(BaseModel):
+    text: str
+    provider: str
+    model: str
+
+
 class InterviewQuestionOut(BaseModel):
     id: str
     competency: str
@@ -309,7 +315,6 @@ class AnswerInterviewEvaluation(BaseModel):
     follow_up_needed: bool = False
     suggested_follow_up: str = ""
     spoken_response: str = ""
-    next_question: str = ""
     next_question: str = ""
     next_question_reason: str = ""
     target_competency: str = ""

@@ -23,6 +23,7 @@ class Settings(BaseSettings):
     # Groq interview fallback (used only when NVIDIA fails).
     groq_api_key: str | None = None
     groq_model: str = "llama-3.3-70b-versatile"
+    groq_stt_model: str = "whisper-large-v3-turbo"
     # Interview LLM resilience budgets (seconds).
     interview_llm_timeout_seconds: int = 20
     interview_llm_total_budget_seconds: int = 75

@@ -1,6 +1,6 @@
 from typing import Any, Dict
 
-from fastapi import APIRouter, Depends, HTTPException, Response
+from fastapi import APIRouter, Depends, File, HTTPException, UploadFile, Response
 
 from ....core.config import get_settings
 from ....core.security import get_current_user, CurrentUser
@@ -16,6 +16,7 @@ from ....schemas.assessment import (
     StartInterviewRequest,
     StartInterviewResponse,
     InterviewTTSRequest,
+    InterviewSTTResponse,
     StartPracticalRequest,
     StartPracticalResponse,
     SubmitAssessmentRequest,
@@ -30,6 +31,7 @@ from ....services.assessment import interview as interview_service
 from ....services.assessment import practical_service
 from ....services.assessment.question_bank import DEFAULT_QUESTION_COUNT
 from ....services import tts_service
+from ....services import stt_service
 
 router = APIRouter(prefix="/analysis/assessment", tags=["assessment"])
 
@@ -61,6 +63,20 @@ async def interview_tts(payload: InterviewTTSRequest, current_user: CurrentUser 
             })
         raise HTTPException(status_code=503, detail=response) from exc
     return Response(content=result.audio, media_type=result.media_type, headers={"Cache-Control": "no-store"})
+
+
+@router.post("/interview/stt", response_model=InterviewSTTResponse)
+async def interview_stt(
+    audio: UploadFile = File(...),
+    current_user: CurrentUser = Depends(get_current_user),
+):
+    """Transcribe one answer with the separate optional STT provider."""
+    payload = await audio.read(15 * 1024 * 1024 + 1)
+    return await stt_service.transcribe(
+        payload,
+        filename=audio.filename or "answer.webm",
+        content_type=audio.content_type or "audio/webm",
+    )
 
 
 @router.get("/available", response_model=AvailableAssessmentsResponse)

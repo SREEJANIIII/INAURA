@@ -23,6 +23,8 @@ export type UseMediaDevicesResult = {
   requestCamera: () => Promise<"live" | "denied" | "unavailable">;
   /** Retry only the microphone. */
   requestMicrophone: () => Promise<"live" | "denied" | "unavailable">;
+  /** Current microphone-bearing stream for optional server-side transcription. */
+  getAudioStream: () => MediaStream | null;
   toggleCamera: () => void;
   toggleMic: () => void;
   stopAll: () => void;
@@ -292,6 +294,8 @@ export function useMediaDevices(): UseMediaDevicesResult {
     if (!next) setMicLevel(0);
   }, []);
 
+  const getAudioStream = useCallback(() => streamRef.current, []);
+
   // Sync video element when camState changes
   useEffect(() => {
     if ((camState === "live" || camState === "off") && videoRef.current && streamRef.current) {
@@ -313,6 +317,7 @@ export function useMediaDevices(): UseMediaDevicesResult {
     requestMedia,
     requestCamera,
     requestMicrophone,
+    getAudioStream,
     toggleCamera,
     toggleMic,
     stopAll,

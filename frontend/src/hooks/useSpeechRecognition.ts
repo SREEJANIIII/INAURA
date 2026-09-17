@@ -78,6 +78,15 @@ export function normalizeTechnicalTerms(text: string): string {
     [/\b(mongodb|mongo)\b/gi, "MongoDB"],
     [/\b(redis)\b/gi, "Redis"],
     [/\b(pytorch)\b/gi, "PyTorch"],
+    [/\b(git\s*hub)\b/gi, "GitHub"],
+    [/\b(node\s*\.??\s*js)\b/gi, "Node.js"],
+    [/\b(spring\s*boot)\b/gi, "Spring Boot"],
+    [/\b(mongo\s*db|mongo)\b/gi, "MongoDB"],
+    [/\b(j\s*w\s*t)\b/gi, "JWT"],
+    [/\b(o\s*auth)\b/gi, "OAuth"],
+    [/\b(ci\s*\/?\s*cd)\b/gi, "CI/CD"],
+    [/\b(nvidia)\b/gi, "NVIDIA"],
+    [/\b(groq)\b/gi, "Groq"],
   ];
   for (const [regex, replacement] of terms) {
     s = s.replace(regex, replacement);
@@ -96,6 +105,13 @@ export function mergeFinalTranscript(existing: string, chunk: string): string {
   const base = existing.trim();
   if (!base) return clean;
   if (base === clean || base.endsWith(` ${clean}`)) return base;
+  const baseWords = base.split(/\s+/);
+  const chunkWords = clean.split(/\s+/);
+  for (let size = Math.min(baseWords.length, chunkWords.length); size >= 2; size--) {
+    if (baseWords.slice(-size).join(" ").toLowerCase() === chunkWords.slice(0, size).join(" ").toLowerCase()) {
+      return `${base} ${chunkWords.slice(size).join(" ")}`.trim();
+    }
+  }
   return `${base} ${clean}`;
 }
 

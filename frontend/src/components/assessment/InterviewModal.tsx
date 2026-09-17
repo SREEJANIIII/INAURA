@@ -4,11 +4,13 @@ import {
   answerInterviewQuestion,
   completeSkillInterview,
   startSkillInterview,
+  transcribeInterviewAudio,
   type CompleteInterviewResponse,
   type StartInterviewResponse,
 } from "../../services/assessment";
 import { useMediaDevices } from "../../hooks/useMediaDevices";
 import { useSpeechRecognition } from "../../hooks/useSpeechRecognition";
+import { useInterviewAudioCapture } from "../../hooks/useInterviewAudioCapture";
 import { useTextToSpeech } from "../../hooks/useTextToSpeech";
 import { withTimeout } from "../../services/tts";
 import "./InterviewModal.css";
@@ -68,6 +70,7 @@ export default function InterviewModal({ skill, onClose, onCompleted }: Props) {
     requestMedia,
     requestCamera,
     requestMicrophone,
+    getAudioStream,
     toggleMic,
     toggleCamera,
     stopAll: stopMedia,
@@ -75,6 +78,7 @@ export default function InterviewModal({ skill, onClose, onCompleted }: Props) {
 
   const tts = useTextToSpeech();
   const speech = useSpeechRecognition({ silenceTimeout: SILENCE_TIMEOUT_MS });
+  const audioCapture = useInterviewAudioCapture();
 
   const phaseRef = useRef(phase);
   const currentQuestionRef = useRef(currentQuestion);
@@ -90,6 +94,8 @@ export default function InterviewModal({ skill, onClose, onCompleted }: Props) {
   // Last submitted transcript, so a recoverable failure can retry the SAME
   // answer without asking the candidate to repeat themselves.
   const lastTranscriptRef = useRef("");
+  const transcriptionBusyRef = useRef(false);
+  const [submittedTranscript, setSubmittedTranscript] = useState("");
 
   useEffect(() => { phaseRef.current = phase; });
   useEffect(() => { currentQuestionRef.current = currentQuestion; });
@@ -103,6 +109,7 @@ export default function InterviewModal({ skill, onClose, onCompleted }: Props) {
     isSubmittingRef.current = false;
     tts.stop();
     speech.stop();
+    void audioCapture.stop();
     stopMedia();
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
@@ -113,6 +120,15 @@ export default function InterviewModal({ skill, onClose, onCompleted }: Props) {
       setVideoRef(videoRef.current);
     }
   }, [phase, camState, setVideoRef, videoRef]);
+
+  const startListening = useCallback(() => {
+    speechRef.current.reset();
+    setSubmittedTranscript("");
+    isSubmittingRef.current = false;
+    setPhase("listening");
+    speechRef.current.start();
+    audioCapture.start(getAudioStream());
+  }, [audioCapture, getAudioStream]);
 
   // ---- Speak one utterance with a watchdog: true = spoken, false = voice
   // failed gracefully (fallback UI), null = aborted (interview ended or a
@@ -148,12 +164,9 @@ export default function InterviewModal({ skill, onClose, onCompleted }: Props) {
       setAiText("");
     }
     if (phaseRef.current === "ai_speaking" && interviewActiveRef.current && turnRef.current === turn) {
-      speechRef.current.reset();
-      isSubmittingRef.current = false;
-      setPhase("listening");
-      speechRef.current.start();
+      startListening();
     }
-  }, [speakOnce]);
+  }, [speakOnce, startListening]);
 
   // ---- Submit answer to backend ----
   const submitAnswer = useCallback(async (transcript: string) => {
@@ -228,6 +241,7 @@ export default function InterviewModal({ skill, onClose, onCompleted }: Props) {
         if (v === null || turnRef.current !== turn) return;
         if (!interviewActiveRef.current) return;
         voiceOk = v && voiceOk;
+        if (qprompt) await new Promise((resolve) => setTimeout(resolve, 180));
       }
       if (qprompt) {
         const v = await speakOnce(qprompt);
@@ -240,10 +254,7 @@ export default function InterviewModal({ skill, onClose, onCompleted }: Props) {
         setAiText("");
       }
       if (phaseRef.current === "ai_speaking" && interviewActiveRef.current && turnRef.current === turn) {
-        speechRef.current.reset();
-        isSubmittingRef.current = false;
-        setPhase("listening");
-        speechRef.current.start();
+        startListening();
       }
     } catch (e) {
       if (!interviewActiveRef.current) return;
@@ -262,16 +273,45 @@ export default function InterviewModal({ skill, onClose, onCompleted }: Props) {
         setPhase("error");
       }
     }
-  }, [speakOnce, speakThenListen, stopMedia, onCompleted]);
+  }, [speakOnce, speakThenListen, startListening, stopMedia, onCompleted]);
 
   // ---- Wire silence → submitAnswer ----
+  const submitCapturedAnswer = useCallback(async (browserTranscript: string) => {
+    if (transcriptionBusyRef.current || isSubmittingRef.current) return;
+    transcriptionBusyRef.current = true;
+    setPhase("processing");
+    let transcript = browserTranscript.trim();
+    setSubmittedTranscript(transcript);
+    try {
+      const audio = await audioCapture.stop();
+      if (audio && audio.size > 0) {
+        try {
+          const result = await transcribeInterviewAudio(audio, sessionRef.current?.session_id, currentQuestionRef.current?.id);
+          if (result.text.trim()) {
+            transcript = result.text.trim();
+            setSubmittedTranscript(transcript);
+          }
+        } catch { /* browser STT remains the immediate fallback */ }
+      }
+      const words = transcript.split(/\s+/).filter(Boolean);
+      if (words.length < 3 || transcript.replace(/\s/g, "").length < 12) {
+        setError("Couldn't catch that clearly. Please try that answer again.");
+        startListening();
+        return;
+      }
+      await submitAnswer(transcript);
+    } finally {
+      transcriptionBusyRef.current = false;
+    }
+  }, [audioCapture, startListening, submitAnswer]);
+
   useEffect(() => {
     speech.setOnSilence((transcript: string) => {
       if (phaseRef.current === "listening" && !isSubmittingRef.current) {
-        void submitAnswer(transcript);
+        void submitCapturedAnswer(transcript);
       }
     });
-  }, [speech, submitAnswer]);
+  }, [speech, submitCapturedAnswer]);
 
   // ---- Start the interview ----
   const beginInterview = useCallback(async () => {
@@ -365,10 +405,11 @@ export default function InterviewModal({ skill, onClose, onCompleted }: Props) {
   const submitTyped = useCallback(() => {
     if (typedAnswer.trim()) {
       speech.stop();
+      void audioCapture.stop();
       void submitAnswer(typedAnswer);
       setTypedAnswer("");
     }
-  }, [typedAnswer, speech, submitAnswer]);
+  }, [typedAnswer, speech, audioCapture, submitAnswer]);
 
   // ---- End interview ----
   const endInterview = useCallback(async () => {
@@ -617,7 +658,7 @@ export default function InterviewModal({ skill, onClose, onCompleted }: Props) {
               <span className="iv__call-caption-text iv__call-caption-text--ai">{aiText}</span>
             )}
             {phase === "processing" && (
-              <span className="iv__call-caption-hint">Evaluating your response...</span>
+              <span className="iv__call-caption-text">You said: {submittedTranscript}</span>
             )}
           </div>
 
