@@ -295,7 +295,20 @@ def test_skip_or_repeat_intent_moves_to_planned_question_without_llm():
     assert evaluator.await_count == 0
     assert res["completed"] is False
     assert res["current_question"]["id"] == "q2"
-    assert res["conversation_intent"] == "skip_or_repeat"
+    assert res["conversation_intent"] == "repetition_complaint"
+
+
+def test_candidate_question_repeats_current_question_without_llm():
+    evaluator = AsyncMock(side_effect=AssertionError("candidate question must not call an LLM"))
+    session = _session_row()
+    current_prompt = session["plan"]["questions"][0]["prompt"]
+    res = _run_locked(
+        session, "q1", "What do you mean by trade-offs?", _eval_dict(), evaluate_mock=evaluator,
+    )
+    assert evaluator.await_count == 0
+    assert res["conversation_intent"] == "interviewer_clarification"
+    assert res["current_question"]["id"] == "q1"
+    assert current_prompt not in res["spoken_response"]
 
 
 def test_K_duplicate_submission_replays_stored_result():
@@ -338,8 +351,31 @@ def test_recovery_evaluation_preserves_budget_and_plan():
     assert res["recovery"] is True
     assert res["provider_used"] == PROVIDER_DETERMINISTIC
     assert res["answered_count"] == 0  # unscored: budget preserved like pending
-    assert "A substantive answer here" in res["current_question"]["prompt"]  # deterministic answer-grounded probe
+    assert res["current_question"]["prompt"] == "What would you inspect first if this implementation suddenly became much slower in production?"
+    assert "A substantive answer here" not in res["current_question"]["prompt"]
     assert res["note"] and "NVIDIA" not in res["note"] and "Traceback" not in res["note"]
+
+
+def test_adaptive_completion_aggregates_stored_evaluations_without_llm():
+    session = _session_row()
+    session["transcript"] = [{"question_id": "q1", "answer": "I use logs.", "answered": True}]
+    session["evaluation_results"] = [{"question_id": "q1", "competency": "debugging", "evaluation": _eval_dict()}]
+    table = MagicMock()
+    table.update.return_value = table
+    table.eq.return_value = table
+    table.execute.return_value = MagicMock(data=[])
+    client = MagicMock()
+    client.table.return_value = table
+    with patch.object(iv, "_client", return_value=client), \
+         patch.object(iv, "_load_session", return_value=session), \
+         patch.object(iv, "_claim_completion", return_value=("claimed", None)), \
+         patch.object(iv, "_finish_completion_claim"), \
+         patch.object(iv, "grade_interview_transcript", side_effect=AssertionError("legacy grader reached")):
+        result = asyncio.run(iv.complete_interview_session("u1", "sess-1"))
+    assert result["status"] == "graded"
+    assert result["grading_path"] == "per_answer"
+    assert result["report"]["technical_overall"] > 0
+    assert result["communication_scores"]["overall"] > 0.0
 
 
 def test_injection_in_next_question_rejected():

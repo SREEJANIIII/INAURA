@@ -781,5 +781,24 @@ def test_deterministic_fallback_references_answer_and_missing_depth():
         _llm=_FallbackLLM(),
     ))
     assert question is not None
-    assert "Redis" in question
-    assert "cache invalidation" in question
+    assert question == "What would you inspect first if this implementation suddenly became much slower in production?"
+    assert "We used Redis" not in question
+
+
+def test_redis_counter_question_requires_new_information_not_restatement():
+    competencies = [{"id": "implementation_reasoning", "label": "Implementation reasoning"}]
+    answer = "We used Redis to improve performance."
+    bad = _make_evaluation({"next_question": "Why did you use Redis to improve performance?"})
+    assert iv.validate_next_question(bad, competencies, [], answer) is None
+    good = _make_evaluation({"next_question": "What was the bottleneck before Redis, and how did you measure the improvement?"})
+    assert iv.validate_next_question(good, competencies, [], answer) is not None
+
+
+def test_candidate_clarification_is_not_technical_evidence():
+    assert iv.classify_conversation_intent("I am asking what you mean by edge case.") == "interviewer_clarification"
+
+
+def test_live_interviewer_prompt_uses_direct_human_language():
+    assert "Speak directly to the person" in iv.EVAL_SYSTEM_PROMPT
+    assert "never say 'the candidate'" in iv.EVAL_SYSTEM_PROMPT
+    assert "spoken_response" in iv.EVAL_SYSTEM_PROMPT

@@ -575,7 +575,14 @@ def parse_answer_evaluation(raw_text: str, question_id: str) -> Dict[str, Any]:
 
 
 EVAL_SYSTEM_PROMPT = (
-    "You are a professional technical interviewer evaluating a candidate's answer "
+    "You are a professional human technical interviewer having a live conversation "
+    "with the candidate while evaluating their answer. Speak directly to the person "
+    "using 'you'; never say 'the candidate', 'the respondent', or 'the user' in "
+    "spoken_response. Do not narrate the evaluation or expose scores, confidence, "
+    "rubrics, evidence weighting, or provider details. Use a brief, varied, calm "
+    "acknowledgement only when useful, then ask the question separately. Avoid "
+    "textbook explanations, headings, lists, and unnecessary definitions.\n\n"
+    "You are evaluating the candidate's answer "
     "against a specific skill competency. Evaluate ONLY what the answer demonstrates "
     "in terms of technical understanding, reasoning, and communication. Never judge "
     "appearance, accent, or identity. Be concise and evidence-based.\n\n"
@@ -622,7 +629,7 @@ EVAL_SYSTEM_PROMPT = (
     '  "brief_explanation": "2-3 sentences max",\n'
     '  "follow_up_needed": true/false,\n'
     '  "suggested_follow_up": "targeted question or empty string",\n'
-    '  "spoken_response": "one short acknowledgement spoken before the next question (no question text)",\n'
+    '  "spoken_response": "one short natural acknowledgement spoken before the next question (no question text)",\n'
     '  "next_question": "the single most informative next question",\n'
     '  "next_question_reason": "one sentence: why this question now",\n'
     '  "target_competency": "competency id from the list, or empty string",\n'
@@ -964,23 +971,19 @@ async def generate_follow_up_question(
                 return fu[:600]
     except Exception:
         logger.debug("Follow-up generation failed, using fallback")
-    # Fallback: keep the question grounded in the actual answer. This path is
-    # used only when the evaluator could not supply a question of its own.
-    answer_excerpt = re.sub(r"\s+", " ", transcript.strip()).strip(" .?!")[:140]
-    demonstrated = next((str(x).strip() for x in evaluation.get("demonstrated", []) if str(x).strip()), "")
-    missing = next((str(x).strip() for x in evaluation.get("missing", []) if str(x).strip()), "")
-    misconceptions = next((str(x).strip() for x in evaluation.get("misconceptions", []) if str(x).strip()), "")
-    if misconceptions:
-        return f"You said {answer_excerpt!r}. What assumption there would you revisit, and what would happen in a concrete failure case?"
-    if missing:
-        return f"You mentioned {demonstrated or answer_excerpt!r}. How would you implement the missing piece—{missing}—in this project?"
-    if answer_excerpt:
-        return f"You said {answer_excerpt!r}. What trade-off or edge case did that create in your implementation?"
-    if evaluation.get("technical_correctness", 1) < 0.50:
-        return f"What concrete implementation detail supports your answer about {question.get('skill', 'this topic')}?"
-    if evaluation.get("depth", 1) < 0.50:
-        return "Which trade-off did you make, and what alternative did you reject?"
-    return "What concrete implementation detail would you verify next?"
+    # Deterministic fallback: never interpolate or quote the raw answer.
+    planned_follow_ups = [str(q).strip() for q in (question.get("follow_ups") or []) if str(q).strip()]
+    if planned_follow_ups:
+        return planned_follow_ups[0][:600]
+    competency = str(question.get("competency") or "").lower()
+    skill = str(question.get("skill") or "").lower()
+    if "sql" in skill or "database" in competency:
+        return "Which part of this query would you inspect first if the dataset grew to millions of rows?"
+    if "python" in skill:
+        return "What would you inspect first if this implementation suddenly became much slower in production?"
+    if "rest" in competency or "api" in competency:
+        return "What happens if the API receives the same request twice, and how would you make that operation safe?"
+    return "What concrete implementation detail or failure mode would you verify next?"
 
 
 # ---------------------------------------------------------------------------
@@ -1006,10 +1009,14 @@ _END_INTERVIEW_INTENTS = (
 )
 _SKIP_INTERVIEW_INTENTS = (
     "skip this question", "i don't want to answer", "i do not want to answer",
-    "not comfortable answering", "ask something else", "already answered",
-    "asking the same question", "repeating the question", "you're repeating",
-    "you are repeating",
+    "not comfortable answering", "can we skip",
 )
+_REPETITION_INTENTS = (
+    "already answered", "asking the same question", "repeating the question",
+    "you're repeating", "you are repeating",
+)
+_CLARIFICATION_INTENTS = ("what do you mean", "what you mean", "can you clarify", "clarify what")
+_CANDIDATE_QUESTION_INTENTS = ("are you asking", "do you mean", "which one do you mean")
 
 
 def classify_conversation_intent(transcript: str) -> str:
@@ -1017,8 +1024,14 @@ def classify_conversation_intent(transcript: str) -> str:
     lowered = re.sub(r"\s+", " ", str(transcript or "").lower()).strip()
     if any(phrase in lowered for phrase in _END_INTERVIEW_INTENTS):
         return "end_interview"
+    if any(phrase in lowered for phrase in _REPETITION_INTENTS):
+        return "repetition_complaint"
     if any(phrase in lowered for phrase in _SKIP_INTERVIEW_INTENTS):
-        return "skip_or_repeat"
+        return "skip_question"
+    if any(phrase in lowered for phrase in _CLARIFICATION_INTENTS):
+        return "interviewer_clarification"
+    if any(phrase in lowered for phrase in _CANDIDATE_QUESTION_INTENTS):
+        return "candidate_question"
     return "technical_answer"
 
 
@@ -1062,6 +1075,8 @@ def _restates_answer(question: str, answer: str) -> bool:
     stop = {"a", "an", "the", "and", "or", "to", "of", "in", "for", "is", "was", "we", "used", "because", "what", "why", "how"}
     q_words = {w for w in _normalize_question_text(question).split() if len(w) > 2 and w not in stop}
     a_words = {w for w in _normalize_question_text(answer).split() if len(w) > 2 and w not in stop}
+    if re.search(r"\bwhy did you use\b", _normalize_question_text(question)):
+        return bool(q_words & a_words)
     return len(q_words) >= 4 and len(q_words & a_words) / len(q_words) >= 0.75
 
 
@@ -1586,7 +1601,10 @@ async def _answer_interview_question_locked(
     # Conversation-control language is never technical evidence and must be
     # handled before any provider or adaptive-question work.
     conversation_intent = classify_conversation_intent(text)
-    if conversation_intent in {"end_interview", "skip_or_repeat"}:
+    if conversation_intent in {
+        "end_interview", "skip_question", "repetition_complaint",
+        "interviewer_clarification", "candidate_question",
+    }:
         existing_transcript = s.get("transcript") or []
         existing_transcript.append({
             "question_id": question_id,
@@ -1596,7 +1614,8 @@ async def _answer_interview_question_locked(
             "answered": True,
             "conversation_intent": conversation_intent,
         })
-        next_index = current_index + 1
+        stays_on_question = conversation_intent in {"interviewer_clarification", "candidate_question"}
+        next_index = current_index if stays_on_question else current_index + 1
         ending = conversation_intent == "end_interview" or next_index >= len(questions)
         update: Dict[str, Any] = {
             "transcript": existing_transcript,
@@ -1610,7 +1629,14 @@ async def _answer_interview_question_locked(
             "question_id": question_id,
             "next_action": "complete" if ending else "next",
             "action": "COMPLETE" if ending else "NEXT",
-            "spoken_response": "Understood. We'll end the interview here." if ending else "Understood. Let's move to a different area.",
+            "spoken_response": (
+                "Understood. We'll end the interview here." if ending else
+                "By trade-offs, I mean what you gained with your approach and what you gave up—such as performance, complexity, consistency, or maintainability."
+                if conversation_intent == "interviewer_clarification" else
+                "You're right. Let's approach a different area."
+                if conversation_intent == "repetition_complaint" else
+                "Understood. Let's move to a different area."
+            ),
             "ai_available": True,
             "evaluation": None,
             "evaluation_pending": False,
@@ -1862,11 +1888,11 @@ async def _answer_interview_question_locked(
         model_ack = ""
     spoken_response = None
     if action == "complete":
-        spoken_response = "Thank you. That concludes all questions for this interview. I'm finalizing your evaluation now."
+        spoken_response = "Thanks. That wraps up the interview; I'm putting your results together now."
     elif action == "follow_up" and follow_up_question is not None:
         spoken_response = model_ack or "I see."
     elif action == "next" and next_question is not None:
-        spoken_response = model_ack or "Thank you for explaining that. Let's move on to the next question."
+        spoken_response = model_ack or "Alright, let's look at another area."
 
     response = {
         "session_id": session_id,
@@ -2148,17 +2174,16 @@ async def _complete_interview_session_locked(
     # Determine grading path: per-answer evaluations vs batch transcript.
     # Deterministic recovery records (answer preserved, unscored) behave like
     # pending evaluations: they never fabricate evidence into the aggregate.
-    has_per_answer_evals = bool(
-        evaluation_results
-        and any(isinstance(e, dict) and _is_real_evaluation(e.get("evaluation"))
-                for e in evaluation_results)
-    )
+    # Adaptive sessions always record one evaluation object per submitted
+    # answer, including deterministic recovery objects. Never send those
+    # sessions through the legacy whole-transcript grader.
+    has_per_answer_evals = bool(evaluation_results)
 
+    all_evals: List[Dict[str, Any]] = []
     if has_per_answer_evals:
         # Path 1: Aggregate per-answer evaluations (adaptive flow)
         tech_scores: Dict[str, float] = {}
         comm_scores: Dict[str, float] = {}
-        all_evals: List[Dict[str, Any]] = []
         for entry in evaluation_results:
             if not isinstance(entry, dict):
                 continue
@@ -2180,9 +2205,10 @@ async def _complete_interview_session_locked(
         technical_overall = round(sum(tech_scores.values()) / len(tech_scores), 4) if tech_scores else 0.0
         comm_overall = round(sum(comm_scores.values()) / len(comm_scores), 4) if comm_scores else 0.0
 
+        limited_confidence = len(all_evals) < len(evaluation_results)
         update = {
             "status": "graded",
-            "validity": "valid",
+            "validity": "low_confidence" if limited_confidence else "valid",
             "completed_at": now.isoformat(),
             "technical_scores": {"per_competency": tech_scores, "overall": technical_overall},
             "communication_scores": {"per_dimension": comm_scores, "overall": comm_overall},
@@ -2234,13 +2260,25 @@ async def _complete_interview_session_locked(
         "session_id": session_id,
         "skill": canonical,
         "status": "graded",
-        "validity": "valid",
-        "counts_as_evidence": True,
+        "validity": update.get("validity", "valid"),
+        "counts_as_evidence": update.get("validity") == "valid",
         "completed_at": update["completed_at"],
         "source_reliability": INTERVIEW_RELIABILITY,
         "technical_scores": update["technical_scores"],
         "communication_scores": update["communication_scores"],
         "grading_path": "per_answer" if has_per_answer_evals else "batch_transcript",
+        "report": {
+            "technical_overall": technical_overall,
+            "competency_scores": update["technical_scores"].get("per_competency", {}),
+            "communication_scores": update["communication_scores"],
+            "demonstrated_strengths": [str(x) for ev in all_evals for x in (ev.get("demonstrated") or [])][:10],
+            "weak_or_missing_areas": [str(x) for ev in all_evals for x in (ev.get("missing") or [])][:10],
+            "misconceptions": [str(x) for ev in all_evals for x in (ev.get("misconceptions") or [])][:10],
+            "reasoning_depth": round(sum(float(ev.get("depth") or 0) for ev in all_evals) / len(all_evals), 4) if all_evals else 0.0,
+            "practical_understanding": round(sum(float(ev.get("technical_correctness") or 0) for ev in all_evals) / len(all_evals), 4) if all_evals else 0.0,
+            "confidence": round(sum(float(ev.get("confidence") or 0) for ev in all_evals) / len(all_evals), 4) if all_evals else 0.0,
+            "interview_signal": "limited_confidence" if update.get("validity") != "valid" else "available",
+        },
         "note": (
             "Implementation understanding validated."
             if technical_overall >= 0.5

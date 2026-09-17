@@ -379,7 +379,7 @@ export default function InterviewModal({ skill, onClose, onCompleted }: Props) {
 
       const greeting = sessionRef.current
         ? firstQ.prompt
-        : `Hi! I'm your INAURA AI interviewer. I've reviewed your profile and we'll focus on ${skill} today. Let's begin. ${firstQ.prompt}`;
+        : `Hi! I'm Donald Duck, your technical interviewer. I've reviewed your profile and we'll focus on ${skill} today. Let's begin. ${firstQ.prompt}`;
       await speakThenListen(greeting);
     } catch (e) {
       if (!interviewActiveRef.current) return;
@@ -601,10 +601,10 @@ export default function InterviewModal({ skill, onClose, onCompleted }: Props) {
             <div className="iv__call-panel iv__call-panel--ai">
               <div className="iv__call-avatar">
                 <div className={`iv__avatar-ring ${phase === "ai_speaking" ? "iv__avatar-ring--active" : ""}`}>
-                  <span className="iv__avatar-icon">🤖</span>
+                  <span className="iv__avatar-icon" role="img" aria-label="Funny duck interviewer">🦆</span>
                 </div>
               </div>
-              <div className="iv__call-panel-label">INAURA AI</div>
+              <div className="iv__call-panel-label">Donald Duck</div>
               {/* The question stays visible while listening when voice failed,
                   so it can still be read and answered. Cleared on success. */}
               {(phase === "ai_speaking" || phase === "listening") && aiText && (
