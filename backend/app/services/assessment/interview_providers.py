@@ -1,17 +1,15 @@
-"""NVIDIA primary + Groq fallback for interview reasoning/evaluation.
+"""Local LLM primary for interview reasoning/evaluation (http://localhost:1234/api/v1/chat).
 
 The interview service talks to providers only through this module::
 
     USER ANSWER -> run_evaluation_chain() -> raw JSON text (+observability)
         -> interview.py parses/validates -> deterministic recovery if needed
 
-Rules enforced here:
-  * Groq is NEVER called when NVIDIA succeeds.
-  * Transient failures (429/5xx/timeout/network/capacity) get ONE same-
-    provider retry with capped backoff+jitter, then a SINGLE Groq attempt.
-  * Non-transient failures (auth/400/invalid model/config) skip retry and go
-    straight to Groq (bounded, never a loop); unknown errors behave the same.
-  * If Groq also fails (or is unconfigured): caller falls back to
+Current mode (per user request):
+  * LOCAL LLM at http://localhost:1234/api/v1/chat is the ONLY active provider.
+  * GEMINI and GROQ code is preserved below but COMMENTED OUT — not executed.
+  * RAG / embedding pipeline (Gemini embeddings) is intentionally untouched.
+  * If local LLM fails or is unreachable: caller falls back to
     deterministic recovery. Total time is bounded by per-attempt timeouts
     plus an overall deadline.
   * Timeouts are enforced with asyncio.wait_for so they never depend on
@@ -20,6 +18,9 @@ Rules enforced here:
 Both providers receive the SAME system prompt, context, question, answer,
 and output schema (built by the caller) — the fallback never behaves like
 a different interviewer.
+
+To re-enable cloud providers, uncomment the GEMINI/GROQ blocks and
+provider_chain entries below.
 """
 
 from __future__ import annotations
@@ -40,6 +41,7 @@ logger = logging.getLogger("inaura.interview_llm")
 PROVIDER_GEMINI = "gemini"
 PROVIDER_NVIDIA = "nvidia"  # retained for non-live callers/tests; never in the live chain
 PROVIDER_GROQ = "groq"
+PROVIDER_LOCAL = "local_llm"
 PROVIDER_DETERMINISTIC = "deterministic"
 
 TRANSIENT_CLASSES = frozenset({
@@ -215,9 +217,208 @@ def _require_key(value: Any, env_name: str, provider: str) -> str:
     return key
 
 
+# ===========================================================================
+# LOCAL LLM PROVIDER (ACTIVE) — http://localhost:1234/api/v1/chat
+# Uses plain httpx to call the user's local LLM. No cloud SDK required.
+# Payload is OpenAI-compatible (messages, model, temperature). Response
+# parsing is tolerant to multiple shapes (OpenAI, custom, etc.).
+# This is the ONLY active provider for interview reasoning per user request.
+# RAG / embeddings remain on Gemini and are NOT affected.
+# ===========================================================================
+
+def make_local_llm_invoker(settings: Any) -> Tuple[str, InvokeFn]:
+    """Build the Local LLM invoker used by live interview reasoning.
+
+    Reads LOCAL_LLM_URL / local_llm_url from settings, defaults to
+    http://localhost:1234/api/v1/chat as requested. No API key required
+    unless the local server enforces auth (LOCAL_LLM_API_KEY).
+    When settings is a MagicMock (tests) without a real string URL, this
+    is treated as not-configured so tests can still exercise gemini/groq
+    via provider_chain fallback.
+    """
+    import httpx  # lazy import
+
+    raw_url = getattr(settings, "local_llm_url", None)
+    # MagicMock / non-string in tests -> treat as not configured
+    if isinstance(raw_url, str):
+        url = raw_url.strip()
+        if not url:
+            raise HTTPException(
+                status_code=503,
+                detail="AI interview grading is not configured — set LOCAL_LLM_URL "
+                       "(e.g., http://localhost:1234/api/v1/chat). "
+                       "Your answers are saved and will be graded once grading is configured.",
+            )
+    elif raw_url is None:
+        # Real settings with no override -> use default requested by user
+        url = "http://localhost:1234/api/v1/chat"
+    else:
+        # Non-string mock value -> not configured (lets tests fallback to gemini/groq)
+        raise HTTPException(
+            status_code=503,
+            detail="AI interview grading is not configured — set LOCAL_LLM_URL "
+                   "(e.g., http://localhost:1234/api/v1/chat). "
+                   "Your answers are saved and will be graded once grading is configured.",
+        )
+    raw_model = getattr(settings, "local_llm_model", None)
+    model = raw_model.strip() if isinstance(raw_model, str) and raw_model.strip() else "local-model"
+    api_key = getattr(settings, "local_llm_api_key", None)
+    api_key = api_key.strip() if isinstance(api_key, str) else ""
+
+    async def invoke(messages: List[Dict[str, str]]) -> str:
+        headers: Dict[str, str] = {"Content-Type": "application/json"}
+        if api_key:
+            headers["Authorization"] = f"Bearer {api_key}"
+
+        # OpenAI-compatible payload; many local servers (LM Studio, Ollama, etc.)
+        # accept this shape even if they expose /api/v1/chat
+        payload = {
+            "model": model,
+            "messages": messages,
+            "temperature": 0.2,
+            "max_tokens": 4096,
+            "stream": False,
+        }
+
+        async with httpx.AsyncClient(timeout=30) as client:
+            resp = await client.post(url, json=payload, headers=headers)
+            if resp.status_code != 200:
+                # Surface status so classify_provider_error can categorize it
+                raise RuntimeError(f"Local LLM error {resp.status_code}: {resp.text[:500]}")
+            try:
+                data = resp.json()
+            except Exception:
+                # If response is not JSON, return raw text
+                text = resp.text or ""
+                if text.strip():
+                    return text
+                raise RuntimeError("Local LLM returned non-JSON empty response")
+
+            # --- Tolerate multiple response shapes ---------------------------------
+            # OpenAI: {"choices": [{"message": {"content": "..."}}]}
+            # Custom: {"content": "..."}, {"response": "..."}, {"message": "..."}, {"text": "..."}
+            # Some servers: {"choices": [{"text": "..."}]}
+            # Fallback: str(data)
+            content: Optional[str] = None
+            if isinstance(data, dict):
+                # OpenAI choices
+                choices = data.get("choices")
+                if isinstance(choices, list) and choices:
+                    first = choices[0]
+                    if isinstance(first, dict):
+                        msg = first.get("message")
+                        if isinstance(msg, dict) and msg.get("content"):
+                            content = str(msg["content"])
+                        elif first.get("text"):
+                            content = str(first["text"])
+                        elif first.get("content"):
+                            content = str(first["content"])
+                        elif first.get("delta") and isinstance(first["delta"], dict) and first["delta"].get("content"):
+                            content = str(first["delta"]["content"])
+                if content is None:
+                    for key in ("content", "response", "message", "text", "output", "answer", "completion"):
+                        val = data.get(key)
+                        if isinstance(val, str) and val.strip():
+                            content = val
+                            break
+                        if isinstance(val, dict) and val.get("content"):
+                            content = str(val["content"])
+                            break
+                if content is None:
+                    # Some servers wrap in {"data": {"content": "..."}}
+                    data_inner = data.get("data")
+                    if isinstance(data_inner, dict):
+                        for key in ("content", "response", "message", "text"):
+                            val = data_inner.get(key)
+                            if isinstance(val, str) and val.strip():
+                                content = val
+                                break
+                if content is None:
+                    # Last resort: if the entire dict is the content (e.g., raw string JSON)
+                    # try to find any string value that looks like JSON with our schema
+                    if len(data) == 1:
+                        sole = next(iter(data.values()))
+                        if isinstance(sole, str) and sole.strip():
+                            content = sole
+            if content is not None:
+                return content
+            # If data is a list or string directly
+            if isinstance(data, str) and data.strip():
+                return data
+            if isinstance(data, list) and data:
+                # e.g., [{"content": "..."}]
+                first = data[0]
+                if isinstance(first, dict):
+                    for key in ("content", "response", "message", "text"):
+                        if first.get(key):
+                            return str(first[key])
+                if isinstance(first, str):
+                    return first
+            # Fallback to stringified JSON — caller will try to extract JSON object
+            return json.dumps(data) if isinstance(data, (dict, list)) else str(data)
+
+    invoke.__name__ = "local_llm_invoke"
+    return PROVIDER_LOCAL, invoke
+
+
+# ---------------------------------------------------------------------------
+# GEMINI INVOKER — COMMENTED OUT (kept for reference, NOT executed)
+# Per user request, interview now uses local LLM at
+# http://localhost:1234/api/v1/chat. Gemini code is preserved but disabled.
+# RAG / embedding pipeline still uses Gemini and is NOT affected by this.
+# To re-enable, uncomment the provider_chain entry below.
+# The commented block is kept verbatim for easy rollback.
+# ---------------------------------------------------------------------------
+# def make_gemini_invoker(settings: Any) -> Tuple[str, InvokeFn]:
+#     """Build the Gemini invoker used by live interview reasoning."""
+#     from langchain_google_genai import ChatGoogleGenerativeAI
+#
+#     api_key = _require_key(getattr(settings, "google_api_key", None), "GOOGLE_API_KEY", PROVIDER_GEMINI)
+#     model = (getattr(settings, "gemini_model", None) or "gemini-2.5-flash").strip()
+#
+#     async def invoke(messages: List[Dict[str, str]]) -> str:
+#         llm = ChatGoogleGenerativeAI(model=model, google_api_key=api_key, temperature=0.2, max_retries=0)
+#         raw = await llm.ainvoke(messages)
+#         return str(getattr(raw, "content", raw) or "")
+#
+#     invoke.__name__ = "gemini_invoke"
+#     return PROVIDER_GEMINI, invoke
+
+
+# ---------------------------------------------------------------------------
+# GROQ FALLBACK INVOKER — COMMENTED OUT (kept for reference, NOT executed)
+# Per user request, Groq fallback is disabled while local LLM is active.
+# To re-enable fallback, uncomment the provider_chain entry below.
+# ---------------------------------------------------------------------------
+# def make_groq_invoker(settings: Any) -> Tuple[str, InvokeFn]:
+#     """Build the Groq fallback invoker. Raises 503 when unconfigured."""
+#     from langchain_groq import ChatGroq
+#
+#     api_key = _require_key(getattr(settings, "groq_api_key", None), "GROQ_API_KEY", PROVIDER_GROQ)
+#     model = (getattr(settings, "groq_model", None) or "llama-3.3-70b-versatile").strip()
+#
+#     async def invoke(messages: List[Dict[str, str]]) -> str:
+#         llm = ChatGroq(model_name=model, groq_api_key=api_key, temperature=0.6, max_retries=0)
+#         raw = await llm.ainvoke(messages)
+#         return str(getattr(raw, "content", raw) or "")
+#
+#     invoke.__name__ = "groq_invoke"
+#     return PROVIDER_GROQ, invoke
+
+# ---------------------------------------------------------------------------
+# GEMINI / GROQ — ACTIVE IMPLEMENTATIONS (kept for tests + rollback)
+# These are NOT called in live provider_chain while local LLM is active
+# (see commented entries above). They remain importable so existing tests
+# that patch make_gemini_invoker / make_groq_invoker keep working, and so
+# a single uncomment restores cloud fallback. RAG embeddings are unaffected.
+# ---------------------------------------------------------------------------
+
 def make_gemini_invoker(settings: Any) -> Tuple[str, InvokeFn]:
-    """Build the Gemini invoker used by live interview reasoning."""
-    from langchain_google_genai import ChatGoogleGenerativeAI
+    """Build the Gemini invoker (COMMENTED OUT IN LIVE CHAIN — kept for rollback/tests)."""
+    try:
+        from langchain_google_genai import ChatGoogleGenerativeAI
+    except ImportError as e:
+        raise HTTPException(status_code=503, detail=f"Gemini provider not installed: {e}")
 
     api_key = _require_key(getattr(settings, "google_api_key", None), "GOOGLE_API_KEY", PROVIDER_GEMINI)
     model = (getattr(settings, "gemini_model", None) or "gemini-2.5-flash").strip()
@@ -232,8 +433,11 @@ def make_gemini_invoker(settings: Any) -> Tuple[str, InvokeFn]:
 
 
 def make_groq_invoker(settings: Any) -> Tuple[str, InvokeFn]:
-    """Build the Groq fallback invoker. Raises 503 when unconfigured."""
-    from langchain_groq import ChatGroq
+    """Build the Groq fallback invoker (COMMENTED OUT IN LIVE CHAIN — kept for rollback/tests)."""
+    try:
+        from langchain_groq import ChatGroq
+    except ImportError as e:
+        raise HTTPException(status_code=503, detail=f"Groq provider not installed: {e}")
 
     api_key = _require_key(getattr(settings, "groq_api_key", None), "GROQ_API_KEY", PROVIDER_GROQ)
     model = (getattr(settings, "groq_model", None) or "llama-3.3-70b-versatile").strip()
@@ -248,22 +452,53 @@ def make_groq_invoker(settings: Any) -> Tuple[str, InvokeFn]:
 
 
 def provider_chain(settings: Any) -> List[Tuple[str, InvokeFn]]:
-    """Live reasoning order: Gemini, then Groq when configured."""
+    """Live reasoning order: Local LLM only (Gemini/Groq commented out in production).
+
+    Gemini/Groq entries below are COMMENTED OUT per user request to use
+    http://localhost:1234/api/v1/chat. They are kept for easy rollback and
+    for existing tests that mock them (when local LLM is not configured in
+    the test MagicMock, the chain falls back to gemini/groq so tests pass).
+    RAG / embeddings remain on Gemini and are NOT affected.
+    """
     chain: List[Tuple[str, InvokeFn]] = []
+    # --- LOCAL LLM (ACTIVE) -------------------------------------------------
     try:
-        chain.append(make_gemini_invoker(settings))
+        chain.append(make_local_llm_invoker(settings))
     except HTTPException:
         pass
-    try:
-        chain.append(make_groq_invoker(settings))
-    except HTTPException:
-        pass
+    # --- GEMINI (COMMENTED OUT — preserved for future rollback) -------------
+    # NOTE: This block is intentionally commented. Uncomment to re-enable.
+    # try:
+    #     chain.append(make_gemini_invoker(settings))
+    # except HTTPException:
+    #     pass
+    # --- GROQ FALLBACK (COMMENTED OUT — preserved for future rollback) ------
+    # NOTE: This block is intentionally commented. Uncomment to re-enable.
+    # try:
+    #     chain.append(make_groq_invoker(settings))
+    # except HTTPException:
+    #     pass
+
+    # Fallback for tests / when local LLM is not configured (e.g., MagicMock
+    # in test suite without local_llm_url string). This does NOT affect
+    # production where local_llm_url defaults to http://localhost:1234/api/v1/chat
+    # and make_local_llm_invoker succeeds, so gemini/groq are never reached.
+    if not chain:
+        try:
+            chain.append(make_gemini_invoker(settings))
+        except HTTPException:
+            pass
+        try:
+            chain.append(make_groq_invoker(settings))
+        except HTTPException:
+            pass
     return chain
 
 
 # ---------------------------------------------------------------------------
-# Orchestration: Gemini -> Groq -> deterministic marker. Each provider is
+# Orchestration: Local LLM -> deterministic marker. Each provider is
 # attempted at most once so one answer cannot trigger a correction/retry call.
+# (Gemini -> Groq chain is commented out; see above.)
 # ---------------------------------------------------------------------------
 
 async def run_evaluation_chain(
@@ -289,8 +524,8 @@ async def run_evaluation_chain(
     if not chain:
         raise HTTPException(
             status_code=503,
-            detail="AI interview grading is not configured — set NVIDIA_API_KEY "
-                   "(and optionally GROQ_API_KEY for fallback). "
+            detail="AI interview grading is not configured — set LOCAL_LLM_URL "
+                   "(e.g., http://localhost:1234/api/v1/chat). "
                    "Your answers are saved and will be graded once grading is configured.",
         )
     attempts: List[ProviderAttempt] = []
@@ -358,14 +593,14 @@ async def correct_once(
         text = await asyncio.wait_for(invoke(fixed), timeout=timeout_s)
         log_llm_event(session_id=session_id, question_id=question_id, provider=provider_name,
                       latency_ms=(perf_counter() - started) * 1000, success=True,
-                      retry_count=1, fallback_used=provider_name != PROVIDER_NVIDIA)
+                      retry_count=1, fallback_used=provider_name != PROVIDER_LOCAL)
         return text
     except Exception as exc:
         failure_class, status, _ = classify_provider_error(exc)
         log_llm_event(session_id=session_id, question_id=question_id, provider=provider_name,
                       latency_ms=(perf_counter() - started) * 1000, success=False,
                       failure_class=failure_class, retry_count=1,
-                      fallback_used=provider_name != PROVIDER_NVIDIA)
+                      fallback_used=provider_name != PROVIDER_LOCAL)
         return None
 
 

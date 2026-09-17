@@ -161,7 +161,13 @@ def test_classification_matrix():
 def _resilient_eval(nvidia_script, groq_script, **overrides):
     settings = _settings()
     calls: List[str] = []
-    with patch("app.services.assessment.interview_providers.make_gemini_invoker",
+    # Local LLM is now primary (http://localhost:1234/api/v1/chat) — tests that
+    # verify gemini->groq fallback must mock local to 503 so the chain falls
+    # back to the patched gemini/groq fakes. This keeps live code local-only
+    # while preserving original resilience tests.
+    with patch("app.services.assessment.interview_providers.make_local_llm_invoker",
+               side_effect=HTTPException(status_code=503, detail="local not configured for test")), \
+         patch("app.services.assessment.interview_providers.make_gemini_invoker",
                return_value=(PROVIDER_GEMINI, _fake_invoker("gemini", nvidia_script, calls))), \
          patch("app.services.assessment.interview_providers.make_groq_invoker",
                return_value=(PROVIDER_GROQ, _fake_invoker("groq", groq_script, calls))), \

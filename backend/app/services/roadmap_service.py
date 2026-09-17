@@ -1,6 +1,7 @@
 import math
 import uuid
 import logging
+from collections import defaultdict
 from datetime import datetime, timezone
 from typing import List, Dict, Optional, Tuple, Any
 from fastapi import HTTPException
@@ -838,7 +839,10 @@ def get_roadmap_weeks(user_id: str, roadmap_id: Optional[str] = None) -> List[di
         return weeks
     except Exception as e:
         logger.debug("Failed to fetch roadmap weeks: %s", e)
-        return []
+        message = str(e).lower()
+        if "could not find the table" in message or "pgrst205" in message:
+            raise HTTPException(status_code=503, detail="Weekly roadmap tables not found — run backend/supabase/022_adaptive_weekly_roadmap.sql")
+        raise HTTPException(status_code=500, detail="Failed to fetch weekly roadmap")
 
 
 def get_roadmap_week(user_id: str, week_id: str) -> dict:

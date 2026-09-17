@@ -443,25 +443,29 @@ def personalize_tasks_for_skill(
 
     primary_missing = missing[0]
     secondary_missing = missing[1] if len(missing) > 1 else missing[0]
+    learning_note = (
+        "Skip concepts already demonstrated and spend the time on applied understanding."
+        if demonstrated
+        else "Start with the smallest concepts needed to complete the practical task."
+    )
 
     for t in tasks:
         t_type = t.get("task_type")
         if t_type == "learn":
-            if demonstrated:
-                t["title"] = f"Master {primary_missing}"
-                t["description"] = (
-                    f"Focus specifically on {primary_missing} and {secondary_missing}. "
-                    f"Bypass foundational syntax already demonstrated in your existing projects."
-                )
-            t["why_this_task"] = f"Targets your specific unverified capability: {primary_missing}."
+            t["title"] = f"Learn {primary_missing}"
+            t["description"] = (
+                f"Study {primary_missing} and {secondary_missing} through a short, role-relevant lesson. "
+                f"{learning_note}"
+            )
+            t["why_this_task"] = f"Targets the next capability needed to close your {explanation.get('gap_pct', 0)}% gap."
 
         elif t_type == "practice":
             t["title"] = f"Implement {primary_missing}"
             t["description"] = (
-                f"Complete hands-on coding exercises implementing {primary_missing}. "
-                f"Ensure error handling and boundary conditions are covered."
+                f"Complete focused exercises implementing {primary_missing} and {secondary_missing}. "
+                f"Include error handling, boundary conditions, and a brief self-review."
             )
-            t["why_this_task"] = f"Bridges the {explanation.get('gap_pct', 20)}% gap through targeted implementation."
+            t["why_this_task"] = f"Bridges the {explanation.get('gap_pct', 0)}% gap through targeted practice."
 
         elif t_type == "build":
             t["title"] = f"Build Practical Deliverable: {display_name} Component"
@@ -469,16 +473,16 @@ def personalize_tasks_for_skill(
                 f"Construct a complete deliverable integrating {primary_missing} and {secondary_missing}. "
                 f"Structure clean code, documentation, and configuration."
             )
-            t["why_this_task"] = "Provides verifiable portfolio evidence of production-level capability."
+            t["why_this_task"] = "Turns the missing capability into a practical, portfolio-ready deliverable."
 
         elif t_type == "validate":
             t["title"] = f"Automated Verification & Submission for {display_name}"
             t["description"] = (
                 f"Write automated tests verifying {primary_missing} functionality, edge cases, and failure responses. "
-                f"Submit repository link for automated INAURA audit."
+                f"Finish with a short checklist explaining what works and what remains."
             )
             t["validation_method"] = explanation.get("validation_criteria") or t.get("validation_method")
-            t["why_this_task"] = "Proves observable mastery to advance your career readiness score."
+            t["why_this_task"] = "Confirms that you can apply the capability independently in a realistic scenario."
 
         t["personalization_context"] = {
             "primary_gap": primary_missing,

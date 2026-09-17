@@ -1954,28 +1954,185 @@ async def _answer_interview_question_locked(
 
 
 # ---------------------------------------------------------------------------
-# Grading: exactly ONE NVIDIA NIM call; strict schema validation; technical and
-# communication kept separate.
+# Grading: exactly ONE LLM call (now LOCAL LLM); strict schema validation;
+# technical and communication kept separate.
+# Previous NVIDIA NIM implementation is COMMENTED OUT below and preserved
+# for future rollback. Local LLM at http://localhost:1234/api/v1/chat is active.
+# RAG / embeddings are NOT affected — they remain on Gemini.
 # ---------------------------------------------------------------------------
 
 def _make_interview_llm():
-    from langchain_nvidia_ai_endpoints import ChatNVIDIA
+    """Return a local-LLM wrapper for batch grading / legacy follow-up path.
+
+    The original NVIDIA implementation is preserved below as comments.
+    This wrapper posts to LOCAL_LLM_URL (default http://localhost:1234/api/v1/chat)
+    via httpx and exposes the same .invoke() / .ainvoke() surface used by
+    grade_interview_transcript and generate_follow_up_question.
+    """
     from ...core.config import get_settings
+    import httpx
+    import json as _json
 
     settings = get_settings()
-    if not settings.nvidia_api_key:
+    url = (getattr(settings, "local_llm_url", None) or "http://localhost:1234/api/v1/chat").strip()
+    model = (getattr(settings, "local_llm_model", None) or "local-model").strip() or "local-model"
+    api_key = getattr(settings, "local_llm_api_key", None)
+    api_key = api_key.strip() if isinstance(api_key, str) else ""
+
+    if not url:
         raise HTTPException(
             status_code=503,
-            detail="AI interview grading is not configured — set NVIDIA_API_KEY (and optionally NVIDIA_MODEL). "
+            detail="AI interview grading is not configured — set LOCAL_LLM_URL "
+                   "(e.g., http://localhost:1234/api/v1/chat). "
                    "Your answers are saved and will be graded once grading is configured.",
         )
-    return ChatNVIDIA(
-        model=settings.nvidia_model or "nvidia/nemotron-3-nano-omni-30b-a3b-reasoning",
-        api_key=settings.nvidia_api_key,
-        temperature=0.6,
-        top_p=0.95,
-        max_completion_tokens=65536,
-    )
+
+    # --- Lightweight wrapper mimicking langchain's Chat* interface -----------
+    class _LocalLLMWrapper:
+        def __init__(self, url: str, model: str, api_key: str):
+            self.url = url
+            self.model = model
+            self.api_key = api_key
+            # Provide .model attribute for diagnostics that read getattr(llm, "model", ...)
+            self.model_name = model
+
+        def _headers(self):
+            h = {"Content-Type": "application/json"}
+            if self.api_key:
+                h["Authorization"] = f"Bearer {self.api_key}"
+            return h
+
+        def _payload(self, prompt_or_messages):
+            # grade_interview_transcript passes a single string prompt,
+            # while adaptive paths may pass a messages list.
+            if isinstance(prompt_or_messages, list):
+                messages = prompt_or_messages
+                # Normalize possibly mixed formats: ensure each is {role, content}
+                norm = []
+                for m in messages:
+                    if isinstance(m, dict) and "role" in m and "content" in m:
+                        norm.append({"role": str(m["role"]), "content": str(m["content"])})
+                    elif isinstance(m, dict) and "content" in m:
+                        norm.append({"role": "user", "content": str(m["content"])})
+                    elif isinstance(m, str):
+                        norm.append({"role": "user", "content": m})
+                    else:
+                        norm.append({"role": "user", "content": str(m)})
+                messages = norm
+            elif isinstance(prompt_or_messages, str):
+                messages = [{"role": "user", "content": prompt_or_messages}]
+            else:
+                messages = [{"role": "user", "content": str(prompt_or_messages)}]
+            return {
+                "model": self.model,
+                "messages": messages,
+                "temperature": 0.6,
+                "max_tokens": 65536,
+                "stream": False,
+            }
+
+        def _parse_response_text(self, resp: httpx.Response) -> str:
+            if resp.status_code != 200:
+                raise RuntimeError(f"Local LLM error {resp.status_code}: {resp.text[:500]}")
+            try:
+                data = resp.json()
+            except Exception:
+                text = resp.text or ""
+                if text.strip():
+                    return text
+                raise RuntimeError("Local LLM returned non-JSON empty response")
+            content = None
+            if isinstance(data, dict):
+                choices = data.get("choices")
+                if isinstance(choices, list) and choices:
+                    first = choices[0]
+                    if isinstance(first, dict):
+                        msg = first.get("message")
+                        if isinstance(msg, dict) and msg.get("content"):
+                            content = str(msg["content"])
+                        elif first.get("text"):
+                            content = str(first["text"])
+                        elif first.get("content"):
+                            content = str(first["content"])
+                        elif first.get("delta") and isinstance(first["delta"], dict) and first["delta"].get("content"):
+                            content = str(first["delta"]["content"])
+                if content is None:
+                    for key in ("content", "response", "message", "text", "output", "answer", "completion"):
+                        val = data.get(key)
+                        if isinstance(val, str) and val.strip():
+                            content = val
+                            break
+                        if isinstance(val, dict) and val.get("content"):
+                            content = str(val["content"])
+                            break
+                if content is None:
+                    data_inner = data.get("data")
+                    if isinstance(data_inner, dict):
+                        for key in ("content", "response", "message", "text"):
+                            val = data_inner.get(key)
+                            if isinstance(val, str) and val.strip():
+                                content = val
+                                break
+                if content is None and len(data) == 1:
+                    sole = next(iter(data.values()))
+                    if isinstance(sole, str) and sole.strip():
+                        content = sole
+            if content is not None:
+                return content
+            if isinstance(data, str) and data.strip():
+                return data
+            if isinstance(data, list) and data:
+                first = data[0]
+                if isinstance(first, dict):
+                    for key in ("content", "response", "message", "text"):
+                        if first.get(key):
+                            return str(first[key])
+                if isinstance(first, str):
+                    return first
+            return _json.dumps(data) if isinstance(data, (dict, list)) else str(data)
+
+        # Sync interface used by grade_interview_transcript
+        def invoke(self, prompt_or_messages):
+            payload = self._payload(prompt_or_messages)
+            with httpx.Client(timeout=60) as client:
+                resp = client.post(self.url, json=payload, headers=self._headers())
+                text = self._parse_response_text(resp)
+            # Return object with .content to match langchain surface
+            class _Resp:
+                def __init__(self, c): self.content = c
+            return _Resp(text)
+
+        # Async interface used by generate_follow_up_question and tests
+        async def ainvoke(self, messages):
+            payload = self._payload(messages)
+            headers = self._headers()
+            async with httpx.AsyncClient(timeout=60) as client:
+                resp = await client.post(self.url, json=payload, headers=headers)
+                text = self._parse_response_text(resp)
+            class _Resp:
+                def __init__(self, c): self.content = c
+            return _Resp(text)
+
+    return _LocalLLMWrapper(url, model, api_key)
+
+    # --- ORIGINAL NVIDIA IMPLEMENTATION (COMMENTED OUT — preserved) ---------
+    # from langchain_nvidia_ai_endpoints import ChatNVIDIA
+    # from ...core.config import get_settings
+    #
+    # settings = get_settings()
+    # if not settings.nvidia_api_key:
+    #     raise HTTPException(
+    #         status_code=503,
+    #         detail="AI interview grading is not configured — set NVIDIA_API_KEY (and optionally NVIDIA_MODEL). "
+    #                "Your answers are saved and will be graded once grading is configured.",
+    #     )
+    # return ChatNVIDIA(
+    #     model=settings.nvidia_model or "nvidia/nemotron-3-nano-omni-30b-a3b-reasoning",
+    #     api_key=settings.nvidia_api_key,
+    #     temperature=0.6,
+    #     top_p=0.95,
+    #     max_completion_tokens=65536,
+    # )
 
 
 # Gemini implementation kept commented for a future provider rollback.
