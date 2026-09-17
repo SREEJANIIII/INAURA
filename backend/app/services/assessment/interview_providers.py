@@ -1,4 +1,4 @@
-"""NVIDIA NIM provider for interview reasoning/evaluation.
+"""Gemini-first providers for interview reasoning/evaluation.
 
 The interview service talks to providers only through this module::
 
@@ -6,11 +6,12 @@ The interview service talks to providers only through this module::
         -> interview.py parses/validates -> deterministic recovery if needed
 
 Current mode:
-    * NVIDIA NIM is the ONLY active provider for interview reasoning.
-    * Other provider adapters are preserved for tests and rollback.
+    * Gemini is the primary active provider for interview reasoning.
+    * Groq is the existing reasoning fallback, then deterministic recovery.
   * RAG / embedding pipeline (Gemini embeddings) is intentionally untouched.
-  * NVIDIA remains TTS-only and Groq remains STT-only.
-  * If OpenRouter fails or is unreachable: caller falls back to
+  * NVIDIA remains TTS-only and Groq Whisper remains STT-only outside this
+    reasoning fallback.
+  * If Gemini and Groq fail or are unreachable: caller falls back to
     deterministic recovery. Total time is bounded by per-attempt timeouts
     plus an overall deadline.
   * Timeouts are enforced with asyncio.wait_for so they never depend on
@@ -521,15 +522,13 @@ def make_local_llm_invoker(settings: Any) -> Tuple[str, InvokeFn]:
 #     return PROVIDER_GROQ, invoke
 
 # ---------------------------------------------------------------------------
-# GEMINI / GROQ — ACTIVE IMPLEMENTATIONS (kept for tests + rollback)
-# These are NOT called in live provider_chain while local LLM is active
-# (see commented entries above). They remain importable so existing tests
-# that patch make_gemini_invoker / make_groq_invoker keep working, and so
-# a single uncomment restores cloud fallback. RAG embeddings are unaffected.
+# GEMINI / GROQ — ACTIVE IMPLEMENTATIONS
+# Gemini is called first by provider_chain; Groq is called only as its fallback.
+# RAG embeddings are unaffected.
 # ---------------------------------------------------------------------------
 
 def make_gemini_invoker(settings: Any) -> Tuple[str, InvokeFn]:
-    """Build the Gemini invoker (COMMENTED OUT IN LIVE CHAIN — kept for rollback/tests)."""
+    """Build the Gemini invoker used first by live interview reasoning."""
     try:
         from langchain_google_genai import ChatGoogleGenerativeAI
     except ImportError as e:
@@ -548,7 +547,7 @@ def make_gemini_invoker(settings: Any) -> Tuple[str, InvokeFn]:
 
 
 def make_groq_invoker(settings: Any) -> Tuple[str, InvokeFn]:
-    """Build the Groq fallback invoker (COMMENTED OUT IN LIVE CHAIN — kept for rollback/tests)."""
+    """Build the Groq reasoning fallback invoker."""
     try:
         from langchain_groq import ChatGroq
     except ImportError as e:
@@ -646,19 +645,22 @@ def make_openrouter_invoker(settings: Any) -> Tuple[str, InvokeFn]:
 
 
 def provider_chain(settings: Any) -> List[Tuple[str, InvokeFn]]:
-    """Live interview reasoning uses NVIDIA NIM only."""
+    """Live reasoning order: Gemini, Groq fallback, deterministic recovery."""
     chain: List[Tuple[str, InvokeFn]] = []
     try:
-        chain.append(make_nvidia_invoker(settings))
+        chain.append(make_gemini_invoker(settings))
+    except HTTPException:
+        pass
+    try:
+        chain.append(make_groq_invoker(settings))
     except HTTPException:
         pass
     return chain
 
 
 # ---------------------------------------------------------------------------
-# Orchestration: Local LLM -> deterministic marker. Each provider is
+# Orchestration: Gemini -> Groq -> deterministic marker. Each provider is
 # attempted at most once so one answer cannot trigger a correction/retry call.
-# (Gemini -> Groq chain is commented out; see above.)
 # ---------------------------------------------------------------------------
 
 async def run_evaluation_chain(

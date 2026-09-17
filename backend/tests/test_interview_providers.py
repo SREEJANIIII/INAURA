@@ -1,4 +1,4 @@
-"""Provider resilience: NVIDIA NIM request, deterministic recovery.
+"""Provider resilience: Gemini-first reasoning with Groq fallback.
 
 All provider I/O is injected fakes — no SDK imports, no network, no keys.
 Covers: success, retry, fallback, timeouts, auth short-circuit, malformed
@@ -16,12 +16,12 @@ from fastapi import HTTPException
 from app.services.assessment import interview as iv
 from app.services.assessment.interview_providers import (
     PROVIDER_DETERMINISTIC,
-    PROVIDER_OPENROUTER,
+    PROVIDER_GEMINI,
+    PROVIDER_GROQ,
     backoff_delay_seconds,
     classify_provider_error,
     contains_injection_markers,
     is_transient,
-    make_openrouter_invoker,
     provider_chain,
     run_evaluation_chain,
 )
@@ -33,13 +33,12 @@ class ProviderError(Exception):
         self.status_code = status_code
 
 
-def _settings(openrouter_key="or-key"):
+def _settings(gemini_key="gem-key", groq_key="gq-key"):
     s = MagicMock()
-    s.nvidia_api_key = openrouter_key
-    s.nvidia_model = "nvidia/nemotron-3-nano-omni-30b-a3b-reasoning"
-    s.openrouter_api_key = openrouter_key
-    s.openrouter_primary_model = "deepseek/deepseek-v3.2"
-    s.openrouter_fallback_models = "google/gemini-2.5-flash,meta-llama/llama-3.3-70b-instruct"
+    s.google_api_key = gemini_key
+    s.gemini_model = "gemini-test-model"
+    s.groq_api_key = groq_key
+    s.groq_model = "llama-3.3-70b-versatile"
     s.interview_llm_timeout_seconds = 5
     s.interview_llm_total_budget_seconds = 30
     return s
@@ -55,11 +54,12 @@ def _fake_invoker(name: str, script: List[Any], calls: List[str]):
     return invoke
 
 
-def _run_chain(script, openrouter_key="or-key"):
+def _run_chain(gemini_script, groq_script, gemini_key="gem-key", groq_key="gq-key"):
     calls: List[str] = []
-    settings = _settings(openrouter_key)
+    settings = _settings(gemini_key, groq_key)
     with patch("app.services.assessment.interview_providers.provider_chain",
-               return_value=[(PROVIDER_OPENROUTER, _fake_invoker("openrouter", script, calls))]), \
+               return_value=[(PROVIDER_GEMINI, _fake_invoker("gemini", gemini_script, calls)),
+                             (PROVIDER_GROQ, _fake_invoker("groq", groq_script, calls))]), \
          patch("app.services.assessment.interview_providers.asyncio.sleep", new=AsyncMock()):
         result = asyncio.run(run_evaluation_chain(
             [{"role": "user", "content": "hi"}], settings=settings,
@@ -67,84 +67,82 @@ def _run_chain(script, openrouter_key="or-key"):
     return result, calls
 
 
-def test_live_provider_chain_is_nvidia_only():
+def test_live_provider_chain_is_gemini_then_groq():
     settings = _settings()
-    with patch("app.services.assessment.interview_providers.make_nvidia_invoker",
-               return_value=("nvidia", object())) as make_nvidia:
+    with patch("app.services.assessment.interview_providers.make_gemini_invoker",
+               return_value=(PROVIDER_GEMINI, object())) as make_gemini, \
+         patch("app.services.assessment.interview_providers.make_groq_invoker",
+               return_value=(PROVIDER_GROQ, object())) as make_groq, \
+         patch("app.services.assessment.interview_providers.make_openrouter_invoker") as make_openrouter, \
+         patch("app.services.assessment.interview_providers.make_nvidia_invoker") as make_nvidia:
         chain = provider_chain(settings)
-    assert [name for name, _ in chain] == ["nvidia"]
-    make_nvidia.assert_called_once_with(settings)
-
-
-def test_openrouter_model_order_is_configured_for_one_request():
-    settings = _settings()
-    provider, invoke = make_openrouter_invoker(settings)
-    assert provider == PROVIDER_OPENROUTER
-    assert invoke.last_model == "deepseek/deepseek-v3.2"
-    assert invoke.fallback_models == (
-        "google/gemini-2.5-flash", "meta-llama/llama-3.3-70b-instruct"
-    )
+    assert [name for name, _ in chain] == [PROVIDER_GEMINI, PROVIDER_GROQ]
+    make_gemini.assert_called_once_with(settings)
+    make_groq.assert_called_once_with(settings)
+    make_openrouter.assert_not_called()
+    make_nvidia.assert_not_called()
 
 
 # ===========================================================================
 # A–J: provider matrix
 # ===========================================================================
 
-def test_A_openrouter_success():
-    result, calls = _run_chain(['{"ok": true}'])
+def test_A_gemini_success_never_calls_groq():
+    result, calls = _run_chain(['{"ok": true}'], ['{"should": "not happen"}'])
     assert result.text == '{"ok": true}'
-    assert result.provider_used == PROVIDER_OPENROUTER
+    assert result.provider_used == PROVIDER_GEMINI
     assert result.fallback_used is False
-    assert calls == ["openrouter"]
+    assert calls == ["gemini"]
     assert len(result.attempts) == 1 and result.attempts[0].success is True
 
 
-def test_B_openrouter_failure_uses_deterministic_recovery():
-    result, calls = _run_chain([ProviderError(429, "Too Many Requests: rate limit")])
-    assert result.text is None
-    assert result.provider_used == PROVIDER_DETERMINISTIC
-    assert calls == ["openrouter"]
+def test_B_gemini_failure_falls_back_to_groq():
+    result, calls = _run_chain([ProviderError(429, "Too Many Requests: rate limit")], ['{"recovered": true}'])
+    assert result.text == '{"recovered": true}'
+    assert result.provider_used == PROVIDER_GROQ
+    assert calls == ["gemini", "groq"]
     assert result.attempts[0].failure_class == "rate_limited"
 
 
-def test_C_openrouter_503_uses_deterministic_recovery():
-    result, calls = _run_chain([ProviderError(503, "Service Unavailable")])
-    assert result.provider_used == PROVIDER_DETERMINISTIC
-    assert calls == ["openrouter"]
+def test_C_gemini_503_then_groq():
+    result, calls = _run_chain([ProviderError(503, "Service Unavailable")], ['{"from": "groq"}'])
+    assert result.provider_used == PROVIDER_GROQ
+    assert result.fallback_used is True
+    assert calls == ["gemini", "groq"]
 
 
-def test_D_openrouter_timeout_uses_deterministic_recovery():
-    result, calls = _run_chain([asyncio.TimeoutError("timed out")])
-    assert result.provider_used == PROVIDER_DETERMINISTIC
+def test_D_gemini_timeout_goes_to_groq():
+    result, calls = _run_chain([asyncio.TimeoutError("timed out")], ['{"from": "groq"}'])
+    assert result.provider_used == PROVIDER_GROQ
     assert result.attempts[0].failure_class == "timeout"
-    assert calls == ["openrouter"]
+    assert calls == ["gemini", "groq"]
 
 
-def test_E_auth_error_uses_deterministic_recovery():
-    result, calls = _run_chain([ProviderError(401, "unauthorized: invalid api key")])
-    assert result.provider_used == PROVIDER_DETERMINISTIC
-    assert calls == ["openrouter"]
+def test_E_auth_error_skips_pointless_retry():
+    result, calls = _run_chain([ProviderError(401, "unauthorized: invalid api key")], ['{"from": "groq"}'])
+    assert result.provider_used == PROVIDER_GROQ
+    assert calls == ["gemini", "groq"]
     assert result.attempts[0].failure_class == "authentication_error"
 
 
-def test_F_openrouter_failure_marks_deterministic_fallback():
-    result, _ = _run_chain([ProviderError(500, "server error")])
-    assert result.provider_used == PROVIDER_DETERMINISTIC and result.fallback_used is True
+def test_F_gemini_failure_groq_success_marks_fallback():
+    result, _ = _run_chain([ProviderError(500, "server error")], ['{"ok": 1}'])
+    assert result.provider_used == PROVIDER_GROQ and result.fallback_used is True
 
 
-def test_G_openrouter_failure_yields_deterministic_marker():
-    result, calls = _run_chain([ProviderError(503, "down")])
+def test_G_both_fail_yields_deterministic_marker():
+    result, calls = _run_chain([ProviderError(503, "down")], [ProviderError(500, "groq down")])
     assert result.text is None
     assert result.provider_used == PROVIDER_DETERMINISTIC
     assert result.fallback_used is True
-    assert calls == ["openrouter"]
+    assert calls == ["gemini", "groq"]
     assert result.attempts[-1].failure_class == "temporary_unavailable"
 
 
 def test_no_providers_configured_raises_503():
     with pytest.raises(HTTPException) as exc_info:
         asyncio.run(run_evaluation_chain(
-            [{"role": "user", "content": "hi"}], settings=_settings(None)))
+            [{"role": "user", "content": "hi"}], settings=_settings(None, None)))
     assert exc_info.value.status_code == 503
 
 
@@ -167,7 +165,7 @@ def test_classification_matrix():
 # I–J: malformed output correction (via resilient entry point)
 # ===========================================================================
 
-def _resilient_eval(openrouter_script, **overrides):
+def _resilient_eval(gemini_script, groq_script, **overrides):
     settings = _settings()
     calls: List[str] = []
     # Local LLM is now primary (http://localhost:1234/api/v1/chat) — tests that
@@ -175,8 +173,8 @@ def _resilient_eval(openrouter_script, **overrides):
     # back to the patched gemini/groq fakes. This keeps live code local-only
     # while preserving original resilience tests.
     with patch("app.services.assessment.interview_providers.provider_chain",
-               return_value=[(PROVIDER_OPENROUTER,
-                              _fake_invoker("openrouter", openrouter_script, calls))]), \
+               return_value=[(PROVIDER_GEMINI, _fake_invoker("gemini", gemini_script, calls)),
+                             (PROVIDER_GROQ, _fake_invoker("groq", groq_script, calls))]), \
          patch("app.services.assessment.interview_providers.asyncio.sleep", new=AsyncMock()):
         question = {"id": "q1", "skill": "Python", "competency": "debugging",
                     "competency_label": "Debugging", "prompt": "Q?"}
@@ -199,15 +197,15 @@ def _good_payload():
     })
 
 
-def test_I_malformed_openrouter_output_uses_deterministic_recovery():
-    (evaluation, info), calls = _resilient_eval(["not json at all"])
-    assert evaluation["_recovery"] is True
-    assert info["provider_used"] == PROVIDER_DETERMINISTIC
-    assert calls == ["openrouter"]
+def test_I_malformed_gemini_output_uses_groq_once():
+    (evaluation, info), calls = _resilient_eval(["not json at all"], [_good_payload()])
+    assert evaluation["technical_correctness"] == 0.7
+    assert info["provider_used"] == PROVIDER_GROQ
+    assert calls == ["gemini", "groq"]
 
 
 def test_J_persistently_malformed_output_recovers_deterministically():
-    (evaluation, info), calls = _resilient_eval(["garbage"])
+    (evaluation, info), calls = _resilient_eval(["garbage"], ["also garbage"])
     assert evaluation["_recovery"] is True
     assert evaluation["technical_correctness"] == 0.0
     assert evaluation["follow_up_needed"] is False
@@ -217,7 +215,7 @@ def test_J_persistently_malformed_output_recovers_deterministically():
 
 
 def test_H_total_outage_recovers_without_asking_user_to_repeat():
-    (evaluation, info), _ = _resilient_eval([ProviderError(503, "down")])
+    (evaluation, info), _ = _resilient_eval([ProviderError(503, "down")], [ProviderError(500, "down")])
     assert evaluation["_recovery"] is True
     assert evaluation["_failure_class"] == "temporary_unavailable"
     assert info["fallback_used"] is True

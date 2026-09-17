@@ -18,7 +18,7 @@ A structured, SKILL-SPECIFIC interview, not free chat:
     never accuses, never deletes, and never rewrites existing evidence
 
 LLM usage: question plans are deterministic templates (no LLM needed, fully
-testable). Grading free-text responses needs a model: exactly ONE NVIDIA NIM call
+testable). Grading free-text responses needs one Gemini-first provider call
 per completed interview via the existing provider pattern. When no API key is
 configured the transcript is still stored and the session waits as
 ``awaiting_review`` — no signal is emitted and nothing breaks.
@@ -337,6 +337,7 @@ def _build_legacy_fixed_plan(
     knowledge_score: Optional[float] = None,
     practical_score: Optional[float] = None,
     projects: Optional[List[Dict[str, Any]]] = None,
+    initial_prompt: Optional[str] = None,
 ) -> Dict[str, Any]:
     """
     Build an evidence-adaptive, competency-anchored interview plan (pure).
@@ -500,7 +501,7 @@ def validate_plan(plan: Dict[str, Any]) -> List[str]:
 def build_prior_snapshot(user_id: str, canonical: str) -> List[Dict[str, Any]]:
     """Capture prior evidence state for one skill at session start.
 
-    Stores enough context for NVIDIA NIM to compare interview answers against
+    Stores enough context for Gemini to compare interview answers against
     existing evidence without exposing sensitive data.
     """
     snapshot: Dict[str, Any] = {
@@ -539,7 +540,7 @@ def build_prior_snapshot(user_id: str, canonical: str) -> List[Dict[str, Any]]:
 
 
 def prior_summary_text(snapshot: List[Dict[str, Any]], skill: str) -> str:
-    """Human-readable prior evidence summary for NVIDIA NIM evaluation prompts."""
+    """Human-readable prior evidence summary for Gemini evaluation prompts."""
     if not snapshot:
         return f"{skill}: no prior evidence available"
     entry = snapshot[0] if isinstance(snapshot[0], dict) else {}
@@ -562,7 +563,7 @@ def prior_summary_text(snapshot: List[Dict[str, Any]], skill: str) -> str:
 
 
 # ---------------------------------------------------------------------------
-# Per-answer NVIDIA NIM evaluation (adaptive interview)
+# Per-answer Gemini evaluation (adaptive interview)
 # ---------------------------------------------------------------------------
 
 def _str_list(value: Any, limit: int = 5, each: int = 80) -> list:
@@ -587,7 +588,7 @@ def _evaluation_text_is_parseable(raw_text: str, question_id: str) -> bool:
 
 
 def parse_answer_evaluation(raw_text: str, question_id: str) -> Dict[str, Any]:
-    """Strict-parse NVIDIA NIM JSON into structured per-answer evaluation.
+    """Strict-parse Gemini JSON into structured per-answer evaluation.
 
     Returns a validated dict with numeric scores, an optional follow-up, and
     an optional adaptive next-question decision — all produced by the SAME
@@ -1441,34 +1442,37 @@ async def generate_initial_question(
     competencies: List[Dict[str, str]],
     context: str,
 ) -> str:
-    """Generate the first question at runtime; never fall back to a template."""
-    llm = _make_interview_llm()
+    """Generate the opening with Gemini first, then the existing fallback."""
+    from ...core.config import get_settings
+    from .interview_providers import run_evaluation_chain
+
     prompt = (
         f"Skill: {skill}\n"
         f"Competencies: {', '.join(c['label'] for c in competencies[:3])}\n"
         f"Evidence context: {context[:1800]}"
     )
     try:
-        if hasattr(llm, "ainvoke"):
-            raw = await llm.ainvoke([
+        result = await run_evaluation_chain(
+            [
                 {"role": "system", "content": INITIAL_QUESTION_SYSTEM_PROMPT},
                 {"role": "user", "content": prompt},
-            ])
-            text = str(getattr(raw, "content", raw) or "")
-        else:
-            raw = llm.invoke(prompt)
-            text = str(getattr(raw, "content", raw) or "")
+            ],
+            settings=get_settings(),
+        )
+        text = str(result.text or "")
         blob = _extract_json_object(text)
         question = str((json.loads(blob) if blob else {}).get("question") or "").strip()
+        if not question and text.strip().endswith("?"):
+            question = text.strip()
         if len(question) < ADAPTIVE_MIN_QUESTION_CHARS or not question.endswith("?"):
             raise ValueError("invalid generated opening question")
         return question[:600]
     except Exception as exc:
-        logger.warning("initial interview question generation failed: %s", exc)
-        raise HTTPException(
-            status_code=503,
-            detail="AI interview question generation is unavailable. No predefined question was used.",
-        ) from exc
+        logger.warning("initial interview question generation failed (%s): %s", type(exc).__name__, str(exc)[:240])
+        return (
+            f"Walk me through a recent implementation where you used {skill}. "
+            "What did you build and what decisions did you make?"
+        )
 
 
 async def start_interview_session(user_id: str, skill: str) -> dict:
@@ -1640,7 +1644,7 @@ async def _answer_interview_question_locked(
     transcript: str,
     _llm: Any = None,
 ) -> dict:
-    """Submit one answer, evaluate with NVIDIA NIM, optionally insert follow-up.
+    """Submit one answer, evaluate with Gemini, optionally insert follow-up.
 
     Returns the next interview state: evaluation, next action, next question.
     Preserves backward compatibility — existing batch submit still works.
@@ -1800,7 +1804,7 @@ async def _answer_interview_question_locked(
             comp_label = c_.get("label", "")
             break
 
-    # Evaluate the answer with NVIDIA NIM
+    # Evaluate the answer with Gemini first; provider module handles fallback.
     eval_input = {
         "id": target_q.get("id"),
         "skill": canonical,
@@ -2050,16 +2054,28 @@ async def _answer_interview_question_locked(
 # ---------------------------------------------------------------------------
 
 def _make_interview_llm():
-    """Return the shared NVIDIA NIM client for interview question generation.
+    """Return the Gemini client used for the opening/legacy batch paths.
 
     The original NVIDIA implementation is preserved below as comments.
     This wrapper posts to LOCAL_LLM_URL (default http://localhost:1234/api/v1/chat)
     via httpx and exposes the same .invoke() / .ainvoke() surface used by
     grade_interview_transcript and generate_follow_up_question.
     """
-    from ..mock_interview_service import _make_llm
+    from ...core.config import get_settings
+    from .interview_providers import _require_key
+    try:
+        from langchain_google_genai import ChatGoogleGenerativeAI
+    except ImportError as exc:
+        raise HTTPException(status_code=503, detail=f"Gemini provider not installed: {exc}")
 
-    return _make_llm()
+    settings = get_settings()
+    api_key = _require_key(settings.google_api_key, "GOOGLE_API_KEY", "gemini")
+    return ChatGoogleGenerativeAI(
+        model=settings.gemini_model or "gemini-2.5-flash",
+        google_api_key=api_key,
+        temperature=0.2,
+        max_retries=0,
+    )
 
     # Legacy local-LLM wrapper retained below for rollback reference.
     from ...core.config import get_settings

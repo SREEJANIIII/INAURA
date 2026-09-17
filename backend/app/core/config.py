@@ -27,11 +27,8 @@ class Settings(BaseSettings):
     # Interview LLM resilience budgets (seconds).
     interview_llm_timeout_seconds: int = 20
     interview_llm_total_budget_seconds: int = 75
-    # OpenRouter is the configured interview reasoning provider. Question
-    # selection changes do not alter this provider configuration.
-    openrouter_api_key: str | None = None
-    openrouter_primary_model: str = "deepseek/deepseek-v3.2"
-    openrouter_fallback_models: str = "google/gemini-2.5-flash,meta-llama/llama-3.3-70b-instruct"
+    # Gemini is the primary interview reasoning provider. Groq is used only
+    # as the existing reasoning fallback; NVIDIA remains TTS-only.
     # Interview TTS — NVIDIA-hosted voice (TEXT -> SPEECH only).
     # NVIDIA_API_KEY is backend-only and never reaches the frontend.
     tts_provider: str = "nvidia"
@@ -59,8 +56,8 @@ class Settings(BaseSettings):
 
     def model_post_init(self, __context):  # type: ignore
         # Treat placeholder values from .env.example as not set
-        placeholders = {"your-anon-key", "your-service-role-key", "your-jwt-secret", "YOUR_JWT_SECRET", "your-project.supabase.co", "your-embedding-key", "your-google-api-key", "your-nvidia-api-key", "your-groq-api-key", "your-openrouter-api-key"}
-        for field in ["supabase_url", "supabase_anon_key", "supabase_service_role_key", "supabase_jwt_secret", "embedding_api_key", "google_api_key", "nvidia_api_key", "groq_api_key", "openrouter_api_key", "github_token"]:
+        placeholders = {"your-anon-key", "your-service-role-key", "your-jwt-secret", "YOUR_JWT_SECRET", "your-project.supabase.co", "your-embedding-key", "your-google-api-key", "your-nvidia-api-key", "your-groq-api-key"}
+        for field in ["supabase_url", "supabase_anon_key", "supabase_service_role_key", "supabase_jwt_secret", "embedding_api_key", "google_api_key", "nvidia_api_key", "groq_api_key", "github_token"]:
             val = getattr(self, field)
             if val and any(ph in val for ph in placeholders):
                 setattr(self, field, None)
