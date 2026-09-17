@@ -20,11 +20,11 @@ router = APIRouter(prefix="/interview", tags=["mock-interview"])
 async def start_mock_interview(
     payload: StartMockInterviewRequest, current_user: CurrentUser = Depends(get_current_user)
 ):
-    """Start a personalized, evidence-driven mock interview (5-8 questions)."""
+    """Start a personalized 3-question adaptive mock interview."""
     return await svc.start_session(
         user_id=current_user.id,
         target_role=payload.target_role,
-        question_count=payload.question_count or 6,
+        question_count=payload.question_count or 3,
     )
 
 

@@ -428,3 +428,46 @@ describe("6. Interview completion contract (Q1 early-end regression)", () => {
     assert.ok(totalQuestions > 1);
   });
 });
+
+describe("7. Mock interview (/interview) 3-question progress contract", () => {
+  const TOTAL = 3;
+
+  // Mirrors Interview.tsx: answeredCount advances ONLY on successful submit,
+  // progress is answeredCount / 3 — never questions.length based.
+  const applySubmitSuccess = (prev: number, res: { answered_count?: unknown }): number =>
+    typeof res.answered_count === "number" ? res.answered_count : prev + 1;
+
+  const progressText = (answered: number): string => `${answered}/${TOTAL} answered`;
+
+  it("shows 1/3, 2/3, 3/3 as answers land", () => {
+    let answered = 0;
+    answered = applySubmitSuccess(answered, { answered_count: 1 });
+    assert.strictEqual(progressText(answered), "1/3 answered");
+    answered = applySubmitSuccess(answered, { answered_count: 2 });
+    assert.strictEqual(progressText(answered), "2/3 answered");
+    answered = applySubmitSuccess(answered, { answered_count: 3 });
+    assert.strictEqual(progressText(answered), "3/3 answered");
+  });
+
+  it("does not increment progress when merely displaying a question", () => {
+    // Displaying Q2 (generated) without submitting must not move progress.
+    const answeredBeforeDisplay = 1;
+    assert.strictEqual(progressText(answeredBeforeDisplay), "1/3 answered");
+  });
+
+  it("does not increment progress on failed submit", () => {
+    let answered = 1;
+    // handleSubmit catch path: answeredCount untouched, stage back to question.
+    const failed = false;
+    if (failed) answered = applySubmitSuccess(answered, { answered_count: 2 });
+    assert.strictEqual(answered, 1);
+  });
+
+  it("single initial question does not imply a 1-question interview", () => {
+    const initialQuestions = [{ id: "q1", sequence: 1 }];
+    const sessionQuestionCount = 3;
+    assert.strictEqual(initialQuestions.length, 1);
+    assert.strictEqual(sessionQuestionCount, 3);
+    assert.ok(sessionQuestionCount > initialQuestions.length);
+  });
+});

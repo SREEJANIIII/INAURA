@@ -15,7 +15,7 @@ class StartMockInterviewRequest(BaseModel):
         default=None, max_length=100, description="Target role; defaults to analysis state / profile"
     )
     question_count: Optional[int] = Field(
-        default=6, ge=5, le=8, description="Planned questions (prototype range 5-8)"
+        default=3, ge=3, le=3, description="Fixed 3-question adaptive interview"
     )
 
 
@@ -58,6 +58,9 @@ class AnswerEvaluation(BaseModel):
     contradiction: float = Field(default=0.0, ge=0.0, le=1.0)
     confidence: float = Field(default=0.0, ge=0.0, le=1.0)
     explanation: str = ""
+    demonstrated: List[str] = Field(default_factory=list)
+    missing: List[str] = Field(default_factory=list)
+    misconceptions: List[str] = Field(default_factory=list)
     follow_up_needed: bool = False
     suggested_follow_up: str = ""
 
@@ -74,9 +77,13 @@ class SubmitMockAnswerResponse(BaseModel):
     ai_available: bool = True
     evaluation: Optional[AnswerEvaluation] = None
     evaluation_pending: bool = False
+    spoken_response: Optional[str] = None
     current_index: int = 0
     current_question: Optional[MockInterviewQuestionOut] = None
     completed: bool = False
+    answered_count: int = 0
+    question_count: int = 3
+    provider_used: Optional[str] = None
     note: Optional[str] = None
 
 

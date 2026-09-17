@@ -65,54 +65,62 @@ def test_plan_is_personalized_and_evidence_driven():
     projects = [{"name": "RAG Chatbot", "description": "Python FastAPI vector search with pgvector",
                  "technologies": ["Python", "FastAPI"], "student_contribution": "Built retrieval pipeline"}]
     evidence = [{"evidence_type": "leetcode", "metadata": {}}]
-    plan = svc.build_mock_plan(ranked, projects, evidence, question_count=6)
-    assert 5 <= len(plan) <= 8
-    assert plan[0]["question_type"] == "warmup"
-    assert "RAG Chatbot" in plan[0]["question"]  # project ownership, not generic
-    assert any(q["question_type"] == "followup_slot" for q in plan)
-    # role-based: top skills drive questions
-    targets = {q["target_skill"] for q in plan}
-    assert "SQL" in targets and "Python" in targets
+    summary = svc.build_evidence_summary("Backend Developer", ranked, projects, evidence, [])
+    assert "Backend Developer" in summary
+    assert "RAG Chatbot" in summary  # project ownership, not generic
+    assert "Python" in summary
+    opening = svc.deterministic_opening_question(ranked, projects)
+    assert "RAG Chatbot" in opening["question"]
+    assert opening["question"].endswith("?")
+    assert opening["question_type"] == "warmup"
 
 
 def test_plan_generic_fallback_without_requirements():
-    plan = svc.build_mock_plan([], [], [], question_count=6)
-    assert len(plan) == 6
-    assert all(q["question"].strip() for q in plan if q["question_type"] != "followup_slot")
+    opening = svc.deterministic_opening_question([], [])
+    assert len(opening["question"]) >= 20
+    assert opening["question"].endswith("?")
 
 
 def test_parse_evaluation_strict_schema():
     raw = json.dumps({
-        "skills": ["Python"], "technical_correctness": 0.7, "depth": 0.5,
-        "reasoning": 0.6, "communication": 0.8, "evidence_corroboration": 0.7,
-        "contradiction": 0.1, "confidence": 0.8, "explanation": "Solid walkthrough.",
-        "follow_up_needed": True, "suggested_follow_up": "What happens at 10x load?",
+        "evaluation": {
+            "technical_correctness": 0.7, "depth": 0.5, "reasoning": 0.6,
+            "communication": 0.8, "evidence_corroboration": 0.7,
+            "contradiction": 0.1, "confidence": 0.8, "explanation": "Solid walkthrough.",
+            "demonstrated": ["caching"], "missing": ["measurements"], "misconceptions": [],
+        },
+        "skills": ["Python"],
+        "spoken_response": "Got it — let's dig in.",
+        "next_question": "What specifically was slow before you introduced caching, and how did you measure the change?",
+        "next_question_reason": "probe the unsupported performance claim",
+        "target_skill": "Python",
+        "question_type": "counter",
+        "interview_sufficient": False,
     })
-    ev = svc.parse_evaluation(f"```json\n{raw}\n```", "q2")
+    ev = svc.parse_adaptive_evaluation(f"```json\n{raw}\n```", "q2")
     AnswerEvaluation.model_validate(ev)  # strict contract
     assert ev["question_id"] == "q2"
-    assert ev["follow_up_needed"] is True
+    assert ev["demonstrated"] == ["caching"]
+    assert ev["next_question"].startswith("What specifically was slow")
+    assert ev["question_type"] == "counter"
 
 
 def test_parse_evaluation_rejects_garbage():
     with pytest.raises(Exception):
-        svc.parse_evaluation("no json here at all", "q1")
+        svc.parse_adaptive_evaluation("no json here at all", "q1")
     with pytest.raises(Exception):
-        svc.parse_evaluation("[1,2,3]", "q1")
+        svc.parse_adaptive_evaluation("[1,2,3]", "q1")
 
 
 def test_adaptive_follow_up_policy():
-    weak = {"technical_correctness": 0.3, "depth": 0.3, "reasoning": 0.4,
-            "communication": 0.6, "evidence_corroboration": 0.2,
-            "contradiction": 0.7, "confidence": 0.8,
-            "follow_up_needed": True, "suggested_follow_up": "Explain retrieval step by step."}
-    assert svc.decide_next_action(weak, 2, 6, 0) == "follow_up"
-    strong = dict(weak, technical_correctness=0.9, depth=0.85, contradiction=0.0,
-                  follow_up_needed=False, suggested_follow_up="")
-    assert svc.decide_next_action(strong, 2, 6, 0) == "next"
-    assert svc.decide_next_action(strong, 6, 6, 0) == "complete"
-    # budget respected
-    assert svc.decide_next_action(weak, 2, 6, 99) == "next"
+    # 3-question invariant: answered < 3 always continues, >= 3 completes.
+    assert svc.INTERVIEW_QUESTION_COUNT == 3
+    assert svc.decide_next_action({}, 0) == "next"
+    assert svc.decide_next_action({}, 1) == "next"
+    assert svc.decide_next_action({}, 2) == "next"
+    assert svc.decide_next_action({}, 3) == "complete"
+    # No Q4 even with more answers recorded.
+    assert svc.decide_next_action({}, 4) == "complete"
 
 
 def test_signal_strength_weights_technical_over_verbosity():
@@ -160,29 +168,62 @@ def test_build_signals_one_per_skill_through_skill_engine():
     assert 0.0 <= prof <= 1.0
 
 
-class _FakeLLM:
-    def __init__(self, payload: dict):
-        self.payload = payload
+class _FakeChain:
+    """Fake provider chain result for evaluate_and_generate (no real calls)."""
 
-    async def ainvoke(self, _messages):
+    def __init__(self, payload: dict, provider: str = "gemini"):
+        self.payload = payload
+        self.provider = provider
+        self.calls = 0
+
+    async def __call__(self, messages, session_id, question_id):
+        self.calls += 1
+        self.last_messages = messages
+
         class R:
-            content = json.dumps(self.payload)
-        return R()
+            pass
+
+        r = R()
+        r.text = json.dumps(self.payload)
+        r.provider_used = self.provider
+        r.failure_class = None
+        return r
+
+
+def _adaptive_payload(next_question=""):
+    return {
+        "evaluation": {
+            "technical_correctness": 0.6, "depth": 0.5, "reasoning": 0.5,
+            "communication": 0.7, "evidence_corroboration": 0.5,
+            "contradiction": 0.2, "confidence": 0.7, "explanation": "OK",
+            "demonstrated": ["fastapi"], "missing": ["metrics"], "misconceptions": [],
+        },
+        "skills": ["Python"],
+        "spoken_response": "Got it.",
+        "next_question": next_question,
+        "next_question_reason": "probe",
+        "target_skill": "Python",
+        "question_type": "probe",
+        "interview_sufficient": False,
+    }
 
 
 def test_evaluate_answer_uses_mocked_llm_no_real_call():
-    payload = {"skills": ["Python"], "technical_correctness": 0.6, "depth": 0.5,
-               "reasoning": 0.5, "communication": 0.7, "evidence_corroboration": 0.5,
-               "contradiction": 0.2, "confidence": 0.7, "explanation": "OK",
-               "follow_up_needed": False, "suggested_follow_up": ""}
-    ev = asyncio.run(svc.evaluate_answer_llm(
-        {"id": "q1", "target_skill": "Python", "question_type": "technical", "question": "Explain X"},
-        "I built it with FastAPI and pgvector.",
-        "Python: prior proficiency 0.7",
-        _llm=_FakeLLM(payload),
-    ))
-    assert ev["skills"] == ["Python"]
+    from unittest.mock import patch
+    chain = _FakeChain(_adaptive_payload())
+    with patch.object(svc, "_run_chain", chain):
+        ev, provider = asyncio.run(svc.evaluate_and_generate(
+            "Backend Developer",
+            "Target role: Backend Developer",
+            [],
+            {"question": "Explain X", "target_skill": "Python", "id": "q1", "question_key": "q1"},
+            "I built it with FastAPI and pgvector.",
+            False,
+            "sess-1",
+        ))
+    assert chain.calls == 1  # exactly one reasoning call per answer
     assert ev["technical_correctness"] == 0.6
+    assert provider == "gemini"
 
 
 def test_mock_interview_routes_registered():
