@@ -52,10 +52,9 @@ export class MotionSafe extends Component<{ children: ReactNode }, { failed: boo
     console.warn("Landing animations turned off after an error:", error);
   }
   render() {
-    return this.state.failed ? (
-      <MotionConfig reducedMotion="always">{this.props.children}</MotionConfig>
-    ) : (
-      this.props.children
+    // "user" follows the device's reduced-motion setting, so useStill() is true for those visitors
+    return (
+      <MotionConfig reducedMotion={this.state.failed ? "always" : "user"}>{this.props.children}</MotionConfig>
     );
   }
 }
@@ -151,6 +150,30 @@ export function StaggerItem({
     >
       {children}
     </motion.div>
+  );
+}
+
+/** A progress bar's fill that grows from the left the first time it's seen */
+export function Grow({
+  width,
+  className,
+  delay = 0,
+}: {
+  /** Percent of the track to fill */
+  width: number;
+  className?: string;
+  delay?: number;
+}) {
+  const reduce = useStill();
+  return (
+    <motion.span
+      className={className}
+      style={{ width: `${width}%`, transformOrigin: "left center" }}
+      initial={reduce ? false : { scaleX: 0 }}
+      whileInView={{ scaleX: 1 }}
+      viewport={{ once: true, amount: 1 }}
+      transition={{ duration: 1.1, ease: EASE, delay }}
+    />
   );
 }
 

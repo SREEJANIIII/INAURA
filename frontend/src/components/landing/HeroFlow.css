@@ -1,0 +1,196 @@
+/* The hero's floating preview: evidence in, INAURA analysis, a path out */
+.hflow {
+  margin: 0;
+  padding: 18px 20px;
+  border-radius: 22px;
+  background: rgba(255, 255, 255, 0.5);
+  border: 1px solid rgba(255, 255, 255, 0.72);
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.85),
+    0 18px 40px -24px rgba(34, 28, 96, 0.35);
+  backdrop-filter: blur(12px) saturate(150%);
+  -webkit-backdrop-filter: blur(12px) saturate(150%);
+  text-align: left;
+  animation: hflow-float 7s ease-in-out infinite;
+}
+
+/* A slow, barely-there drift so the preview feels like a live surface */
+@keyframes hflow-float {
+  0%,
+  100% {
+    transform: translateY(0);
+  }
+  50% {
+    transform: translateY(-5px);
+  }
+}
+
+.hflow__inner {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 56px auto 56px minmax(0, 1fr);
+  align-items: center;
+}
+
+.hflow__group {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.hflow__group:last-child {
+  align-items: flex-end;
+  text-align: right;
+}
+
+.hflow__chips {
+  gap: 6px;
+}
+
+.hflow__group:last-child .hflow__chips {
+  justify-content: flex-end;
+}
+
+.hflow__chip {
+  background: rgba(255, 255, 255, 0.6);
+  font-size: 0.8rem;
+}
+
+.hflow__group:last-child .hflow__chip svg {
+  color: var(--accent);
+}
+
+/* The links carry a small light from evidence, through the analysis, to your path */
+.hflow__link {
+  position: relative;
+  height: 1px;
+  margin: 0 6px;
+  background: linear-gradient(90deg, rgba(92, 80, 160, 0.1), rgba(92, 80, 160, 0.35), rgba(92, 80, 160, 0.1));
+  overflow: visible;
+}
+
+.hflow__pulse {
+  position: absolute;
+  top: -2px;
+  left: 0;
+  width: 5px;
+  height: 5px;
+  border-radius: 9999px;
+  background: var(--accent);
+  box-shadow: 0 0 0 3px rgba(79, 70, 229, 0.15);
+  animation: hflow-pulse 3.2s var(--ease) infinite;
+}
+
+.hflow__link:last-of-type .hflow__pulse {
+  animation-delay: 1.1s;
+}
+
+@keyframes hflow-pulse {
+  0% {
+    left: 0;
+    opacity: 0;
+  }
+  15% {
+    opacity: 1;
+  }
+  70% {
+    opacity: 1;
+  }
+  100% {
+    left: calc(100% - 5px);
+    opacity: 0;
+  }
+}
+
+/* The analysis: the page's one dark, solid element here, so the eye settles on it */
+.hflow__core {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 2px;
+  padding: 14px 20px 13px;
+  border-radius: 18px;
+  background: linear-gradient(180deg, #16203a, #0b1220);
+  border: 1px solid #1e293b;
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.08),
+    0 12px 28px -14px rgba(15, 23, 42, 0.6);
+  text-align: center;
+  white-space: nowrap;
+}
+
+.hflow__core-name {
+  font-size: 0.92rem;
+  font-weight: 800;
+  letter-spacing: 0.08em;
+  color: #fff;
+  line-height: 1.1;
+}
+
+.hflow__core-sub {
+  font-size: 0.66rem;
+  font-weight: 700;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: #a5b4fc;
+}
+
+.hflow__core-note {
+  margin-top: 6px;
+  font-size: 0.72rem;
+  color: #94a3b8;
+}
+
+/* Tablets and phones: the flow runs top to bottom */
+@media (max-width: 900px) {
+  .hflow {
+    padding: 16px;
+  }
+  .hflow__inner {
+    grid-template-columns: 1fr;
+    justify-items: center;
+  }
+  .hflow__group,
+  .hflow__group:last-child {
+    align-items: center;
+    text-align: center;
+  }
+  .hflow__chips,
+  .hflow__group:last-child .hflow__chips {
+    justify-content: center;
+  }
+  .hflow__link {
+    width: 1px;
+    height: 28px;
+    margin: 8px 0;
+    background: linear-gradient(180deg, rgba(92, 80, 160, 0.1), rgba(92, 80, 160, 0.35), rgba(92, 80, 160, 0.1));
+  }
+  .hflow__pulse {
+    top: 0;
+    left: -2px;
+    animation-name: hflow-pulse-down;
+  }
+}
+
+@keyframes hflow-pulse-down {
+  0% {
+    top: 0;
+    opacity: 0;
+  }
+  15% {
+    opacity: 1;
+  }
+  70% {
+    opacity: 1;
+  }
+  100% {
+    top: calc(100% - 5px);
+    opacity: 0;
+  }
+}
+
+@media (max-width: 520px) {
+  .hflow__chip {
+    font-size: 0.76rem;
+    padding: 5px 9px;
+  }
+}
