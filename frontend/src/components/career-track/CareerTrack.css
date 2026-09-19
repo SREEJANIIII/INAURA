@@ -1414,6 +1414,33 @@
   font-size: 12px;
 }
 
+/* The analysis behind the score no longer matches your evidence (or the scoring) */
+.ct-ready__source--outdated {
+  padding: 2px 8px;
+  border-radius: 999px;
+  background: var(--ct-amber-soft);
+  color: var(--ct-amber);
+  font-weight: 600;
+}
+
+.ct-ready__outdated {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 10px;
+  margin-top: 12px;
+  padding: 12px 14px;
+  border-radius: 12px;
+  background: var(--ct-amber-soft);
+}
+
+.ct-ready__outdated p {
+  margin: 0;
+  font-size: 13px;
+  line-height: 1.45;
+  color: var(--ct-ink-2, inherit);
+}
+
 .ct-home {
   display: grid;
   grid-template-columns: minmax(0, 1fr) 320px;

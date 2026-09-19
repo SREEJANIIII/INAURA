@@ -63,7 +63,9 @@ READINESS_WEIGHTS: Dict[str, float] = {
     "evidence": 0.30,
 }
 
-ENGINE_VERSION = "4C-v1"
+# 4C-v2: the industry component measures the share of each required level reached, so a
+# requirement with no evidence earns nothing (4C-v1 gave it 1 - required_level)
+ENGINE_VERSION = "4C-v2"
 
 
 def clamp01(v: float) -> float:
@@ -456,7 +458,7 @@ def readiness(
     Career Readiness = 0.45 × skill + 0.25 × industry + 0.30 × evidence
 
     - skill_component: Weighted proficiency across target role requirements
-    - industry_component: 1 - average weighted gap across industry requirements
+    - industry_component: Importance-weighted share of each required level reached
     - evidence_component: Average confidence across assessed skills
     """
     sc = clamp01(skill_component)
@@ -503,17 +505,33 @@ def aggregate_skill_component(assessments: List[dict], requirements: List[dict])
 
 def aggregate_industry_component(gaps: List[dict]) -> float:
     """
-    Industry component: alignment with role requirements:
-    1.0 - (average gap weighted by importance).
-    If no gaps exist, returns 1.0 (fully aligned).
+    Industry component: how much of the role's requirements you have reached.
+    For each requirement, the share of its required level reached
+    (1 - gap / required_level), weighted by importance.
+
+    A requirement with no evidence earns 0 and one at or above its bar earns 1.
+    Measuring 1 - gap instead gave every unmet requirement 1 - required_level of
+    free credit, so a profile with no evidence at all still scored ~9% readiness.
+    Returns 0.0 when there are no requirements.
     """
     if not gaps:
         return 0.0
     total_imp = sum(float(g.get("importance", 0.5)) for g in gaps)
     if total_imp <= 0.0:
         return 0.0
-    weighted_gap = sum(float(g.get("gap", 0.0)) * float(g.get("importance", 0.5)) for g in gaps) / total_imp
-    return clamp01(1.0 - weighted_gap)
+    reached = 0.0
+    for g in gaps:
+        gap_val = clamp01(float(g.get("gap", 0.0)))
+        required = g.get("required_level")
+        if required is None:
+            # No required level to measure against: fall back to the plain gap
+            share = 1.0 - gap_val
+        elif float(required) <= 0.0:
+            share = 1.0
+        else:
+            share = 1.0 - min(1.0, gap_val / float(required))
+        reached += share * float(g.get("importance", 0.5))
+    return clamp01(reached / total_imp)
 
 
 def aggregate_evidence_component(assessments: List[dict]) -> float:

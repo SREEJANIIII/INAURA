@@ -147,3 +147,43 @@ def test_different_users_isolation():
     assert se.proficiency(user_a)[0] != se.proficiency(user_b)[0]
     # Confidence should also differ if diversity differs
     assert se.confidence(0.9, 1)[0] != se.confidence(0.9, 2)[0]
+
+
+# Industry component: share of each required level reached (engine 4C-v2)
+
+def _req(required, prof, importance=0.5):
+    return {"required_level": required, "gap": se.gap(prof, required), "importance": importance}
+
+
+def test_no_evidence_earns_no_industry_credit():
+    # Backend Developer-like bars, nothing demonstrated. 4C-v1 gave 1 - required_level here.
+    gaps = [_req(0.80, 0.0, 0.9), _req(0.75, 0.0, 0.7), _req(0.60, 0.0, 0.5)]
+    assert se.aggregate_industry_component(gaps) == 0.0
+
+
+def test_empty_profile_has_zero_readiness():
+    gaps = [_req(0.80, 0.0), _req(0.55, 0.0)]
+    industry = se.aggregate_industry_component(gaps)
+    assert se.readiness(0.0, industry, 0.0) == 0.0
+
+
+def test_meeting_or_beating_every_bar_is_full_industry_credit():
+    gaps = [_req(0.80, 0.80), _req(0.60, 0.95)]
+    assert se.aggregate_industry_component(gaps) == pytest.approx(1.0)
+
+
+def test_industry_credit_is_the_share_of_each_bar_reached():
+    # Halfway to one bar, all the way to an equally important other: 0.75
+    gaps = [_req(0.80, 0.40, 0.5), _req(0.60, 0.60, 0.5)]
+    assert se.aggregate_industry_component(gaps) == pytest.approx(0.75)
+    # Importance still weights the average
+    weighted = [_req(0.80, 0.40, 0.9), _req(0.60, 0.60, 0.3)]
+    assert se.aggregate_industry_component(weighted) == pytest.approx((0.5 * 0.9 + 1.0 * 0.3) / 1.2)
+
+
+def test_industry_credit_never_exceeds_the_old_formula():
+    # Share reached is always <= 1 - gap, so no one's score rises from the change
+    for required in (0.5, 0.7, 0.9):
+        for prof in (0.0, 0.2, 0.45, 0.8):
+            g = [_req(required, prof)]
+            assert se.aggregate_industry_component(g) <= 1.0 - g[0]["gap"] + 1e-9

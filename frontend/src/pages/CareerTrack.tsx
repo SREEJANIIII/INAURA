@@ -23,7 +23,7 @@ import {
   greeting,
 } from "../components/home/homeModel";
 import RoleSyncNotice from "../components/career-track/RoleSyncNotice";
-import { rebuildForRole } from "../lib/roleSync";
+import { getRoleSync, rebuildForRole, refreshAnalysis, subscribeRoleSync } from "../lib/roleSync";
 import { buildTrack, currentSkill, findRole, roleId } from "../components/career-track/careerTrackModel";
 import { navigateWithTransition, useCountUp, useInViewOnce } from "../components/career-track/motion";
 import { ProgressBar } from "../components/career-track/Progress";
@@ -289,6 +289,16 @@ export default function CareerTrack() {
               track={track}
               current={current?.name ?? null}
               analysedOn={analysis ? new Date(analysis.created_at).toLocaleDateString(undefined, { day: "numeric", month: "short", year: "numeric" }) : null}
+              outdated={
+                track.readiness.source !== "analysis" || !analysis
+                  ? null
+                  : analysis.evidence_changed
+                    ? "evidence"
+                    : analysis.scoring_outdated
+                      ? "scoring"
+                      : null
+              }
+              onRefresh={() => refreshAnalysis(track.title)}
               isTarget={!!targetTitle && targetTitle.toLowerCase() === track.title.toLowerCase()}
               onChange={() => setSwitching(true)}
               onMakeTarget={() => role && selectCareer(role)}
@@ -340,6 +350,8 @@ function HomeHeader({
   track,
   current,
   analysedOn,
+  outdated,
+  onRefresh,
   isTarget,
   onChange,
   onMakeTarget,
@@ -349,6 +361,9 @@ function HomeHeader({
   track: NonNullable<ReturnType<typeof buildTrack>>;
   current: string | null;
   analysedOn: string | null;
+  /** Why the analysis's readiness no longer holds, if it doesn't */
+  outdated: "evidence" | "scoring" | null;
+  onRefresh: () => void;
   isTarget: boolean;
   onChange: () => void;
   onMakeTarget: () => void;
@@ -357,6 +372,8 @@ function HomeHeader({
   const [ref, inView] = useInViewOnce<HTMLDivElement>();
   const readiness = useCountUp(track.readiness.value, inView);
   const { counts, skills } = track;
+  const sync = useSyncExternalStore(subscribeRoleSync, getRoleSync);
+  const rerunning = sync.stage === "analysing" || sync.stage === "building";
 
   return (
     <header className="ct-head">
@@ -382,7 +399,9 @@ function HomeHeader({
       <div ref={ref} className={`ct-ready${inView ? " is-in" : ""}`}>
         <div className="ct-ready__top">
           <span className="ct-ready__label">Career readiness</span>
-          <span className="ct-ready__source">{track.readiness.source === "analysis" ? "From your analysis" : "Estimated"}</span>
+          <span className={outdated ? "ct-ready__source ct-ready__source--outdated" : "ct-ready__source"}>
+            {outdated ? "Out of date" : track.readiness.source === "analysis" ? "From your analysis" : "Estimated"}
+          </span>
         </div>
         <p className="ct-ready__num ct-num">
           {readiness}
@@ -404,6 +423,19 @@ function HomeHeader({
           </div>
         </dl>
         {analysedOn && <p className="ct-ready__foot ct-faint">Analysed {analysedOn}</p>}
+        {outdated && (
+          <div className="ct-ready__outdated">
+            <p>
+              {outdated === "evidence"
+                ? "Your evidence has changed since this analysis."
+                : "INAURA’s readiness scoring has been improved since this analysis."}{" "}
+              Re-run it to update this score.
+            </p>
+            <Button variant="secondary" size="sm" onClick={onRefresh} disabled={rerunning}>
+              {rerunning ? "Re-running…" : "Re-run analysis"}
+            </Button>
+          </div>
+        )}
       </div>
     </header>
   );

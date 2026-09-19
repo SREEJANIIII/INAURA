@@ -444,7 +444,7 @@ def test_scoring_formulas_unchanged_by_this_recalibration():
     assert EvidenceDepth.DEPTH_STRENGTH_MAP == {0: 0.0, 1: 0.40, 2: 0.60, 3: 0.75, 4: 0.85}
     assert skill_engine.READINESS_WEIGHTS == {"skill": 0.45, "industry": 0.25, "evidence": 0.30}
     assert skill_engine.gap(0.6, 0.8) == pytest.approx(0.2)
-    assert skill_engine.ENGINE_VERSION == "4C-v1"
+    assert skill_engine.ENGINE_VERSION == "4C-v2"
 
     # No proficiency cap was introduced: a single source still maps 1:1.
     only, _, _, _ = skill_engine.proficiency([_sig("Python", "github", 0.85)])
