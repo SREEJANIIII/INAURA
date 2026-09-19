@@ -202,8 +202,17 @@ export default function InterviewModal({ skill, onClose, onCompleted }: Props) {
       );
       if (!interviewActiveRef.current) return;
       setAnsweredCount(res.answered_count);
+      // The interview length is server-driven: the initial plan intentionally
+      // contains only Q1, so questions.length === 1 must never be treated as
+      // the complete interview. Track the server's authoritative total.
+      setTotalQuestions((prev) => Math.max(prev, res.total_questions, res.answered_count));
 
-      if (res.completed || res.next_action === "complete" || res.action === "COMPLETE" || !res.current_question) {
+      // Completion is decided by the server's explicit terminal state ONLY.
+      // A missing current_question on a NON-terminal turn is a transport/race
+      // gap — never a reason to end the interview (it previously ended the
+      // interview right after Q1 because the single-question plan had no
+      // second question generated yet).
+      if (res.completed || res.next_action === "complete" || res.action === "COMPLETE") {
         const closing =
           res.spoken_response ||
           "Thank you. That concludes all questions for this interview. I am finalizing your evaluation now.";
@@ -223,6 +232,15 @@ export default function InterviewModal({ skill, onClose, onCompleted }: Props) {
         setResult(graded);
         setPhase("completed");
         onCompleted?.(graded);
+        return;
+      }
+
+      // Server says continue but sent no next question: stay in the
+      // interview and offer a retry instead of silently completing.
+      if (!res.current_question) {
+        isSubmittingRef.current = false;
+        setError("The next question didn't come through. Your answer is saved — you can retry.");
+        setPhase("recoverable_error");
         return;
       }
 
@@ -382,7 +400,10 @@ export default function InterviewModal({ skill, onClose, onCompleted }: Props) {
       setSession(data);
 
       const questions = data.plan?.questions || [];
-      setTotalQuestions(questions.length);
+      // Server-authoritative count: the initial plan intentionally holds only
+      // Q1 (floor of 1 so the indicator never shows 0/0 once started). The
+      // total grows from res.total_questions as Gemini generates questions.
+      setTotalQuestions(Math.max(questions.length, 1));
       setAnsweredCount(0);
 
       if (questions.length === 0) {

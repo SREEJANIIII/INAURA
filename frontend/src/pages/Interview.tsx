@@ -47,7 +47,9 @@ function pct(v: number | null | undefined): string {
 export default function Interview() {
   const [stage, setStage] = useState<Stage>("setup");
   const [targetRole, setTargetRole] = useState("");
-  const [questionCount, setQuestionCount] = useState(6);
+  // Fixed 3-question adaptive interview: Q1 opening -> Q2 counter-question -> Q3 deep-dive.
+  const questionCount = 3;
+  const [answeredCount, setAnsweredCount] = useState(0);
   const [session, setSession] = useState<StartInterviewResponse | null>(null);
   const [current, setCurrent] = useState<MockQuestion | null>(null);
   const [answer, setAnswer] = useState("");
@@ -183,6 +185,7 @@ export default function Interview() {
   const handleStart = async () => {
     setBusy(true);
     setError(null);
+    setAnsweredCount(0);
     try {
       const res = await startMockInterview(targetRole.trim() || undefined, questionCount);
       setSession(res);
@@ -203,6 +206,9 @@ export default function Interview() {
       const res = await answerMockQuestion(session.session_id, answer.trim(), current.id);
       setLastResult(res);
       setAnswer("");
+      // Progress counts SUCCESSFULLY SUBMITTED answers only — never the
+      // number of generated/displayed questions. Server is authoritative.
+      setAnsweredCount(typeof res.answered_count === "number" ? res.answered_count : (n) => n + 1);
       if (res.next_action === "complete" || !res.current_question) {
         setStage("feedback");
       } else {
@@ -289,7 +295,10 @@ export default function Interview() {
   };
 
   const mmss = `${String(Math.floor(elapsed / 60)).padStart(2, "0")}:${String(elapsed % 60).padStart(2, "0")}`;
-  const progress = session && current ? Math.min(100, ((current.sequence - 1) / session.question_count) * 100) : 0;
+  // Progress is answered_questions / 3 — never questions.length. answeredCount
+  // only advances after a successful submit, so display stays 0/3 until Q1 lands.
+  const totalQuestions = 3;
+  const progress = Math.min(100, (answeredCount / totalQuestions) * 100);
 
   return (
     <div className="iv">
@@ -325,16 +334,9 @@ export default function Interview() {
                 placeholder="e.g. Backend Developer (defaults to your analysis role)"
               />
             </label>
-            <label className="iv__label">
-              Questions: {questionCount}
-              <input
-                type="range"
-                min={5}
-                max={8}
-                value={questionCount}
-                onChange={(e) => setQuestionCount(Number(e.target.value))}
-              />
-            </label>
+            <div className="iv__label">
+              3 adaptive questions — an opening, a counter-question on your answer, then a deep-dive.
+            </div>
             <div className="iv__row">
               <Button variant="primary" size="lg" onClick={handleStart} disabled={busy}>
                 {busy ? "Preparing your interview…" : "Prepare my interview"}
@@ -416,9 +418,9 @@ export default function Interview() {
             <aside className="iv__card iv__side">
               <h3>What happens next</h3>
               <ol>
-                <li>Warm-up on a project you actually built</li>
-                <li>Technical probes on your priority gaps</li>
-                <li>Adaptive follow-ups when answers need depth</li>
+                <li>Q1: warm-up on a project you actually built</li>
+                <li>Q2: counter-question probing your Q1 answer</li>
+                <li>Q3: deep-dive — edge cases, trade-offs, failure modes</li>
                 <li>Evidence report — corroborated vs needs validation</li>
               </ol>
               <p className="iv__fine">{session.privacy_notice}</p>
@@ -455,6 +457,7 @@ export default function Interview() {
                 <span>
                   Q{current.sequence} of {session.question_count} · {current.target_skill || "General"}
                 </span>
+                <span>{answeredCount}/{totalQuestions} answered</span>
                 <span>{mmss}</span>
               </div>
               <h2 className="iv__q">{current.question}</h2>

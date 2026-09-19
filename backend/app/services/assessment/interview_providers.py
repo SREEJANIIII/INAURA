@@ -1,15 +1,17 @@
-"""Local LLM primary for interview reasoning/evaluation (http://localhost:1234/api/v1/chat).
+"""Gemini-first providers for interview reasoning/evaluation.
 
 The interview service talks to providers only through this module::
 
     USER ANSWER -> run_evaluation_chain() -> raw JSON text (+observability)
         -> interview.py parses/validates -> deterministic recovery if needed
 
-Current mode (per user request):
-  * LOCAL LLM at http://localhost:1234/api/v1/chat is the ONLY active provider.
-  * GEMINI and GROQ code is preserved below but COMMENTED OUT — not executed.
+Current mode:
+    * Gemini is the primary active provider for interview reasoning.
+    * Groq is the existing reasoning fallback, then deterministic recovery.
   * RAG / embedding pipeline (Gemini embeddings) is intentionally untouched.
-  * If local LLM fails or is unreachable: caller falls back to
+  * NVIDIA remains TTS-only and Groq Whisper remains STT-only outside this
+    reasoning fallback.
+  * If Gemini and Groq fail or are unreachable: caller falls back to
     deterministic recovery. Total time is bounded by per-attempt timeouts
     plus an overall deadline.
   * Timeouts are enforced with asyncio.wait_for so they never depend on
@@ -41,7 +43,7 @@ logger = logging.getLogger("inaura.interview_llm")
 PROVIDER_GEMINI = "gemini"
 PROVIDER_NVIDIA = "nvidia"  # retained for non-live callers/tests; never in the live chain
 PROVIDER_GROQ = "groq"
-PROVIDER_LOCAL = "local_llm"
+PROVIDER_LOCAL = "local_llm"  # retained for compatibility with older diagnostics
 PROVIDER_DETERMINISTIC = "deterministic"
 
 TRANSIENT_CLASSES = frozenset({
@@ -179,6 +181,7 @@ def log_llm_event(
     session_id: Optional[str],
     question_id: Optional[str],
     provider: str,
+    model: Optional[str] = None,
     latency_ms: float,
     success: bool,
     failure_class: Optional[str] = None,
@@ -189,6 +192,7 @@ def log_llm_event(
         "session_id": session_id,
         "question_id": question_id,
         "provider": provider,
+        "model": model,
         "latency_ms": round(latency_ms, 1),
         "success": success,
         "failure_class": failure_class,
@@ -221,10 +225,10 @@ def _require_key(value: Any, env_name: str, provider: str) -> str:
 
 
 # ===========================================================================
-# LOCAL LLM PROVIDER (ACTIVE) — http://localhost:1234/api/v1/chat
-# Uses plain httpx to call the user's local LLM. No cloud SDK required.
-# Payload is OpenAI-compatible (messages, model, temperature). Response
-# parsing is tolerant to multiple shapes (OpenAI, custom, etc.).
+# LOCAL LLM PROVIDER (ACTIVE) — http://localhost:1234/v1/chat/completions (ling-3.0-tiny)
+# Legacy http://localhost:1234/api/v1/chat also supported (auto-adapts).
+# Uses plain httpx. Payload adapts messages->input for LM Studio Responses API
+# (error "'input' is required" + invalid_union) and tolerates both shapes.
 # This is the ONLY active provider for interview reasoning per user request.
 # RAG / embeddings remain on Gemini and are NOT affected.
 # ===========================================================================
@@ -264,101 +268,210 @@ def make_local_llm_invoker(settings: Any) -> Tuple[str, InvokeFn]:
                    "Your answers are saved and will be graded once grading is configured.",
         )
     raw_model = getattr(settings, "local_llm_model", None)
-    model = raw_model.strip() if isinstance(raw_model, str) and raw_model.strip() else "local-model"
+    model = raw_model.strip() if isinstance(raw_model, str) and raw_model.strip() else "ling-3.0-tiny"
     api_key = getattr(settings, "local_llm_api_key", None)
     api_key = api_key.strip() if isinstance(api_key, str) else ""
+
+    def _needs_input_retry(text: str) -> bool:
+        lowered = (text or "").lower()
+        return ("'input' is required" in lowered or '"input" is required' in lowered
+                or "invalid_union" in lowered and "input" in lowered)
+
+    def _extract_content(data: Any) -> Optional[str]:
+        """Extract assistant text from chat/completions OR responses API."""
+        if isinstance(data, dict):
+            # --- Responses API: {"output": [{"content":[{"type":"output_text","text":"..."}]}]} ---
+            # Also: {"output_text": "..."} direct field
+            if isinstance(data.get("output_text"), str) and data["output_text"].strip():
+                return str(data["output_text"])
+            output = data.get("output")
+            if isinstance(output, list) and output:
+                for item in output:
+                    if isinstance(item, dict):
+                        # Case: {"type":"message","content":[{"type":"output_text","text":"..."}]}
+                        cont = item.get("content")
+                        if isinstance(cont, list):
+                            for c in cont:
+                                if isinstance(c, dict) and c.get("text"):
+                                    # output_text or text
+                                    txt = c.get("text") or c.get("output_text") or ""
+                                    if isinstance(txt, str) and txt.strip():
+                                        return txt
+                                if isinstance(c, str) and c.strip():
+                                    return c
+                        if isinstance(item.get("text"), str) and item["text"].strip():
+                            return str(item["text"])
+                        # Some servers: {"output": "raw string"}
+                        if isinstance(item, str) and item.strip():
+                            return item
+            # Also handle {"response": {"output_text": "..."}}
+            resp_field = data.get("response")
+            if isinstance(resp_field, dict):
+                maybe = _extract_content(resp_field)
+                if maybe:
+                    return maybe
+            # --- Chat Completions: {"choices": [{"message": {"content": "..."}}]} ---
+            # ling-3.0-tiny returns reasoning in reasoning_content + final JSON in content; fallback accordingly
+            choices = data.get("choices")
+            if isinstance(choices, list) and choices:
+                first = choices[0]
+                if isinstance(first, dict):
+                    msg = first.get("message")
+                    if isinstance(msg, dict):
+                        c = msg.get("content")
+                        rc = msg.get("reasoning_content") or msg.get("reasoning") or msg.get("reasoning_text")
+                        # Prefer content if it looks like JSON, else fallback to reasoning_content that contains JSON
+                        if isinstance(c, str) and c.strip():
+                            if "{" in c and "}" in c:
+                                return str(c)
+                            # content exists but no JSON — check reasoning for JSON
+                            if isinstance(rc, str) and rc.strip() and "{" in rc and "technical_correctness" in rc:
+                                return str(rc)
+                            return str(c)
+                        if isinstance(rc, str) and rc.strip():
+                            return str(rc)
+                    if first.get("text"):
+                        return str(first["text"])
+                    if first.get("content"):
+                        return str(first["content"])
+                    if first.get("delta") and isinstance(first["delta"], dict) and first["delta"].get("content"):
+                        return str(first["delta"]["content"])
+            for key in ("content", "response", "message", "text", "answer", "completion"):
+                val = data.get(key)
+                if isinstance(val, str) and val.strip():
+                    return val
+                if isinstance(val, dict) and val.get("content"):
+                    maybe = str(val["content"])
+                    if maybe.strip():
+                        return maybe
+                # handle {"output": "string"} single
+                if key == "output" and isinstance(val, str) and val.strip():
+                    return val
+            # Some servers wrap in {"data": {"content": "..."}}
+            data_inner = data.get("data")
+            if isinstance(data_inner, dict):
+                for key in ("content", "response", "message", "text"):
+                    val = data_inner.get(key)
+                    if isinstance(val, str) and val.strip():
+                        return val
+            if len(data) == 1:
+                sole = next(iter(data.values()))
+                if isinstance(sole, str) and sole.strip():
+                    return sole
+        if isinstance(data, str) and data.strip():
+            return data
+        if isinstance(data, list) and data:
+            first = data[0]
+            if isinstance(first, dict):
+                for key in ("content", "response", "message", "text"):
+                    if first.get(key):
+                        return str(first[key])
+            if isinstance(first, str):
+                return first
+        return None
+
+    def _candidate_urls(primary: str) -> List[str]:
+        urls: List[str] = []
+        seen = set()
+        for cand in [primary,
+                     primary.replace("/api/v1/chat", "/v1/chat/completions"),
+                     primary.replace("/api/v1/chat", "/v1/responses"),
+                     "http://localhost:1234/v1/chat/completions",
+                     "http://localhost:1234/v1/responses"]:
+            if cand and cand not in seen:
+                seen.add(cand)
+                urls.append(cand)
+        return urls
 
     async def invoke(messages: List[Dict[str, str]]) -> str:
         headers: Dict[str, str] = {"Content-Type": "application/json"}
         if api_key:
             headers["Authorization"] = f"Bearer {api_key}"
 
-        # OpenAI-compatible payload; many local servers (LM Studio, Ollama, etc.)
-        # accept this shape even if they expose /api/v1/chat
-        payload = {
+        # Payload variants
+        payload_messages = {
             "model": model,
             "messages": messages,
             "temperature": 0.2,
             "max_tokens": 4096,
             "stream": False,
         }
+        # For Responses API (/v1/responses or /api/v1/chat) LM Studio expects "input"
+        # Convert messages to a single string (system + user) and also as array form
+        input_as_string = "\n\n".join(f"{m.get('role','user')}: {m.get('content','')}" for m in messages)
+        payload_input_string = {
+            "model": model,
+            "input": input_as_string,
+            "temperature": 0.2,
+            "max_tokens": 4096,
+            "stream": False,
+        }
+        payload_input_array = {
+            "model": model,
+            "input": messages,
+            "temperature": 0.2,
+            "stream": False,
+        }
 
-        async with httpx.AsyncClient(timeout=30) as client:
-            resp = await client.post(url, json=payload, headers=headers)
-            if resp.status_code != 200:
-                # Surface status so classify_provider_error can categorize it
-                raise RuntimeError(f"Local LLM error {resp.status_code}: {resp.text[:500]}")
-            try:
-                data = resp.json()
-            except Exception:
-                # If response is not JSON, return raw text
-                text = resp.text or ""
-                if text.strip():
-                    return text
-                raise RuntimeError("Local LLM returned non-JSON empty response")
-
-            # --- Tolerate multiple response shapes ---------------------------------
-            # OpenAI: {"choices": [{"message": {"content": "..."}}]}
-            # Custom: {"content": "..."}, {"response": "..."}, {"message": "..."}, {"text": "..."}
-            # Some servers: {"choices": [{"text": "..."}]}
-            # Fallback: str(data)
-            content: Optional[str] = None
-            if isinstance(data, dict):
-                # OpenAI choices
-                choices = data.get("choices")
-                if isinstance(choices, list) and choices:
-                    first = choices[0]
-                    if isinstance(first, dict):
-                        msg = first.get("message")
-                        if isinstance(msg, dict) and msg.get("content"):
-                            content = str(msg["content"])
-                        elif first.get("text"):
-                            content = str(first["text"])
-                        elif first.get("content"):
-                            content = str(first["content"])
-                        elif first.get("delta") and isinstance(first["delta"], dict) and first["delta"].get("content"):
-                            content = str(first["delta"]["content"])
-                if content is None:
-                    for key in ("content", "response", "message", "text", "output", "answer", "completion"):
-                        val = data.get(key)
-                        if isinstance(val, str) and val.strip():
-                            content = val
-                            break
-                        if isinstance(val, dict) and val.get("content"):
-                            content = str(val["content"])
-                            break
-                if content is None:
-                    # Some servers wrap in {"data": {"content": "..."}}
-                    data_inner = data.get("data")
-                    if isinstance(data_inner, dict):
-                        for key in ("content", "response", "message", "text"):
-                            val = data_inner.get(key)
-                            if isinstance(val, str) and val.strip():
-                                content = val
-                                break
-                if content is None:
-                    # Last resort: if the entire dict is the content (e.g., raw string JSON)
-                    # try to find any string value that looks like JSON with our schema
-                    if len(data) == 1:
-                        sole = next(iter(data.values()))
-                        if isinstance(sole, str) and sole.strip():
-                            content = sole
-            if content is not None:
-                return content
-            # If data is a list or string directly
-            if isinstance(data, str) and data.strip():
-                return data
-            if isinstance(data, list) and data:
-                # e.g., [{"content": "..."}]
-                first = data[0]
-                if isinstance(first, dict):
-                    for key in ("content", "response", "message", "text"):
-                        if first.get(key):
-                            return str(first[key])
-                if isinstance(first, str):
-                    return first
-            # Fallback to stringified JSON — caller will try to extract JSON object
-            return json.dumps(data) if isinstance(data, (dict, list)) else str(data)
+        last_exc: Optional[Exception] = None
+        for attempt_url in _candidate_urls(url):
+            for payload in (payload_messages, payload_input_string, payload_input_array):
+                try:
+                    async with httpx.AsyncClient(timeout=30) as client:
+                        resp = await client.post(attempt_url, json=payload, headers=headers)
+                    if resp.status_code != 200:
+                        body = resp.text or ""
+                        # If server says 'input' is required, immediately try input payload on same URL
+                        if resp.status_code == 400 and _needs_input_retry(body) and payload is payload_messages:
+                            # retry with input payload on same URL — continue to next payload
+                            last_exc = RuntimeError(f"Local LLM error {resp.status_code}: {body[:500]}")
+                            # Also try alternative URL with messages in next outer loop
+                            if attempt_url == url:
+                                logger.warning("local_llm: %s expects 'input', retrying with input payload at %s", model, attempt_url)
+                            continue
+                        # 404 -> try next URL (wrong path)
+                        if resp.status_code == 404 and attempt_url == url:
+                            last_exc = RuntimeError(f"Local LLM error 404 at {attempt_url}: {body[:300]}")
+                            break  # break payload loop, go to next URL
+                        raise RuntimeError(f"Local LLM error {resp.status_code}: {body[:500]}")
+                    try:
+                        data = resp.json()
+                    except Exception:
+                        text = resp.text or ""
+                        if text.strip():
+                            return text
+                        raise RuntimeError("Local LLM returned non-JSON empty response")
+                    content = _extract_content(data)
+                    if content is not None:
+                        if attempt_url != url:
+                            logger.info("local_llm: succeeded via fallback URL %s (primary %s failed)", attempt_url, url)
+                        return content
+                    # Fallback to stringified JSON — caller will try to extract JSON object
+                    return json.dumps(data) if isinstance(data, (dict, list)) else str(data)
+                except RuntimeError as e:
+                    last_exc = e
+                    # If input-required error, keep trying input variants
+                    if _needs_input_retry(str(e)):
+                        continue
+                    # For other 400/404, try next payload/URL
+                    if "404" in str(e) or "input" in str(e).lower():
+                        break
+                    raise
+                except Exception as e:
+                    last_exc = e
+                    raise
+            # if we got 404, continue to next URL
+            if last_exc and "404" in str(last_exc):
+                continue
+            # if last error was input-required and we exhausted payloads, try next URL
+            if last_exc and _needs_input_retry(str(last_exc)):
+                continue
+            if last_exc is None:
+                continue
+        # Exhausted all candidates
+        if last_exc:
+            raise last_exc
+        raise RuntimeError("Local LLM: all endpoint/payload variants failed")
 
     invoke.__name__ = "local_llm_invoke"
     return PROVIDER_LOCAL, invoke
@@ -409,15 +522,13 @@ def make_local_llm_invoker(settings: Any) -> Tuple[str, InvokeFn]:
 #     return PROVIDER_GROQ, invoke
 
 # ---------------------------------------------------------------------------
-# GEMINI / GROQ — ACTIVE IMPLEMENTATIONS (kept for tests + rollback)
-# These are NOT called in live provider_chain while local LLM is active
-# (see commented entries above). They remain importable so existing tests
-# that patch make_gemini_invoker / make_groq_invoker keep working, and so
-# a single uncomment restores cloud fallback. RAG embeddings are unaffected.
+# GEMINI / GROQ — ACTIVE IMPLEMENTATIONS
+# Gemini is called first by provider_chain; Groq is called only as its fallback.
+# RAG embeddings are unaffected.
 # ---------------------------------------------------------------------------
 
 def make_gemini_invoker(settings: Any) -> Tuple[str, InvokeFn]:
-    """Build the Gemini invoker (COMMENTED OUT IN LIVE CHAIN — kept for rollback/tests)."""
+    """Build the Gemini invoker used first by live interview reasoning."""
     try:
         from langchain_google_genai import ChatGoogleGenerativeAI
     except ImportError as e:
@@ -436,7 +547,7 @@ def make_gemini_invoker(settings: Any) -> Tuple[str, InvokeFn]:
 
 
 def make_groq_invoker(settings: Any) -> Tuple[str, InvokeFn]:
-    """Build the Groq fallback invoker (COMMENTED OUT IN LIVE CHAIN — kept for rollback/tests)."""
+    """Build the Groq reasoning fallback invoker."""
     try:
         from langchain_groq import ChatGroq
     except ImportError as e:
@@ -454,54 +565,102 @@ def make_groq_invoker(settings: Any) -> Tuple[str, InvokeFn]:
     return PROVIDER_GROQ, invoke
 
 
-def provider_chain(settings: Any) -> List[Tuple[str, InvokeFn]]:
-    """Live reasoning order: Local LLM only (Gemini/Groq commented out in production).
+PROVIDER_OPENROUTER = "openrouter"
 
-    Gemini/Groq entries below are COMMENTED OUT per user request to use
-    http://localhost:1234/api/v1/chat. They are kept for easy rollback and
-    for existing tests that mock them (when local LLM is not configured in
-    the test MagicMock, the chain falls back to gemini/groq so tests pass).
-    RAG / embeddings remain on Gemini and are NOT affected.
-    """
-    chain: List[Tuple[str, InvokeFn]] = []
-    # --- LOCAL LLM (ACTIVE) -------------------------------------------------
+
+def make_nvidia_invoker(settings: Any) -> Tuple[str, InvokeFn]:
+    """Build the server-side NVIDIA NIM interview invoker."""
     try:
-        chain.append(make_local_llm_invoker(settings))
+        from langchain_nvidia_ai_endpoints import ChatNVIDIA
+    except ImportError as e:
+        raise HTTPException(status_code=503, detail=f"NVIDIA provider not installed: {e}")
+
+    api_key = _require_key(getattr(settings, "nvidia_api_key", None), "NVIDIA_API_KEY", PROVIDER_NVIDIA)
+    model = (getattr(settings, "nvidia_model", None) or "nvidia/nemotron-3-nano-omni-30b-a3b-reasoning").strip()
+
+    async def invoke(messages: List[Dict[str, str]]) -> str:
+        llm = ChatNVIDIA(
+            model=model,
+            api_key=api_key,
+            temperature=0.2,
+            max_completion_tokens=4096,
+        )
+        raw = await llm.ainvoke(messages)
+        return str(getattr(raw, "content", raw) or "")
+
+    invoke.__name__ = "nvidia_invoke"
+    return PROVIDER_NVIDIA, invoke
+
+
+def make_openrouter_invoker(settings: Any) -> Tuple[str, InvokeFn]:
+    """Build one OpenRouter request with server-side ordered model fallback."""
+    import httpx
+
+    api_key = _require_key(
+        getattr(settings, "openrouter_api_key", None),
+        "OPENROUTER_API_KEY", PROVIDER_OPENROUTER,
+    )
+    primary = (getattr(settings, "openrouter_primary_model", None)
+               or "deepseek/deepseek-v3.2").strip()
+    raw_fallbacks = getattr(settings, "openrouter_fallback_models", "") or ""
+    fallbacks = [model.strip() for model in str(raw_fallbacks).split(",") if model.strip()]
+    fallbacks = [model for model in fallbacks if model != primary]
+
+    async def invoke(messages: List[Dict[str, str]]) -> str:
+        payload = {
+            "model": primary,
+            "models": fallbacks,
+            "messages": messages,
+            "temperature": 0.2,
+            "max_tokens": 4096,
+            "stream": False,
+        }
+        headers = {
+            "Authorization": f"Bearer {api_key}",
+            "Content-Type": "application/json",
+        }
+        async with httpx.AsyncClient(timeout=30) as client:
+            response = await client.post(
+                "https://openrouter.ai/api/v1/chat/completions",
+                json=payload,
+                headers=headers,
+            )
+        if response.status_code != 200:
+            raise RuntimeError(f"OpenRouter error {response.status_code}: {response.text[:500]}")
+        data = response.json()
+        invoke.last_model = str(data.get("model") or primary) if isinstance(data, dict) else primary
+        choices = data.get("choices") if isinstance(data, dict) else None
+        if not isinstance(choices, list) or not choices:
+            raise RuntimeError("OpenRouter returned no choices")
+        message = choices[0].get("message") if isinstance(choices[0], dict) else None
+        content = message.get("content") if isinstance(message, dict) else None
+        if not isinstance(content, str) or not content.strip():
+            raise RuntimeError("OpenRouter returned empty content")
+        return content
+
+    invoke.__name__ = "openrouter_invoke"
+    invoke.last_model = primary
+    invoke.fallback_models = tuple(fallbacks)
+    return PROVIDER_OPENROUTER, invoke
+
+
+def provider_chain(settings: Any) -> List[Tuple[str, InvokeFn]]:
+    """Live reasoning order: Gemini, Groq fallback, deterministic recovery."""
+    chain: List[Tuple[str, InvokeFn]] = []
+    try:
+        chain.append(make_gemini_invoker(settings))
     except HTTPException:
         pass
-    # --- GEMINI (COMMENTED OUT — preserved for future rollback) -------------
-    # NOTE: This block is intentionally commented. Uncomment to re-enable.
-    # try:
-    #     chain.append(make_gemini_invoker(settings))
-    # except HTTPException:
-    #     pass
-    # --- GROQ FALLBACK (COMMENTED OUT — preserved for future rollback) ------
-    # NOTE: This block is intentionally commented. Uncomment to re-enable.
-    # try:
-    #     chain.append(make_groq_invoker(settings))
-    # except HTTPException:
-    #     pass
-
-    # Fallback for tests / when local LLM is not configured (e.g., MagicMock
-    # in test suite without local_llm_url string). This does NOT affect
-    # production where local_llm_url defaults to http://localhost:1234/api/v1/chat
-    # and make_local_llm_invoker succeeds, so gemini/groq are never reached.
-    if not chain:
-        try:
-            chain.append(make_gemini_invoker(settings))
-        except HTTPException:
-            pass
-        try:
-            chain.append(make_groq_invoker(settings))
-        except HTTPException:
-            pass
+    try:
+        chain.append(make_groq_invoker(settings))
+    except HTTPException:
+        pass
     return chain
 
 
 # ---------------------------------------------------------------------------
-# Orchestration: Local LLM -> deterministic marker. Each provider is
+# Orchestration: Gemini -> Groq -> deterministic marker. Each provider is
 # attempted at most once so one answer cannot trigger a correction/retry call.
-# (Gemini -> Groq chain is commented out; see above.)
 # ---------------------------------------------------------------------------
 
 async def run_evaluation_chain(
@@ -527,8 +686,8 @@ async def run_evaluation_chain(
     if not chain:
         raise HTTPException(
             status_code=503,
-            detail="AI interview grading is not configured — set LOCAL_LLM_URL "
-                   "(e.g., http://localhost:1234/api/v1/chat). "
+                 detail="AI interview grading is not configured — set NVIDIA_API_KEY "
+                     "and configure NVIDIA_MODEL. "
                    "Your answers are saved and will be graded once grading is configured.",
         )
     attempts: List[ProviderAttempt] = []
@@ -549,6 +708,7 @@ async def run_evaluation_chain(
                 if accept_text is not None and not accept_text(text):
                     attempts.append(ProviderAttempt(name, latency, False, "malformed_output", None, False))
                     log_llm_event(session_id=session_id, question_id=question_id, provider=name,
+                                  model=getattr(invoke, "last_model", None),
                                   latency_ms=latency, success=False,
                                   failure_class="malformed_output", retry_count=0,
                                   fallback_used=position > 0)
@@ -556,6 +716,7 @@ async def run_evaluation_chain(
                     break
                 attempts.append(ProviderAttempt(name, latency, True, None, None, retries_used > 0))
                 log_llm_event(session_id=session_id, question_id=question_id, provider=name,
+                              model=getattr(invoke, "last_model", None),
                               latency_ms=latency, success=True,
                               retry_count=len(attempts) - 1, fallback_used=position > 0)
                 return ChainResult(text=text, provider_used=name, attempts=attempts,
@@ -567,6 +728,7 @@ async def run_evaluation_chain(
                 failure_class, status, retry_after = classify_provider_error(exc)
                 last_failure = failure_class
                 log_llm_event(session_id=session_id, question_id=question_id, provider=name,
+                              model=getattr(invoke, "last_model", None),
                               latency_ms=latency, success=False, failure_class=failure_class,
                               retry_count=len(attempts), fallback_used=position > 0)
                 attempts.append(ProviderAttempt(name, latency, False, failure_class, status, retries_used > 0))

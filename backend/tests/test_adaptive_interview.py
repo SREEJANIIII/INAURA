@@ -225,7 +225,7 @@ def test_decide_next_action_next_on_strong_answer():
 def test_decide_next_action_complete_at_end():
     strong = _make_evaluation({"follow_up_needed": False})
     action = iv.decide_next_action(strong, current_index=3, total_planned=4, follow_ups_used=0, questions_answered=4)
-    assert action == "complete"
+    assert action == "next"
 
 
 def test_decide_next_action_budget_respected():
@@ -352,8 +352,8 @@ def test_generate_follow_up_calls_llm_when_no_suggested():
     assert fu == "Can you explain the caching layer in more detail?"
 
 
-def test_generate_follow_up_fallback_on_llm_failure():
-    """When LLM fails, a fallback question is generated based on weak dimensions."""
+def test_generate_follow_up_returns_none_on_llm_failure():
+    """When LLM fails, no predefined question is substituted."""
     ev = _make_evaluation({
         "follow_up_needed": True,
         "technical_correctness": 0.30,
@@ -367,8 +367,7 @@ def test_generate_follow_up_fallback_on_llm_failure():
     fu = asyncio.run(iv.generate_follow_up_question(
         _make_question(), "Something.", ev, _llm=_FailLLM()
     ))
-    assert fu is not None  # Fallback question generated
-    assert len(fu) > 0
+    assert fu is None
 
 
 # ===========================================================================
@@ -430,8 +429,8 @@ def test_interview_version_updated():
 
 
 def test_adaptive_constants_defined():
-    assert iv.INTERVIEW_MAX_FOLLOW_UPS == 4
-    assert iv.INTERVIEW_TOTAL_BUDGET == 8
+    assert iv.MIN_INTERVIEW_QUESTIONS == 4
+    assert iv.MAX_INTERVIEW_QUESTIONS == 8
 
 
 # ===========================================================================
@@ -448,7 +447,8 @@ def test_existing_competencies_unchanged():
 def test_existing_plan_building_unchanged():
     plan = iv.build_interview_plan("Python", knowledge_score=0.5, practical_score=0.3)
     assert iv.validate_plan(plan) == []
-    assert len(plan["questions"]) == 4
+    assert len(plan["questions"]) == 1
+    assert plan["questions"][0]["_is_initial"] is True
     # Plan still has competencies
     comp_ids = {c["id"] for c in plan["competencies"]}
     for q in plan["questions"]:
@@ -647,8 +647,8 @@ def test_follow_up_inserted_at_correct_position():
 
     # Follow-up should be the current question (index 1, right after q0)
     nq = resp.get("current_question") or {}
-    assert nq.get("id") == "q0_followup_1"
-    assert nq.get("competency") == "c1_followup"
+    assert nq.get("id") == "q0_adaptive_fallback_1"
+    assert nq.get("competency") == "c1"
     assert resp.get("action") == "FOLLOW_UP"
     # Ack and question are separate fields: ack carries no question text,
     # the question travels in current_question (frontend voices each once).
@@ -664,7 +664,7 @@ def test_follow_up_inserted_at_correct_position():
     qs = saved_plan["questions"]
     assert len(qs) == 3
     assert qs[0]["id"] == "q0"
-    assert qs[1]["id"] == "q0_followup_1"  # Follow-up at position 1
+    assert qs[1]["id"] == "q0_adaptive_fallback_1"  # Answer-grounded probe at position 1
     assert qs[2]["id"] == "q1"  # Original q1 at position 2
 
 
@@ -713,7 +713,7 @@ def test_follow_up_plan_persisted_to_db():
     assert "plan" in update_payload, "Plan must be persisted when follow-up is generated"
     saved_plan = update_payload["plan"]
     assert len(saved_plan["questions"]) == 2
-    assert saved_plan["questions"][1]["_is_follow_up"] is True
+    assert saved_plan["questions"][1]["_is_adaptive"] is True
 
 
 # ===========================================================================
@@ -782,9 +782,7 @@ def test_deterministic_fallback_references_answer_and_missing_depth():
         _make_question(), "We used Redis for performance.", evaluation,
         _llm=_FallbackLLM(),
     ))
-    assert question is not None
-    assert question == "What would you inspect first if this implementation suddenly became much slower in production?"
-    assert "We used Redis" not in question
+    assert question is None
 
 
 def test_redis_counter_question_requires_new_information_not_restatement():

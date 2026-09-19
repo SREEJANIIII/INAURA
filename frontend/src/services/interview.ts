@@ -30,6 +30,9 @@ export type AnswerEvaluation = {
   contradiction: number;
   confidence: number;
   explanation: string;
+  demonstrated?: string[];
+  missing?: string[];
+  misconceptions?: string[];
   follow_up_needed: boolean;
   suggested_follow_up: string;
 };
@@ -54,9 +57,13 @@ export type AnswerResponse = {
   ai_available: boolean;
   evaluation: AnswerEvaluation | null;
   evaluation_pending: boolean;
+  spoken_response?: string | null;
   current_index: number;
   current_question: MockQuestion | null;
   completed: boolean;
+  answered_count: number;
+  question_count: number;
+  provider_used?: string | null;
   note: string | null;
 };
 
@@ -100,7 +107,7 @@ export type InterviewReport = {
   note: string | null;
 };
 
-export function startMockInterview(target_role?: string, question_count = 6) {
+export function startMockInterview(target_role?: string, question_count = 3) {
   return apiFetch<StartInterviewResponse>("/interview/start", {
     method: "POST",
     body: JSON.stringify({ target_role: target_role || undefined, question_count }),
