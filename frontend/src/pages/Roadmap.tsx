@@ -15,9 +15,21 @@ import {
 import { roadmapPageData } from "../lib/pageData";
 import { getRoleSync, resetRoleSync, subscribeRoleSync } from "../lib/roleSync";
 import Button from "@/components/ui/app-button";
+import AssessmentModal from "../components/assessment/AssessmentModal";
 
 type RoadmapPageData = NonNullable<ReturnType<typeof roadmapPageData.peek>>;
 import "./Roadmap.css";
+
+export type RoadmapPhase = {
+  phaseNumber: number;
+  title: string;
+  shortTitle: string;
+  description: string;
+  startWeek: number;
+  endWeek: number;
+  completionPercentage: number;
+  isCompleted: boolean;
+};
 
 const STAGES: RoadmapTask["task_type"][] = ["learn", "practice", "build", "validate"];
 
@@ -95,9 +107,10 @@ type TaskRowProps = {
   expanded: boolean;
   onToggleExpanded: () => void;
   onUpdate: (patch: TaskUpdate) => void;
+  onLaunchAssessment: (skillName: string, task: RoadmapTask) => void;
 };
 
-function TaskRow({ task, updating, expanded, onToggleExpanded, onUpdate }: TaskRowProps) {
+function TaskRow({ task, updating, expanded, onToggleExpanded, onUpdate, onLaunchAssessment }: TaskRowProps) {
   const done = task.status === "completed" || task.completion_percentage >= 100;
   const partway = !done && task.completion_percentage > 0;
   const focus = task.personalization_context && typeof task.personalization_context.primary_gap === "string"
@@ -190,6 +203,51 @@ function TaskRow({ task, updating, expanded, onToggleExpanded, onUpdate }: TaskR
               </ul>
             </div>
           )}
+
+          <div className="rm-task__actions">
+            {task.task_type === "validate" && (
+              <>
+                <Button
+                  size="sm"
+                  variant="primary"
+                  disabled={updating || done}
+                  onClick={() => onLaunchAssessment(task.skill_name, task)}
+                >
+                  Take {task.skill_name} Assessment
+                </Button>
+                <Button asChild size="sm" variant="ghost">
+                  <Link to="/interview">Mock Interview Practice →</Link>
+                </Button>
+                <span className="rm-task__action-hint">
+                  Passing this assessment marks this milestone complete automatically.
+                </span>
+              </>
+            )}
+            {task.task_type === "build" && (
+              <>
+                <Button asChild size="sm" variant="secondary">
+                  <Link to="/analysis">Add Project Evidence →</Link>
+                </Button>
+                <span className="rm-task__action-hint">
+                  Link a GitHub repo or deliverable to verify this build milestone.
+                </span>
+              </>
+            )}
+            {task.task_type === "practice" && task.resources.length > 0 && (
+              <Button asChild size="sm" variant="secondary">
+                <a href={task.resources[0].url} target="_blank" rel="noreferrer">
+                  Open Practice Drill ({task.resources[0].provider || "Practice"}) ↗
+                </a>
+              </Button>
+            )}
+            {task.task_type === "learn" && task.resources.length > 0 && (
+              <Button asChild size="sm" variant="ghost">
+                <a href={task.resources[0].url} target="_blank" rel="noreferrer">
+                  Study: {task.resources[0].title} ↗
+                </a>
+              </Button>
+            )}
+          </div>
         </div>
       )}
     </li>
@@ -199,10 +257,12 @@ function TaskRow({ task, updating, expanded, onToggleExpanded, onUpdate }: TaskR
 type WeekPanelProps = {
   week: RoadmapWeek;
   weekCount: number;
+  currentPhase?: RoadmapPhase | null;
   updating: string | null;
   expanded: Record<string, boolean>;
   onToggleExpanded: (taskId: string) => void;
   onUpdateTask: (task: RoadmapTask, patch: TaskUpdate) => void;
+  onLaunchAssessment: (skillName: string, task: RoadmapTask) => void;
   onStep: (delta: number) => void;
   canPrev: boolean;
   canNext: boolean;
@@ -211,10 +271,12 @@ type WeekPanelProps = {
 function WeekPanel({
   week,
   weekCount,
+  currentPhase,
   updating,
   expanded,
   onToggleExpanded,
   onUpdateTask,
+  onLaunchAssessment,
   onStep,
   canPrev,
   canNext,
@@ -231,6 +293,7 @@ function WeekPanel({
         <div>
           <p className="rm-eyebrow">
             Week {week.week_number} of {weekCount}
+            {currentPhase && <span className="rm-phase-tag">{currentPhase.shortTitle}</span>}
             <span className={`rm-wstate rm-wstate--${week.status}`}>{WEEK_STATUS_LABEL[week.status]}</span>
             {week.start_date && <span className="rm-faint">{formatDate(week.start_date)} – {formatDate(week.target_completion_date)}</span>}
           </p>
@@ -287,6 +350,7 @@ function WeekPanel({
                     expanded={Boolean(expanded[task.id])}
                     onToggleExpanded={() => onToggleExpanded(task.id)}
                     onUpdate={(patch) => onUpdateTask(task, patch)}
+                    onLaunchAssessment={onLaunchAssessment}
                   />
                 ))}
               </ul>
@@ -320,6 +384,7 @@ export default function Roadmap() {
   const [updating, setUpdating] = useState<string | null>(null);
   const [expanded, setExpanded] = useState<Record<string, boolean>>({});
   const [showAdaptiveNotice, setShowAdaptiveNotice] = useState(false);
+  const [assessingTarget, setAssessingTarget] = useState<{ skillName: string; task: RoadmapTask } | null>(null);
 
   const applyData = useCallback((data: RoadmapPageData) => {
     setProfile(data.profile);
@@ -442,6 +507,60 @@ export default function Roadmap() {
   }, [selectedWeekNum, weeks]);
   const activeWeek = weeks[activeIndex] ?? null;
 
+  const phases = useMemo<RoadmapPhase[]>(() => {
+    if (weeks.length === 0) return [];
+    const milestones = roadmap?.milestones ?? [];
+    const phaseCount = milestones.length > 0 ? milestones.length : Math.min(4, Math.max(1, Math.ceil(weeks.length / 4)));
+    const perPhase = Math.ceil(weeks.length / phaseCount);
+
+    return Array.from({ length: phaseCount }, (_, i) => {
+      const phaseStartIdx = i * perPhase;
+      const phaseEndIdx = Math.min((i + 1) * perPhase, weeks.length);
+      const phaseWeeks = weeks.slice(phaseStartIdx, phaseEndIdx);
+      if (phaseWeeks.length === 0) return null;
+
+      const startWeek = phaseWeeks[0].week_number;
+      const endWeek = phaseWeeks[phaseWeeks.length - 1].week_number;
+      const totalPct = phaseWeeks.reduce((acc, w) => acc + w.completion_percentage, 0);
+      const avgPct = Math.round(totalPct / phaseWeeks.length);
+      const milestone = milestones[i];
+
+      const fullTitle = milestone?.title || `Phase ${i + 1}: Module ${i + 1}`;
+      let shortTitle = `Phase ${i + 1}`;
+      if (fullTitle.includes(":")) {
+        const parts = fullTitle.split(":");
+        const namePart = parts[1].trim();
+        const shortName = namePart.split("&")[0].trim().split(" ")[0] || namePart;
+        shortTitle = `${parts[0].trim()}: ${shortName}`;
+      }
+
+      return {
+        phaseNumber: i + 1,
+        title: fullTitle,
+        shortTitle,
+        description: milestone?.description || "",
+        startWeek,
+        endWeek,
+        completionPercentage: avgPct,
+        isCompleted: avgPct >= 100,
+      };
+    }).filter(Boolean) as RoadmapPhase[];
+  }, [weeks, roadmap?.milestones]);
+
+  const activePhase = useMemo(() => {
+    if (!activeWeek) return null;
+    return phases.find(
+      (p) => activeWeek.week_number >= p.startWeek && activeWeek.week_number <= p.endWeek
+    ) ?? null;
+  }, [phases, activeWeek]);
+
+  const handleSelectPhase = (phase: RoadmapPhase) => {
+    const targetWeek = weeks.find(
+      (w) => w.week_number >= phase.startWeek && w.week_number <= phase.endWeek && w.completion_percentage < 100
+    ) || weeks.find((w) => w.week_number === phase.startWeek);
+    if (targetWeek) setSelectedWeekNum(targetWeek.week_number);
+  };
+
   // Step through the weeks we actually have, rather than assuming they're numbered 1, 2, 3…
   const stepWeek = (delta: number) => {
     const next = weeks[activeIndex + delta];
@@ -482,9 +601,14 @@ export default function Roadmap() {
           <div className="rm-head__actions">
             <Button asChild variant="secondary"><Link to="/analysis/results">See your analysis</Link></Button>
             {roadmap && (
-              <Button variant="secondary" onClick={handleAdaptiveReassess} disabled={reassessing || generating || rebuilding}>
-                {reassessing ? "Updating…" : "Refresh plan"}
-              </Button>
+              <>
+                <Button variant="secondary" onClick={handleAdaptiveReassess} disabled={reassessing || generating || rebuilding}>
+                  {reassessing ? "Updating…" : "Adjust schedule"}
+                </Button>
+                <Button variant="primary" onClick={handleGenerate} disabled={generating || rebuilding || !profile?.hours_per_week}>
+                  {generating ? "Rebuilding…" : "Rebuild roadmap"}
+                </Button>
+              </>
             )}
           </div>
         </header>
@@ -564,6 +688,27 @@ export default function Roadmap() {
           <p className="rm-empty">No weekly tasks yet. Refresh your plan to build this week’s schedule.</p>
         ) : (
           <div className={`rm-plan${rebuilding ? " is-stale" : ""}`} aria-busy={rebuilding || undefined}>
+            {phases.length > 1 && (
+              <nav className="rm-phases" aria-label="Curriculum phases">
+                {phases.map((phase) => {
+                  const isActive = activePhase?.phaseNumber === phase.phaseNumber;
+                  return (
+                    <button
+                      key={phase.phaseNumber}
+                      type="button"
+                      className={`rm-phase-pill${isActive ? " is-active" : ""}${phase.isCompleted ? " is-done" : ""}`}
+                      onClick={() => handleSelectPhase(phase)}
+                    >
+                      <span>{phase.shortTitle} (W{phase.startWeek}–W{phase.endWeek})</span>
+                      <span className="rm-num">
+                        {phase.isCompleted ? <Tick /> : `${phase.completionPercentage}%`}
+                      </span>
+                    </button>
+                  );
+                })}
+              </nav>
+            )}
+
             <nav className="rm-weeks" role="tablist" aria-label="Weeks">
               {weeks.map((week) => {
                 const active = activeWeek?.id === week.id;
@@ -591,10 +736,12 @@ export default function Roadmap() {
               <WeekPanel
                 week={activeWeek}
                 weekCount={weeks.length}
+                currentPhase={activePhase}
                 updating={updating}
                 expanded={expanded}
                 onToggleExpanded={(taskId) => setExpanded((current) => ({ ...current, [taskId]: !current[taskId] }))}
                 onUpdateTask={handleUpdateTask}
+                onLaunchAssessment={(skillName, task) => setAssessingTarget({ skillName, task })}
                 onStep={stepWeek}
                 canPrev={activeIndex > 0}
                 canNext={activeIndex < weeks.length - 1}
@@ -603,6 +750,20 @@ export default function Roadmap() {
           </div>
         )}
       </div>
+
+      {assessingTarget && (
+        <AssessmentModal
+          skill={assessingTarget.skillName}
+          onClose={() => setAssessingTarget(null)}
+          onCompleted={async () => {
+            await handleUpdateTask(assessingTarget.task, {
+              status: "completed",
+              completion_percentage: 100,
+            });
+            setAssessingTarget(null);
+          }}
+        />
+      )}
     </div>
   );
 }

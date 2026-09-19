@@ -353,6 +353,154 @@
   color: var(--rm-ink);
 }
 
+/* ---------- Curriculum Phases ---------- */
+
+.rm-phases {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(210px, 1fr));
+  gap: 10px;
+  margin-bottom: 16px;
+}
+
+.rm-phase-pill {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  padding: 10px 14px;
+  border: 1px solid var(--glass-edge);
+  border-radius: 12px;
+  background: var(--rm-surface);
+  color: var(--rm-ink-2);
+  text-align: left;
+  cursor: pointer;
+  transition: all 0.15s ease;
+  box-shadow: var(--glass-shadow);
+}
+
+.rm-phase-pill:hover {
+  border-color: var(--rm-line-strong);
+  background: var(--rm-hover);
+}
+
+.rm-phase-pill.is-active {
+  border-color: var(--rm-accent);
+  background: var(--rm-accent-soft);
+  color: var(--rm-accent-deep);
+}
+
+.rm-phase-pill.is-done {
+  border-color: #cfe0d5;
+}
+
+.rm-phase-pill__badge {
+  font-size: 11px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--rm-accent);
+  margin-bottom: 2px;
+}
+
+.rm-phase-pill.is-done .rm-phase-pill__badge {
+  color: var(--rm-green);
+}
+
+.rm-phase-pill__title {
+  font-size: 13.5px;
+  font-weight: 600;
+  color: var(--rm-ink);
+  line-height: 1.25;
+  margin-bottom: 4px;
+}
+
+.rm-phase-pill__meta {
+  font-size: 11.5px;
+  color: var(--rm-ink-3);
+  font-variant-numeric: tabular-nums;
+}
+
+.rm-phase-tag {
+  display: inline-flex;
+  align-items: center;
+  padding: 2px 8px;
+  border-radius: 6px;
+  background: var(--rm-accent-soft);
+  color: var(--rm-accent-deep);
+  font-size: 11.5px;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+}
+
+.rm-task__actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  margin-top: 14px;
+  padding-top: 12px;
+  border-top: 1px solid var(--rm-line);
+}
+
+/* ---------- Phase bar ---------- */
+
+.rm-phases {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 14px;
+}
+
+.rm-phase-pill {
+  appearance: none;
+  background: var(--rm-surface);
+  border: 1px solid var(--glass-edge);
+  border-radius: 9999px;
+  padding: 6px 14px;
+  font-family: inherit;
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--rm-ink-2);
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  transition: all 0.15s ease;
+  box-shadow: var(--glass-shadow);
+}
+
+.rm-phase-pill:hover {
+  background: var(--rm-hover);
+  border-color: var(--rm-line-strong);
+  color: var(--rm-ink);
+}
+
+.rm-phase-pill.is-active {
+  background: var(--rm-accent-soft);
+  border-color: var(--rm-accent);
+  color: var(--rm-accent-deep);
+  font-weight: 600;
+}
+
+.rm-phase-pill.is-done {
+  border-color: rgba(60, 117, 86, 0.3);
+  color: var(--rm-green);
+}
+
+.rm-phase-tag {
+  display: inline-flex;
+  align-items: center;
+  padding: 2px 8px;
+  border-radius: 9999px;
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  background: var(--rm-accent-soft);
+  color: var(--rm-accent-deep);
+  margin-left: 6px;
+  vertical-align: middle;
+}
+
 /* ---------- Week rail ---------- */
 
 .rm-weeks {
@@ -782,6 +930,23 @@
 }
 
 .rm-res__from {
+  font-size: 12px;
+  color: var(--rm-ink-3);
+}
+
+/* ---------- Task Interactive Action Bar ---------- */
+
+.rm-task__actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 10px;
+  margin-top: 16px;
+  padding-top: 14px;
+  border-top: 1px solid var(--rm-line-2);
+}
+
+.rm-task__action-hint {
   font-size: 12px;
   color: var(--rm-ink-3);
 }

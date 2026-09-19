@@ -112,21 +112,33 @@ def filter_and_sort_gaps(gaps: List[dict]) -> List[dict]:
     return filtered
 
 
-def limit_gaps(gaps: List[dict], max_items: int = 6, min_items: int = 3) -> List[dict]:
-    """Take top max_items gaps. Keep deterministic. If fewer than min_items available, take all."""
+def limit_gaps(gaps: List[dict], max_items: Optional[int] = None, min_items: int = 3) -> List[dict]:
+    """Take up to max_items gaps if specified, otherwise include all prioritized non-zero gaps (up to 24) to build a complete industry-ready curriculum across months."""
     if not gaps:
         return []
-    return gaps[:max_items]
+    if max_items is not None:
+        return gaps[:max_items]
+    return gaps[:24]
 
 
-def estimate_hours_for_gap(canonical: str, gap: float, importance: float) -> float:
-    """Heuristic: base_hours + gap*6 + importance*2, clamped reasonable."""
+def estimate_hours_for_gap(
+    canonical: str,
+    gap: float,
+    importance: float,
+    learner_state: str = "UNKNOWN",
+) -> float:
+    """Calculate realistic hours required to close the gap for this skill, scaling with learner state and gap magnitude."""
     base = get_base_hours(canonical)
-    extra = gap * 6 + importance * 2
-    total = base + extra
-    total = round(total, 1)
-    total = max(2.0, min(30.0, total))
-    return total
+    if learner_state == "KNOWN":
+        # Learner already demonstrated proficiency: fast-track review and capstone integration
+        total = max(4.0, min(14.0, base * 0.25 + gap * 4.0))
+    elif learner_state == "INFERRED":
+        # Supporting evidence exists: emphasize practice, build, and validation
+        total = max(8.0, min(40.0, base * 0.65 + gap * 12.0 + importance * 3.0))
+    else:
+        # UNKNOWN / large gap: full comprehensive curriculum for industry readiness
+        total = max(10.0, min(50.0, base * (0.6 + 0.6 * gap) + importance * 4.0))
+    return round(total, 1)
 
 
 def generate_why_it_matters(
@@ -309,8 +321,8 @@ async def generate_roadmap(
 
     explanations_by_slug: Dict[str, dict] = {}
 
-    # 5. Limit candidate gaps to top 3-6 (sorted strictly by priority descending)
-    priority_selected = limit_gaps(filtered, max_items=6)
+    # 5. Include all prioritized non-zero gaps for the role (not capped to 6)
+    priority_selected = limit_gaps(filtered, max_items=None)
 
     # Load skills map for display
     skills_map = _get_skills_map()
@@ -358,7 +370,9 @@ async def generate_roadmap(
         confidence = float(gap.get("confidence", 0))
         priority_score = float(gap.get("priority_score", 0))
 
-        est_hours = estimate_hours_for_gap(canonical, gap_val, importance)
+        learner_st = learner_states.get(slug)
+        classif = learner_st.state_classification if learner_st else "UNKNOWN"
+        est_hours = estimate_hours_for_gap(canonical, gap_val, importance, learner_state=classif)
         why = generate_why_it_matters(display_name, current, required, gap_val, importance, demand, interview, confidence, role)
 
         # Build comprehensive evidence-traceable personalization & 5 Whys
@@ -407,16 +421,18 @@ async def generate_roadmap(
 
         gap_val = float(gap.get("gap", 0))
         importance = float(gap.get("importance", 0.5))
-        est_hours = estimate_hours_for_gap(canonical, gap_val, importance)
 
         slug = normalize_skill_slug(canonical) or canonical.lower().replace(" ", "_")
         learner_st = learner_states.get(slug)
         classif = learner_st.state_classification if learner_st else "UNKNOWN"
+        est_hours = estimate_hours_for_gap(canonical, gap_val, importance, learner_state=classif)
+
         tasks_for_skill = decompose_skill_into_tasks(
             canonical=canonical,
             total_hours=est_hours,
             learner_state_classification=classif,
             target_role=role,
+            granular=True,
         )
 
         # Personalize 4-stage tasks based on specific missing capabilities
@@ -435,18 +451,31 @@ async def generate_roadmap(
             all_decomposed_tasks.append(t)
 
     # 8. Bin-pack tasks into weeks matching hours_per_week
-    target_week_minutes = max(120, hours_per_week * 60)
+    target_week_minutes = max(180, hours_per_week * 60)
     planned_weeks = []
     curr_week_num = 1
     curr_tasks: List[dict] = []
     curr_minutes = 0
 
     for task in all_decomposed_tasks:
-        # Overflow check: allow slight grace window (15%) before opening a new week
-        if curr_tasks and (curr_minutes + task["estimated_minutes"]) > (target_week_minutes * 1.15):
+        # Overflow check: allow slight grace window (12%) before opening a new week
+        if curr_tasks and (curr_minutes + task["estimated_minutes"]) > (target_week_minutes * 1.12):
             week_skills = list(dict.fromkeys(t["skill_name"] for t in curr_tasks))
-            theme = f"Week {curr_week_num}: {week_skills[0]} Fundamentals & Application" if week_skills else f"Week {curr_week_num}"
-            objective = f"Master {', '.join(week_skills[:2])} concepts, complete targeted exercises, and implement working deliverables."
+            primary_skill = week_skills[0] if week_skills else "Core Stack"
+            stage_types = set(t["task_type"] for t in curr_tasks)
+            if "build" in stage_types and "validate" in stage_types:
+                theme = f"Week {curr_week_num}: {primary_skill} Practical Deliverables & Verification"
+                objective = f"Build and harden production application features in {', '.join(week_skills[:2])}, author automated test suites, and verify capability."
+            elif "build" in stage_types:
+                theme = f"Week {curr_week_num}: {primary_skill} Architecture & Implementation"
+                objective = f"Design and implement working components for {primary_skill}, focusing on clean boundaries, error handling, and persistence."
+            elif "learn" in stage_types and "practice" in stage_types:
+                theme = f"Week {curr_week_num}: {primary_skill} Core Foundations & Problem Solving"
+                objective = f"Establish rigorous mental models in {primary_skill}, study syntax and patterns, and complete targeted practical coding drills."
+            else:
+                theme = f"Week {curr_week_num}: {primary_skill} Applied Concepts & Validation"
+                objective = f"Advance your competency in {', '.join(week_skills[:2])} through guided study, targeted exercises, and deliverable validation."
+
             planned_weeks.append({
                 "week_number": curr_week_num,
                 "title": theme,
@@ -466,8 +495,9 @@ async def generate_roadmap(
 
     if curr_tasks:
         week_skills = list(dict.fromkeys(t["skill_name"] for t in curr_tasks))
-        theme = f"Week {curr_week_num}: {week_skills[0]} Capstone & Verification" if week_skills else f"Week {curr_week_num}"
-        objective = f"Finalize practical build projects, integration tests, and validation assessments for {', '.join(week_skills)}."
+        primary_skill = week_skills[0] if week_skills else "Full-Stack System"
+        theme = f"Week {curr_week_num}: {primary_skill} Capstone Integration & Verification"
+        objective = f"Finalize practical build deliverables, automated integration tests, and interview validation assessments for {', '.join(week_skills)}."
         planned_weeks.append({
             "week_number": curr_week_num,
             "title": theme,
@@ -628,11 +658,18 @@ async def generate_roadmap(
         w_inst["tasks"] = week_tasks
         persisted_weeks.append(w_inst)
 
-    # 13. Persist legacy Milestones for backward compatibility
+    # 13. Persist curriculum Milestones / Phases (Backward Compatible)
     n = len(persisted_items)
-    num_milestones = 3 if n >= 3 else (2 if n == 2 else 1)
+    num_milestones = 4 if n >= 4 else (3 if n == 3 else (2 if n == 2 else 1))
     per = math.ceil(n / num_milestones) if num_milestones else 1
     milestones_created = []
+
+    PHASE_MILESTONES = [
+        ("Phase 1: Core Foundations & Computational Thinking", "Master core language semantics, algorithmic complexity, fundamental data structures, and version control."),
+        ("Phase 2: Core Stack & Application Architecture", "Develop full-featured application components, RESTful APIs, relational schema models, and system networking."),
+        ("Phase 3: Production Engineering & System Reliability", "Containerize workloads with Docker, establish automated testing pipelines, and design scalable architectures."),
+        ("Phase 4: Capstone Architecture & Technical Interview Readiness", "Synthesize full-stack systems, harden production deployments, and validate interview readiness through timed challenges."),
+    ]
 
     for mi in range(num_milestones):
         start = mi * per
@@ -641,7 +678,12 @@ async def generate_roadmap(
         if not group:
             continue
         target_hours = round(sum(float(g.get("estimated_hours", 0)) for g in group), 1)
-        m_title, m_desc = MILESTONE_TITLES[mi] if mi < len(MILESTONE_TITLES) else (f"Milestone {mi+1}", "Continue your roadmap.")
+        if num_milestones == 4 and mi < len(PHASE_MILESTONES):
+            m_title, m_desc = PHASE_MILESTONES[mi]
+        elif mi < len(MILESTONE_TITLES):
+            m_title, m_desc = MILESTONE_TITLES[mi]
+        else:
+            m_title, m_desc = (f"Phase {mi+1}: Advanced Specialization", "Continue your roadmap towards complete industry readiness.")
         mrow = {
             "roadmap_id": roadmap_id,
             "title": m_title,
@@ -1088,7 +1130,7 @@ async def reassess_and_adapt(
                 uncompleted_tasks.append(t)
 
     # Reschedule uncompleted tasks into remaining weeks
-    target_week_minutes = max(120, hpw * 60)
+    target_week_minutes = max(180, hpw * 60)
     new_weeks = []
     start_week_num = len(completed_weeks) + 1
     curr_week_num = start_week_num
@@ -1096,12 +1138,13 @@ async def reassess_and_adapt(
     curr_mins = 0
 
     for task in uncompleted_tasks:
-        if curr_tasks and (curr_mins + task["estimated_minutes"]) > (target_week_minutes * 1.15):
+        if curr_tasks and (curr_mins + task["estimated_minutes"]) > (target_week_minutes * 1.12):
             week_skills = list(dict.fromkeys(t["skill_name"] for t in curr_tasks))
+            primary_skill = week_skills[0] if week_skills else "Targeted Mastery"
             new_weeks.append({
                 "week_number": curr_week_num,
-                "title": f"Week {curr_week_num}: {week_skills[0]} Accelerated Application" if week_skills else f"Week {curr_week_num}",
-                "objective": f"Continue targeted practice and validation for {', '.join(week_skills)}.",
+                "title": f"Week {curr_week_num}: {primary_skill} Accelerated Practice & Build" if week_skills else f"Week {curr_week_num}",
+                "objective": f"Continue targeted capability building, exercises, and deliverables for {', '.join(week_skills[:2])}.",
                 "estimated_hours": round(curr_mins / 60.0, 1),
                 "skills": week_skills,
                 "status": "current" if curr_week_num == start_week_num else "locked",
@@ -1117,10 +1160,11 @@ async def reassess_and_adapt(
 
     if curr_tasks:
         week_skills = list(dict.fromkeys(t["skill_name"] for t in curr_tasks))
+        primary_skill = week_skills[0] if week_skills else "Full-Stack System"
         new_weeks.append({
             "week_number": curr_week_num,
-            "title": f"Week {curr_week_num}: Capstone & Final Verification",
-            "objective": f"Validate mastery and finalize portfolio deliverables.",
+            "title": f"Week {curr_week_num}: {primary_skill} Capstone & Verification",
+            "objective": f"Finalize practical build deliverables, integration testing, and interview verification for {', '.join(week_skills)}.",
             "estimated_hours": round(curr_mins / 60.0, 1),
             "skills": week_skills,
             "status": "current" if curr_week_num == start_week_num else "locked",
