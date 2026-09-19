@@ -1,0 +1,104 @@
+/* Who INAURA is for: five audience cards */
+.audience__grid {
+  margin-top: 44px;
+  display: grid;
+  grid-template-columns: repeat(5, minmax(0, 1fr));
+  gap: 14px;
+}
+
+.audience__card {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 20px 18px 18px;
+}
+
+.audience__top {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 8px;
+}
+
+.audience__icon {
+  transition:
+    color 0.25s,
+    background-color 0.25s,
+    border-color 0.25s;
+}
+
+/* On hover the icon fills in, alongside the card's lift */
+.audience__card:hover .audience__icon {
+  color: #fff;
+  background: var(--accent);
+  border-color: var(--accent);
+}
+
+.audience__n {
+  font-size: 0.72rem;
+  font-weight: 700;
+  letter-spacing: 0.14em;
+  color: var(--muted-3);
+  font-variant-numeric: tabular-nums;
+}
+
+.audience__title {
+  font-size: 1.05rem;
+  font-weight: 680;
+  letter-spacing: -0.02em;
+  line-height: 1.2;
+  color: var(--ink);
+}
+
+.audience__desc {
+  flex: 1;
+  font-size: 0.9rem;
+  line-height: 1.55;
+  color: var(--muted);
+}
+
+.audience__focus {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  margin-top: 6px;
+  padding-top: 12px;
+  border-top: 1px solid var(--line);
+  font-size: 0.84rem;
+  font-weight: 600;
+  color: var(--ink-700);
+}
+
+.audience__focus span {
+  font-size: 0.64rem;
+  font-weight: 700;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: var(--muted-3);
+}
+
+/* Tablets: three over two */
+@media (max-width: 1100px) {
+  .audience__grid {
+    grid-template-columns: repeat(6, minmax(0, 1fr));
+  }
+  .audience__cell {
+    grid-column: span 2;
+  }
+  .audience__cell:nth-child(4),
+  .audience__cell:nth-child(5) {
+    grid-column: span 3;
+  }
+}
+
+@media (max-width: 640px) {
+  .audience__grid {
+    grid-template-columns: 1fr;
+    gap: 12px;
+  }
+  .audience__cell,
+  .audience__cell:nth-child(4),
+  .audience__cell:nth-child(5) {
+    grid-column: auto;
+  }
+}

@@ -1,108 +1,116 @@
-.how__header {
-  max-width: 720px;
-}
-
-.how__title {
-  margin-top: 14px;
-}
-
-.how__desc {
-  margin-top: 14px;
-  font-size: 1.05rem;
-  max-width: 60ch;
-}
-
-.how__grid {
-  margin-top: 36px;
+/* Five steps on one path. --lit (0–1) lights a step's number; --draw (0–1) draws the line
+   on to the next step. Both are set from the scroll in HowItWorks.tsx. */
+.how__path {
+  --path-gap: 16px;
+  margin-top: 40px;
   display: grid;
-  grid-template-columns: repeat(5, 1fr);
-  gap: 14px;
+  grid-template-columns: repeat(5, minmax(0, 1fr));
+  gap: var(--path-gap);
+}
+
+.how__step {
+  display: flex;
+  flex-direction: column;
+}
+
+.how__marker {
+  position: relative;
+  height: 34px;
+  margin-bottom: 14px;
+}
+
+/* From this step's number to the next one's */
+.how__line {
+  position: absolute;
+  top: 16.5px;
+  left: 17px;
+  width: calc(100% + var(--path-gap));
+  height: 1px;
+  background: var(--line-strong);
+}
+
+.how__line-fill {
+  position: absolute;
+  inset: 0;
+  background: linear-gradient(90deg, var(--accent), #818cf8);
+  transform: scaleX(var(--draw, 0));
+  transform-origin: left center;
+}
+
+.how__node {
+  position: relative;
+  z-index: 1;
+  isolation: isolate;
+  width: 34px;
+  height: 34px;
+  border-radius: 9999px;
+  display: grid;
+  place-items: center;
+  font-size: 0.72rem;
+  font-weight: 750;
+  letter-spacing: 0.04em;
+  font-variant-numeric: tabular-nums;
+  background: var(--glass-bg-strong);
+  border: 1px solid var(--line-strong);
+  color: color-mix(in srgb, #fff calc(var(--lit, 0) * 100%), var(--muted-2));
+  box-shadow: 0 0 0 calc(var(--lit, 0) * 5px) rgba(79, 70, 229, 0.12);
+}
+
+.how__node::before {
+  content: "";
+  position: absolute;
+  inset: -1px;
+  z-index: -1;
+  border-radius: inherit;
+  background: var(--accent);
+  opacity: var(--lit, 0);
+  transform: scale(calc(0.6 + var(--lit, 0) * 0.4));
 }
 
 .how__card {
-  background: var(--glass-bg);
-  border: 1px solid var(--glass-edge);
-  border-radius: 16px;
-  padding: 20px 18px 18px;
+  flex: 1;
   display: flex;
   flex-direction: column;
-  gap: 10px;
-  position: relative;
-  overflow: hidden;
-  transition: border-color 0.2s, box-shadow 0.2s, transform 0.2s;
-}
-
-.how__card:hover {
-  border-color: var(--line-strong);
-  box-shadow: var(--shadow);
-  transform: translateY(-2px);
-}
-
-.how__card::before {
-  content: "";
-  position: absolute;
-  top: 0;
-  left: 0;
-  right: 0;
-  height: 1px;
-  background: linear-gradient(90deg, transparent, var(--line), transparent);
-  opacity: 0;
-  transition: opacity 0.2s;
-}
-
-.how__card:hover::before {
-  opacity: 1;
-}
-
-.how__num {
-  font-size: 0.78rem;
-  font-weight: 800;
-  letter-spacing: 0.12em;
-  color: var(--accent);
-  background: var(--accent-soft);
-  border: 1px solid var(--accent-border);
-  width: fit-content;
-  padding: 6px 8px;
-  border-radius: 9999px;
-  line-height: 1;
+  gap: 8px;
+  padding: 20px 18px 16px;
+  border-radius: 16px;
 }
 
 .how__card-title {
   font-size: 1.05rem;
   font-weight: 680;
   letter-spacing: -0.02em;
+  line-height: 1.2;
   color: var(--ink);
-  margin-top: 4px;
 }
 
 .how__card-desc {
+  flex: 1;
   font-size: 0.9rem;
   line-height: 1.55;
   color: var(--muted);
-  flex: 1;
 }
 
-.how__bar {
-  margin-top: 14px;
-  height: 2px;
-  background: var(--bg-muted);
-  border-radius: 9999px;
-  overflow: hidden;
+/* What each step hands to the next */
+.how__out {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  margin-top: 8px;
+  padding-top: 12px;
+  border-top: 1px solid var(--line);
+  font-size: 0.84rem;
+  font-weight: 600;
+  color: var(--ink-700);
 }
 
-.how__bar span {
-  display: block;
-  height: 100%;
-  width: 100%;
-  background: var(--ink);
-  border-radius: 9999px;
-  /* Filled by scroll: scaleX grows from the left */
-  transform-origin: left center;
+.how__out-label {
+  font-size: 0.64rem;
+  font-weight: 700;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: var(--muted-3);
 }
-
-.lp-cell:nth-child(3) .how__bar span,
-.lp-cell:nth-child(4) .how__bar span { background: var(--accent); }
-.lp-cell:nth-child(5) .how__bar span { background: #0f766e; }
 
 /* Pinned scene (wide screens): the section holds still while the steps play */
 .how__track--pinned {
@@ -122,7 +130,7 @@
 }
 
 .how__note {
-  margin-top: 18px;
+  margin-top: 22px;
   display: inline-flex;
   gap: 10px;
   align-items: center;
@@ -148,14 +156,43 @@
 }
 
 @media (max-width: 1100px) {
-  .how__grid {
-    grid-template-columns: repeat(3, 1fr);
+  .how__card {
+    padding: 18px 14px 14px;
+  }
+  .how__card-title {
+    font-size: 0.98rem;
   }
 }
 
-@media (max-width: 720px) {
-  .how__grid {
+/* Below the pinned layout: the path runs down the left edge */
+@media (max-width: 959px) {
+  .how__path {
+    --path-gap: 12px;
     grid-template-columns: 1fr;
+    max-width: 620px;
+  }
+  .how__step {
+    display: grid;
+    grid-template-columns: 34px minmax(0, 1fr);
+    gap: 14px;
+  }
+  .how__marker {
+    height: auto;
+    margin: 0;
+  }
+  .how__line {
+    top: 17px;
+    left: 16.5px;
+    width: 1px;
+    height: calc(100% + var(--path-gap));
+  }
+  .how__line-fill {
+    background: linear-gradient(180deg, var(--accent), #818cf8);
+    transform: scaleY(var(--draw, 0));
+    transform-origin: center top;
+  }
+  .how__card {
+    padding: 16px 16px 14px;
   }
   .how__note {
     border-radius: 14px;

@@ -25,7 +25,12 @@
   white-space: nowrap;
 }
 
-/* Sections reached from the navbar's links stop just below the floating pill */
-.landing section[id] {
+/* Anything the navbar or footer links to stops just below the floating pill. Sections have
+   generous top spacing, so most of it is skipped and the heading lands close under the pill. */
+.landing [id] {
   scroll-margin-top: var(--nav-clear, 86px);
+}
+
+.landing section[id] {
+  scroll-margin-top: calc(var(--nav-clear, 86px) - 64px);
 }
