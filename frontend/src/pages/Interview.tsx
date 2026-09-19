@@ -1,7 +1,8 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { Link } from "react-router-dom";
-import Button from "../components/ui/Button";
+import Button from "../components/ui/app-button";
 import InterviewModal from "../components/assessment/InterviewModal";
+import { mergeFinalTranscript, normalizeTechnicalTerms, splitRecognitionResults } from "../hooks/useSpeechRecognition";
 import {
   answerMockQuestion,
   completeMockInterview,
@@ -24,6 +25,20 @@ type Stage =
   | "report";
 
 type CamState = "idle" | "requesting" | "live" | "denied" | "unavailable";
+
+/** The bits of the browser's speech recognition this page uses for dictation. */
+type DictationResult = { isFinal: boolean; 0: { transcript: string }; length: number };
+type DictationEvent = { resultIndex: number; results: ArrayLike<DictationResult> };
+type DictationInstance = {
+  lang: string;
+  interimResults: boolean;
+  continuous: boolean;
+  onresult: ((ev: DictationEvent) => void) | null;
+  onend: (() => void) | null;
+  onerror: (() => void) | null;
+  start: () => void;
+  stop: () => void;
+};
 
 function pct(v: number | null | undefined): string {
   return typeof v === "number" && Number.isFinite(v) ? `${Math.round(v * 100)}%` : "—";
@@ -67,6 +82,16 @@ export default function Interview() {
   // Timer
   const [elapsed, setElapsed] = useState(0);
   const timerRef = useRef<number | null>(null);
+
+  // Both screens show a preview from the same camera, but only one is on screen at
+  // a time. A callback ref hands the live stream to whichever one is mounted.
+  const attachVideo = useCallback((el: HTMLVideoElement | null) => {
+    videoRef.current = el;
+    if (el && streamRef.current) {
+      el.srcObject = streamRef.current;
+      void el.play().catch(() => undefined);
+    }
+  }, []);
 
   const stopTracks = useCallback(() => {
     if (rafRef.current) cancelAnimationFrame(rafRef.current);
@@ -198,6 +223,7 @@ export default function Interview() {
     }
     setCurrent(lastResult.current_question);
     setLastResult(null);
+    setElapsed(0);
     setStage("question");
   };
 
@@ -222,26 +248,8 @@ export default function Interview() {
       return;
     }
     const win = window as unknown as {
-      SpeechRecognition?: new () => {
-        lang: string;
-        interimResults: boolean;
-        continuous: boolean;
-        onresult: ((ev: { resultIndex: number; results: Array<Array<{ transcript: string }>> }) => void) | null;
-        onend: (() => void) | null;
-        onerror: (() => void) | null;
-        start: () => void;
-        stop: () => void;
-      };
-      webkitSpeechRecognition?: new () => {
-        lang: string;
-        interimResults: boolean;
-        continuous: boolean;
-        onresult: ((ev: { resultIndex: number; results: Array<Array<{ transcript: string }>> }) => void) | null;
-        onend: (() => void) | null;
-        onerror: (() => void) | null;
-        start: () => void;
-        stop: () => void;
-      };
+      SpeechRecognition?: new () => DictationInstance;
+      webkitSpeechRecognition?: new () => DictationInstance;
     };
     const Impl = win.SpeechRecognition || win.webkitSpeechRecognition;
     if (dictating) {
@@ -259,13 +267,14 @@ export default function Interview() {
       recogRef.current = recog;
       recog.lang = "en-US";
       recog.interimResults = true;
-      recog.continuous = false;
-      recog.onresult = (ev: { resultIndex: number; results: Array<Array<{ transcript: string }>> }) => {
-        let text = "";
-        for (let i = ev.resultIndex; i < ev.results.length; i++) {
-          text += ev.results[i][0].transcript;
-        }
-        setAnswer((prev) => (prev ? `${prev} ${text}` : text));
+      recog.continuous = true;
+      // Only settled phrases are written into the answer. Appending the browser's
+      // running guesses instead would repeat every half-finished phrase.
+      recog.onresult = (ev: DictationEvent) => {
+        const { final } = splitRecognitionResults(ev);
+        if (!final.trim()) return;
+        const cleaned = normalizeTechnicalTerms(final);
+        setAnswer((prev) => mergeFinalTranscript(prev, cleaned));
       };
       recog.onend = () => setDictating(false);
       recog.onerror = () => {
@@ -375,7 +384,7 @@ export default function Interview() {
               <div className="iv__eyebrow">Camera & microphone</div>
               <h2 className="iv__h2">Check your presence</h2>
               <div className="iv__video-wrap">
-                <video ref={videoRef} className="iv__video" muted playsInline autoPlay />
+                <video ref={attachVideo} className="iv__video" muted playsInline autoPlay />
                 {camState !== "live" && <div className="iv__video-off">Camera preview off</div>}
                 <span className={`iv__rec ${camState === "live" ? "iv__rec--live" : ""}`}>
                   {camState === "live" ? "● Preview (not recorded)" : "○ No preview"}
@@ -428,7 +437,7 @@ export default function Interview() {
               <li>Nothing here judges appearance — only the content of your answers.</li>
             </ul>
             <div className="iv__row">
-              <Button variant="primary" size="lg" onClick={() => setStage("question")}>
+              <Button variant="primary" size="lg" onClick={() => { setElapsed(0); setStage("question"); }}>
                 Start question 1 of {session.question_count}
               </Button>
             </div>
@@ -487,7 +496,7 @@ export default function Interview() {
             </div>
             <aside className="iv__card iv__side">
               <h3>Presence</h3>
-              <video ref={videoRef} className="iv__video iv__video--small" muted playsInline autoPlay />
+              <video ref={attachVideo} className="iv__video iv__video--small" muted playsInline autoPlay />
               <p className="iv__fine">Preview only — never uploaded.</p>
               <div className="iv__meter-row">
                 <span className="iv__meter-label">Mic</span>
@@ -502,7 +511,9 @@ export default function Interview() {
         {stage === "feedback" && lastResult && (
           <section className="iv__card">
             <div className="iv__eyebrow">
-              {lastResult.next_action === "complete" ? "Section complete" : `Next: Q${(lastResult.current_question?.sequence ?? 0)}`}
+              {lastResult.next_action === "complete" || !lastResult.current_question
+                ? "Section complete"
+                : `Next: Q${lastResult.current_question.sequence}`}
             </div>
             <h2 className="iv__h2">Evidence captured</h2>
             {lastResult.evaluation ? (

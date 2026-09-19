@@ -26,3 +26,21 @@ export const supabase: SupabaseClient | null =
     : null;
 
 export const isSupabaseConfigured = Boolean(supabaseUrl && supabaseAnonKey);
+
+export type OAuthProvider = "google" | "github";
+
+/** Whether Google/GitHub sign-in is switched on in the Supabase dashboard.
+    Supabase sends people to a raw error page for a provider that's off, so check first. */
+export async function isProviderEnabled(provider: OAuthProvider): Promise<boolean> {
+  if (!supabaseUrl || !supabaseAnonKey) return false;
+  try {
+    const res = await fetch(`${supabaseUrl.replace(/\/$/, "")}/auth/v1/settings`, {
+      headers: { apikey: supabaseAnonKey },
+    });
+    const settings = (await res.json()) as { external?: Record<string, boolean> };
+    return !!settings.external?.[provider];
+  } catch {
+    // Can't tell; let Supabase decide
+    return true;
+  }
+}

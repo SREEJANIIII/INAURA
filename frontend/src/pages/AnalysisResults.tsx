@@ -1,1023 +1,350 @@
-/* eslint-disable @typescript-eslint/no-explicit-any, react-hooks/set-state-in-effect */
-import { useCallback, useEffect, useState } from "react";
-import { Link } from "react-router-dom";
-import { getLatestAnalysis, getGaps, setSkillOverride, type AnalysisResult, type SkillGap } from "../services/analysis";
-import { listEvidence, listProjects, listGithubRepos, type Evidence, type Project, type GithubRepo, setEvidenceExcluded, setProjectExcluded, setEvidenceAiAssisted, setProjectAiAssisted, setGithubRepoExcluded, setGithubRepoAiAssisted } from "../services/evidence";
+import { useCallback, useEffect, useMemo, useState, useSyncExternalStore } from "react";
+import { Link, useLocation } from "react-router-dom";
+import { setSkillOverride, type AnalysisResult, type SkillGap } from "../services/analysis";
 import {
-  getAvailableAssessments,
-  type AvailableAssessment,
-} from "../services/assessment";
+  type Evidence,
+  type Project,
+  type GithubRepo,
+  setEvidenceExcluded,
+  setProjectExcluded,
+  setEvidenceAiAssisted,
+  setProjectAiAssisted,
+  setGithubRepoExcluded,
+  setGithubRepoAiAssisted,
+} from "../services/evidence";
+import { type AvailableAssessment } from "../services/assessment";
+import { generateRoadmap } from "../services/roadmap";
 import AssessmentModal from "../components/assessment/AssessmentModal";
 import SkillAssessmentLayers from "../components/assessment/SkillAssessmentLayers";
 import SkillEvidenceCard from "../components/analysis/SkillEvidenceCard";
-import Button from "../components/ui/Button";
+import Button from "../components/ui/app-button";
+import { profileData, resultsPageData, roadmapPageData, subscribePageData } from "../lib/pageData";
+import { setActiveSection } from "../lib/sectionSpy";
+import {
+  headlineInsight,
+  pct,
+  roadmapLinkFor,
+  skillName,
+  sourceUsage,
+  splitGaps,
+} from "../components/analysis/analysisModel";
+import type { GapActions } from "../components/analysis/gapActions";
+import PriorityGaps from "../components/analysis/PriorityGaps";
+import EvidenceGaps from "../components/analysis/EvidenceGaps";
+import SkillQuadrant from "../components/analysis/SkillQuadrant";
+import SkillOverview from "../components/analysis/SkillOverview";
+import EvidenceSources from "../components/analysis/EvidenceSources";
+import { CodeforcesPanel, DsaCoverage } from "../components/analysis/CodingPractice";
+import { codingPracticeData } from "../components/analysis/codingPracticeData";
 import "./AnalysisResults.css";
+import "../components/analysis/AnalysisPage.css";
+
+/** The two Skill Assessment sidebar links still open a focused view of just that part */
+const FOCUS_VIEWS = ["dsa", "skill-assessments"];
+
+const NAV = [
+  { id: "overview", label: "Overview" },
+  { id: "priority-gaps", label: "Priority gaps" },
+  { id: "evidence-gaps", label: "Evidence gaps" },
+  { id: "skill-quadrants", label: "Skill quadrants" },
+  { id: "skill-overview", label: "Skill overview" },
+  { id: "evidence-sources", label: "Evidence sources" },
+  { id: "next-steps", label: "Next steps" },
+];
+
+const scrollToSection = (id: string, smooth = true) =>
+  document.getElementById(id)?.scrollIntoView({ behavior: smooth ? "smooth" : "auto", block: "start" });
 
 export default function AnalysisResults() {
-  const [analysis, setAnalysis] = useState<AnalysisResult | null>(null);
-  const [gaps, setGaps] = useState<SkillGap[]>([]);
-  const [evidence, setEvidence] = useState<Evidence[]>([]);
-  const [projects, setProjects] = useState<Project[]>([]);
-  const [githubRepos, setGithubRepos] = useState<GithubRepo[]>([]);
-  const [assessable, setAssessable] = useState<AvailableAssessment[]>([]);
+  const [analysis, setAnalysis] = useState<AnalysisResult | null>(() => resultsPageData.peek()?.analysis ?? null);
+  const [gaps, setGaps] = useState<SkillGap[]>(() => resultsPageData.peek()?.gaps ?? []);
+  const [evidence, setEvidence] = useState<Evidence[]>(() => resultsPageData.peek()?.evidence ?? []);
+  const [projects, setProjects] = useState<Project[]>(() => resultsPageData.peek()?.projects ?? []);
+  const [githubRepos, setGithubRepos] = useState<GithubRepo[]>(() => resultsPageData.peek()?.githubRepos ?? []);
+  const [assessable, setAssessable] = useState<AvailableAssessment[]>(() => resultsPageData.peek()?.assessable ?? []);
   const [activeAssessment, setActiveAssessment] = useState<AvailableAssessment | null>(null);
-  const [loading, setLoading] = useState(true);
+  const [loading, setLoading] = useState(() => !resultsPageData.peek());
   const [error, setError] = useState<string | null>(null);
   const [provenanceGap, setProvenanceGap] = useState<SkillGap | null>(null);
   const [overrideConfirm, setOverrideConfirm] = useState<SkillGap | null>(null);
   const [overriding, setOverriding] = useState(false);
   const [evidenceActionLoading, setEvidenceActionLoading] = useState<string | null>(null);
+  const [actionError, setActionError] = useState<string | null>(null);
+  const [generatingRoadmap, setGeneratingRoadmap] = useState(false);
+  const [showFormula, setShowFormula] = useState(false);
+  const [navActive, setNavActive] = useState("overview");
+  const location = useLocation();
+  const hash = location.hash.slice(1);
+  const focusView = FOCUS_VIEWS.includes(hash) ? hash : null;
 
-  const loadAssessments = useCallback(async () => {
-    try {
-      const data = await getAvailableAssessments();
-      setAssessable(data.available || []);
-    } catch {
-      setAssessable([]);
-    }
-  }, []);
+  const roadmapData = useSyncExternalStore(subscribePageData, roadmapPageData.peek);
 
-  const reload = useCallback(async () => {
+  const reload = useCallback(async (force = true) => {
     try {
-      const [a, g, ev, pr, gh] = await Promise.all([
-        getLatestAnalysis(),
-        getGaps().catch(() => [] as SkillGap[]),
-        listEvidence().catch(() => [] as Evidence[]),
-        listProjects().catch(() => [] as Project[]),
-        listGithubRepos().catch(() => [] as GithubRepo[]),
-      ]);
-      setAnalysis(a);
-      setGaps(g);
-      setEvidence(ev);
-      setProjects(pr);
-      setGithubRepos(gh);
-      await loadAssessments();
+      const data = await resultsPageData.fetch(force);
+      setAnalysis(data.analysis);
+      setGaps(data.gaps);
+      setEvidence(data.evidence);
+      setProjects(data.projects);
+      setGithubRepos(data.githubRepos);
+      setAssessable(data.assessable);
+      setError(null);
     } catch (e) {
+      // A failed background refresh keeps the last-seen results on screen
+      if (!force && resultsPageData.peek()) return;
       const msg = e instanceof Error ? e.message : "Failed to load analysis";
       if (msg.includes("404") || msg.toLowerCase().includes("no analysis")) {
-        setError("No analysis found. Run INAURA analysis first.");
+        setError("none");
       } else if (msg.includes("401")) {
-        setError("Session expired. Please log in again.");
+        setError("Your session has expired. Log in again to see your analysis.");
       } else if (msg.includes("503")) {
-        setError("Analysis tables not configured — run backend/supabase/005_skill_engine.sql");
+        setError("Analysis tables aren’t set up. Run backend/supabase/005_skill_engine.sql in Supabase.");
       } else {
-        setError(msg);
+        setError("Your analysis couldn’t be loaded. Check your connection and try again.");
       }
     } finally {
       setLoading(false);
     }
-  }, [loadAssessments]);
+  }, []);
 
+  // State starts from the last-seen data (see useState above); refresh it in the background
   useEffect(() => {
-    reload();
+    // Fetching on open: state is only set after the request resolves
+    // eslint-disable-next-line react-hooks/set-state-in-effect
+    reload(false);
+    roadmapPageData.fetch().catch(() => undefined);
   }, [reload]);
 
-  const refreshAfterAssessment = useCallback(async () => {
-    try {
-      const [a, g] = await Promise.all([
-        getLatestAnalysis(),
-        getGaps().catch(() => [] as SkillGap[]),
-      ]);
-      setAnalysis(a);
-      setGaps(g);
-    } catch {
-      // keep current view if refresh fails
-      void 0;
+  const ready = !loading && !!analysis;
+
+  // Sidebar links like #priority-gaps scroll within this page; focused views start at the top
+  useEffect(() => {
+    if (!ready) return;
+    if (focusView) {
+      window.scrollTo(0, 0);
+    } else if (hash && document.getElementById(hash)) {
+      scrollToSection(hash);
     }
-    await loadAssessments();
-  }, [loadAssessments]);
+    // location.key: clicking the same sidebar link again scrolls back to that section
+  }, [ready, hash, focusView, location.key]);
+
+  // Track which section is on screen, for the sidebar and the section bar
+  useEffect(() => {
+    if (!ready || focusView) {
+      setActiveSection(null);
+      return;
+    }
+    const sections = NAV.map((n) => document.getElementById(n.id)).filter((el): el is HTMLElement => !!el);
+    let frame = 0;
+    // The section whose heading has most recently passed a line a third of the way down the screen
+    const update = () => {
+      frame = 0;
+      const line = window.innerHeight * 0.33;
+      const atBottom = window.innerHeight + window.scrollY >= document.documentElement.scrollHeight - 4;
+      let current = sections[0];
+      for (const el of sections) if (el.getBoundingClientRect().top <= line) current = el;
+      if (atBottom) current = sections[sections.length - 1];
+      if (current) {
+        setActiveSection(current.id);
+        setNavActive(current.id);
+      }
+    };
+    const onScroll = () => {
+      if (!frame) frame = requestAnimationFrame(update);
+    };
+    // IntersectionObserver catches sections resizing (expanding rows) as well as scrolling
+    const observer = new IntersectionObserver(onScroll, { threshold: [0, 1] });
+    sections.forEach((el) => observer.observe(el));
+    window.addEventListener("scroll", onScroll, { passive: true });
+    window.addEventListener("resize", onScroll);
+    update();
+    return () => {
+      cancelAnimationFrame(frame);
+      observer.disconnect();
+      window.removeEventListener("scroll", onScroll);
+      window.removeEventListener("resize", onScroll);
+      setActiveSection(null);
+    };
+  }, [ready, focusView]);
+
+  // Keep the active chip in view in the phone section bar. Scroll only the bar sideways:
+  // scrollIntoView would also nudge the page and interrupt a smooth scroll that's in progress.
+  useEffect(() => {
+    const bar = document.querySelector<HTMLElement>(".an-sectionbar");
+    const chip = bar?.querySelector<HTMLElement>(`a[data-id="${navActive}"]`);
+    if (!bar || !chip || bar.offsetParent === null) return;
+    bar.scrollTo({ left: chip.offsetLeft - bar.clientWidth / 2 + chip.clientWidth / 2, behavior: "smooth" });
+  }, [navActive]);
+
+  const refreshAfterAssessment = useCallback(async () => {
+    await reload();
+  }, [reload]);
 
   const handleOverride = async (gap: SkillGap) => {
     setOverriding(true);
     try {
-      const skillName = gap.skills?.display_name || gap.skills?.canonical_name || gap.canonical_name || gap.skill || "";
-      if (!skillName) throw new Error("Skill name missing");
-      await setSkillOverride(skillName);
+      await setSkillOverride(skillName(gap));
       setOverrideConfirm(null);
-      // Reload after backend recalculates
       await reload();
     } catch (e) {
-      alert(e instanceof Error ? e.message : "Failed to override skill");
+      setActionError(e instanceof Error ? e.message : "That change couldn’t be saved. Try again.");
+      setOverrideConfirm(null);
     } finally {
       setOverriding(false);
     }
   };
 
-  const handleEvidenceExclude = async (id: string, isExcluded: boolean, type: "evidence" | "project") => {
+  // Source switches: the backend recalculates, then we reload the analysis
+  const runSourceAction = async (id: string, action: () => Promise<unknown>) => {
     setEvidenceActionLoading(id);
+    setActionError(null);
     try {
-      if (type === "evidence") await setEvidenceExcluded(id, isExcluded);
-      else await setProjectExcluded(id, isExcluded);
+      await action();
       await reload();
     } catch (e) {
-      alert(e instanceof Error ? e.message : "Failed to update evidence");
+      setActionError(e instanceof Error ? e.message : "That change couldn’t be saved. Try again.");
     } finally {
       setEvidenceActionLoading(null);
     }
   };
 
-  const handleAiToggle = async (id: string, isAi: boolean, type: "evidence" | "project") => {
-    setEvidenceActionLoading(id);
+  const handleGenerateRoadmap = async () => {
+    if (!analysis) return;
+    setGeneratingRoadmap(true);
+    setActionError(null);
     try {
-      if (type === "evidence") await setEvidenceAiAssisted(id, isAi);
-      else await setProjectAiAssisted(id, isAi);
-      await reload();
+      const profile = profileData.peek() ?? (await profileData.fetch().catch(() => undefined));
+      await generateRoadmap(analysis.target_role, profile?.hours_per_week);
+      await roadmapPageData.fetch(true);
     } catch (e) {
-      alert(e instanceof Error ? e.message : "Failed to update AI flag");
+      setActionError(e instanceof Error ? `Your roadmap couldn’t be built: ${e.message}` : "Your roadmap couldn’t be built.");
     } finally {
-      setEvidenceActionLoading(null);
+      setGeneratingRoadmap(false);
     }
   };
 
-  const handleGithubRepoExclude = async (fullName: string, isExcluded: boolean) => {
-    setEvidenceActionLoading(fullName);
-    try {
-      await setGithubRepoExcluded(fullName, isExcluded);
-      await reload();
-    } catch (e) {
-      alert(e instanceof Error ? e.message : "Failed to update repo");
-    } finally {
-      setEvidenceActionLoading(null);
-    }
+  const groups = useMemo(() => splitGaps(gaps), [gaps]);
+  const coding = useMemo(() => codingPracticeData(evidence), [evidence]);
+
+  const assessmentFor = useCallback(
+    (g: SkillGap): AvailableAssessment | undefined => {
+      const names = [g.skills?.display_name, g.skills?.canonical_name, g.canonical_name].filter(Boolean).map((n) => (n as string).toLowerCase());
+      return assessable.find((a) => names.includes(a.skill.toLowerCase()) || names.includes(a.skill_key.toLowerCase()));
+    },
+    [assessable]
+  );
+
+  const hasRoadmap = !!roadmapData?.roadmap;
+  const actions: GapActions = {
+    targetRole: analysis?.target_role ?? "your target",
+    assessmentFor,
+    startAssessment: setActiveAssessment,
+    openDetails: setProvenanceGap,
+    requestOverride: setOverrideConfirm,
+    roadmapFor: (g) => roadmapLinkFor(g, hasRoadmap, roadmapData?.weeks ?? []),
+    generateRoadmap: roadmapData && !hasRoadmap ? handleGenerateRoadmap : undefined,
+    generatingRoadmap,
   };
 
-  const handleGithubRepoAi = async (fullName: string, isAi: boolean) => {
-    setEvidenceActionLoading(fullName);
-    try {
-      await setGithubRepoAiAssisted(fullName, isAi);
-      await reload();
-    } catch (e) {
-      alert(e instanceof Error ? e.message : "Failed to update repo AI flag");
-    } finally {
-      setEvidenceActionLoading(null);
-    }
-  };
+  /* ---------------- Loading / empty / error ---------------- */
 
   if (loading) {
     return (
-      <div className="results">
-        <div className="container" style={{ padding: "4rem 0", textAlign: "center", color: "#64748b" }}>
-          Loading your INAURA analysis…
+      <div className="an">
+        <div className="an__inner" aria-busy="true">
+          <div className="an-skel an-skel--head" />
+          <div className="an-skel an-skel--stats" />
+          <div className="an-skel an-skel--block" />
+          <p className="an-visually-hidden">Loading your analysis</p>
         </div>
       </div>
     );
   }
 
   if (error || !analysis) {
+    const none = !error || error === "none";
     return (
-      <div className="results">
-        <div className="container" style={{ padding: "2rem 0" }}>
-          <div className="results__error">
-            <h2>{error || "No analysis found"}</h2>
-            <p>Complete your profile and evidence, then run analysis.</p>
-            <div style={{ marginTop: 12, display: "flex", gap: 8, justifyContent: "center" }}>
-              <Link to="/analysis">
-                <Button variant="primary" size="md">
-                  Go to Analysis
-                </Button>
-              </Link>
-              <Link to="/dashboard">
-                <Button variant="secondary" size="md">
-                  Dashboard
-                </Button>
-              </Link>
+      <div className="an">
+        <div className="an__inner">
+          <section className="an-state">
+            <h1 className="an-state__title">{none ? "You haven’t run an analysis yet" : "Something went wrong"}</h1>
+            <p>{none ? "Choose your target role, add some evidence and run your analysis. The results appear here." : error}</p>
+            <div className="an-actions">
+              {none ? (
+                <Button asChild variant="primary"><Link to="/analysis">Start your analysis</Link></Button>
+              ) : (
+                <Button variant="primary" onClick={() => { setLoading(true); void reload(); }}>Try again</Button>
+              )}
             </div>
-          </div>
+          </section>
         </div>
       </div>
     );
   }
 
-  const readinessPct = Math.round(analysis.readiness_score * 100);
-  const skillPct = Math.round(analysis.skill_component * 100);
-  const industryPct = Math.round(analysis.industry_component * 100);
-  const evidencePct = Math.round(analysis.evidence_component * 100);
+  const usage = sourceUsage(evidence, projects, githubRepos);
+  const readiness = pct(analysis.readiness_score);
+  const analysedOn = new Date(analysis.created_at).toLocaleDateString(undefined, { day: "numeric", month: "short", year: "numeric" });
 
-  const sortedGaps = [...gaps].sort((a, b) => b.priority_score - a.priority_score);
-  // Target-role vs portfolio separation
-  const targetGaps = sortedGaps.filter((g) => !g.is_portfolio);
-  const portfolioGaps = sortedGaps.filter((g) => g.is_portfolio);
+  /* ---------------- Shared overlays ---------------- */
 
-  const getPriorityLabel = (score: number, category?: string) => {
-    if (category) {
-      if (category === "critical") return { label: "Critical", cls: "priority--critical" };
-      if (category === "high") return { label: "High", cls: "priority--high" };
-      if (category === "medium") return { label: "Medium", cls: "priority--medium" };
-      if (category === "low") return { label: "Low", cls: "priority--low" };
-      if (category === "covered") return { label: "Covered", cls: "priority--covered" };
-    }
-    if (score >= 40) return { label: "Critical", cls: "priority--critical" };
-    if (score >= 25) return { label: "High", cls: "priority--high" };
-    if (score >= 10) return { label: "Medium", cls: "priority--medium" };
-    if (score > 0) return { label: "Low", cls: "priority--low" };
-    return { label: "Covered", cls: "priority--covered" };
-  };
-
-  const assessmentFor = (g: SkillGap): AvailableAssessment | undefined => {
-    const names = [g.skills?.display_name, g.skills?.canonical_name, g.canonical_name].filter(Boolean) as string[];
-    return assessable.find((a) =>
-      names.some((n) => n.toLowerCase() === a.skill.toLowerCase() || n.toLowerCase() === a.skill_key.toLowerCase())
-    );
-  };
-
-  const renderEvidenceCell = (g: SkillGap) => {
-    const sources = g.evidence_sources || [];
-    const label = g.evidence_state_label || (g.current_proficiency === 0 && g.confidence === 0 ? "No evidence" : "Evidence-based estimate");
-    // Determine summary label per spec: use backend label directly, don't invent
-    if (g.is_overridden) {
-      return (
-        <button className="results__evidence-link results__evidence-link--overridden" onClick={() => setProvenanceGap(g)} title="Click to see why this score">
-          Overridden · 0% <span style={{ fontSize: "0.72em" }}>(was {Math.round((g as any).original_proficiency ? (g as any).original_proficiency*100 : 0)}%)</span>
-        </button>
-      );
-    }
-    if (!sources.length && g.evidence_state === "no_evidence") {
-      return (
-        <button className="results__evidence-link results__evidence-link--none" onClick={() => setProvenanceGap(g)}>
-          No evidence
-        </button>
-      );
-    }
-    // Show first source label or count
-    const firstLabel = sources[0]?.source_label || label;
-    const extra = sources.length > 1 ? ` +${sources.length - 1}` : "";
-    return (
-      <button className="results__evidence-link" onClick={() => setProvenanceGap(g)} title="Click to see why this score">
-        {firstLabel}{extra}
-      </button>
-    );
-  };
-
-  const renderAssessmentAction = (g: SkillGap) => {
-    const item = assessmentFor(g);
-    // Hard rule: no-evidence role-critical skill should still be assessable if question bank supports it.
-    // If backend didn't return an assessable entry but skill is required and has no evidence, still show Assess if bank covers it.
-    // Fallback check: if no item but skill is portfolio? Don't show.
-    if (!item) {
-      // No bank coverage => show dash, but still allow if has_assessment already?
-      if (g.has_assessment) {
-        return <span className="results__assessed-badge">Assessment {g.assessment_score !== null ? Math.round((g.assessment_score||0)*100)+'%' : ''}</span>;
-      }
-      return <span style={{ color: "#94a3b8" }}>—</span>;
-    }
-    const last = item.last_assessment;
-    return (
-      <span style={{ display: "inline-flex", gap: 6, alignItems: "center", flexWrap: "wrap" }}>
-        {last && (
-          <span className="results__assessed-badge" title={`INAURA assessment ${item.skill}`}>
-            Assessment {last.correct_count}/{last.question_count}
-          </span>
-        )}
-        <button className="results__verify-btn" onClick={() => setActiveAssessment(item)}>
-          {last ? "Re-verify" : "Assess this skill"}
-        </button>
-      </span>
-    );
-  };
-
-  const getGapTypeBadge = (type?: string) => {
-    if (type === "evidence_gap") return { label: "Evidence Gap", cls: "gap-type--evidence" };
-    if (type === "coverage_gap") return { label: "Coverage Gap", cls: "gap-type--coverage" };
-    if (type === "industry_data_gap") return { label: "Industry Data Gap", cls: "gap-type--industry" };
-    return { label: "Skill Gap", cls: "gap-type--skill" };
-  };
-
-  const strengths = targetGaps.filter(
-    (g) =>
-      (g.gap <= 1e-9 || g.current_proficiency >= g.required_level) &&
-      g.confidence >= 0.35 &&
-      g.current_proficiency >= 0.50 &&
-      g.gap_type !== "evidence_gap"
-  );
-
-  const priorityGaps = targetGaps.filter((g) => g.gap > 0);
-
-  const evidenceGaps = targetGaps.filter(
-    (g) => g.gap_type === "evidence_gap" || (g.gap > 0 && g.confidence < 0.20)
-  );
-
-  const strongValidated = sortedGaps.filter(
-    (g) => g.quadrant === "strong_validated" || (g.current_proficiency >= 0.60 && g.confidence >= 0.50)
-  );
-  const unverifiedClaims = sortedGaps.filter(
-    (g) => g.quadrant === "unverified_claim" || (g.current_proficiency >= 0.60 && g.confidence < 0.50)
-  );
-  const confirmedNeeds = sortedGaps.filter(
-    (g) => g.quadrant === "confirmed_gap" || (g.current_proficiency < 0.60 && g.confidence >= 0.50 && g.gap > 0)
-  );
-  const exploratory = sortedGaps.filter(
-    (g) => g.quadrant === "exploratory" || (g.current_proficiency < 0.60 && g.confidence < 0.50)
-  );
-
-  const leetcodeEv = evidence.find(
-    (e) =>
-      e.evidence_type === "leetcode" &&
-      (e.verification_status === "verified" ||
-        (e.metadata as Record<string, unknown> | null)?.verification_status === "verified")
-  );
-
-  const lcMeta = leetcodeEv?.metadata as Record<string, any> | null;
-  const lcInspection = lcMeta?.inspection;
-  const lcTopicMeta =
-    lcInspection?.topic_coverage ||
-    (lcMeta?.verified_signals as any[])?.find((s: any) => s.skill?.includes("Data Structures"))?.metadata ||
-    lcMeta?.topic_coverage;
-
-  const lcUsername = lcInspection?.username || "LeetCode Candidate";
-  const lcTotal = lcInspection?.total_solved ?? (lcTopicMeta?.total_solved ?? 0);
-  const lcEasy = lcInspection?.easy_solved ?? (lcTopicMeta?.easy ?? 0);
-  const lcMed = lcInspection?.medium_solved ?? (lcTopicMeta?.medium ?? 0);
-  const lcHard = lcInspection?.hard_solved ?? (lcTopicMeta?.hard ?? 0);
-
-  const codeforcesEv = evidence.find(
-    (e) =>
-      e.evidence_type === "codeforces" &&
-      (e.verification_status === "verified" ||
-        (e.metadata as Record<string, unknown> | null)?.verification_status === "verified")
-  );
-  const cfMeta = codeforcesEv?.metadata as Record<string, any> | null;
-  const cfInspection = cfMeta?.inspection as Record<string, any> | null;
-  const cfProfile = cfMeta?.profile as Record<string, any> | null;
-  const cfFacts = (cfMeta?.facts as string[] | undefined) || [];
-  const cfWarnings = (cfMeta?.warnings as string[] | undefined) || [];
-  const cfVerifiedSignals = (cfMeta?.verified_signals as any[] | undefined) || [];
-
-  const renderProvenanceDrawer = () => {
-    if (!provenanceGap) return null;
-    const g = provenanceGap;
-    const displayName = g.skills?.display_name || g.skills?.canonical_name || g.canonical_name;
-    return (
-      <div className="prov__overlay" onClick={() => setProvenanceGap(null)} role="dialog" aria-modal="true">
-        <div className="prov__drawer" onClick={(e) => e.stopPropagation()}>
-          <div className="prov__header">
-            <div>
-              <div className="prov__eyebrow">Why this score?</div>
-              <h3 className="prov__title">{displayName}</h3>
-            </div>
-            <button className="prov__close" onClick={() => setProvenanceGap(null)}>×</button>
-          </div>
-          <div className="prov__body">
-            <SkillEvidenceCard gap={g} />
-            <div className="prov__sources">
-              <div style={{ marginTop: 12, padding: 10, background: "#f8fafc", border: "1px solid #e2e8f0", borderRadius: 8 }}>
-                <h4 style={{ margin: "0 0 6px", fontSize: "0.90rem" }}>Why is this skill required for {analysis.target_role}?</h4>
-                <div style={{ fontSize: "0.82rem", color: "#334155", display: "flex", flexDirection: "column", gap: 4 }}>
-                  <div><strong>Source:</strong> {g.requirement_source || g.source || "Industry requirements"} {g.requirement_source_url ? <a href={g.requirement_source_url} target="_blank" rel="noreferrer" style={{ color: "#0f766e", wordBreak: "break-all" }}>{g.requirement_source_url}</a> : null}</div>
-                  {g.requirement_source_version && <div><strong>Source version:</strong> {g.requirement_source_version}</div>}
-                  {g.requirement_source_reference && <div><strong>Reference:</strong> {g.requirement_source_reference}</div>}
-                  {g.requirement_role_relevance && <div><strong>Role relevance:</strong> {g.requirement_role_relevance}</div>}
-                  {g.requirement_description && <div><strong>Description:</strong> {g.requirement_description}</div>}
-                  {g.evidence_context && <div><strong>Evidence context:</strong> {g.evidence_context}</div>}
-                </div>
-                <div style={{ fontSize: "0.72rem", color: "#64748b", fontStyle: "italic", marginTop: 8 }}>Industry-grounded role requirements based on O*NET/ESCO with INAURA mapping heuristics — not universally required. <br/>Candidate evidence provenance (above) answers why INAURA thinks you have this skill; requirement provenance answers why the role requires it.</div>
+  const overlays = (
+    <>
+      {provenanceGap && (
+        <div className="prov__overlay" onClick={() => setProvenanceGap(null)} role="dialog" aria-modal="true" aria-label={`Evidence details for ${skillName(provenanceGap)}`}>
+          <div className="prov__drawer" onClick={(e) => e.stopPropagation()}>
+            <div className="prov__header">
+              <div>
+                <div className="prov__eyebrow">Why this score?</div>
+                <h3 className="prov__title">{skillName(provenanceGap)}</h3>
               </div>
+              <button className="prov__close" onClick={() => setProvenanceGap(null)} aria-label="Close">×</button>
             </div>
-            <div className="prov__footer-note">
-              Industry requirements tell us WHAT IS REQUIRED. Evidence tells us WHAT IS DEMONSTRATED. Assessment tells us WHAT YOU CAN DIRECTLY DEMONSTRATE.
-            </div>
-          </div>
-          <div className="prov__actions">
-            <Button variant="secondary" size="md" onClick={() => setProvenanceGap(null)}>Close</Button>
-            {!g.is_overridden && !g.is_portfolio && g.evidence_state !== "no_evidence" && g.evidence_state !== "user_override" && (
-              <Button variant="secondary" size="md" onClick={() => { setProvenanceGap(null); setOverrideConfirm(g); }}>
-                I don't actually know this yet
-              </Button>
-            )}
-          </div>
-        </div>
-      </div>
-    );
-  };
-
-  return (
-    <div className="results">
-      <header className="results__header">
-        <div className="container">
-          <Link to="/analysis" className="results__back">
-            ← Back to Analysis
-          </Link>
-          <div className="eyebrow" style={{ marginTop: 12 }}>
-            INAURA Skill Analysis — {analysis.engine_version}
-          </div>
-          <h1 className="results__title">Your INAURA Skill Analysis</h1>
-          <div className="results__meta">
-            <span>
-              Target Role: <strong>{analysis.target_role}</strong>
-            </span>
-            <span>·</span>
-            <span>{new Date(analysis.created_at).toLocaleDateString()}</span>
-            <span>·</span>
-            <span>Benchmark: <strong>Industry Intelligence 2026.1</strong> (ACM/IEEE, Stack Overflow, BLS)</span>
-          </div>
-        </div>
-      </header>
-
-      <main className="container results__main">
-        <div className="results__disclaimer-box">
-          <div className="results__disclaimer-icon">ℹ️</div>
-          <div>
-            <strong>Career Readiness Benchmark:</strong> {analysis.disclaimer || "Career readiness measures alignment between your verified evidence and authentic industry benchmarks (ACM/IEEE, Stack Overflow 2024, BLS). It is an objective developmental indicator, not a statistical hiring probability or guarantee of placement."}
-          </div>
-        </div>
-
-        <section className="results__top">
-          <div className="results__card results__card--primary">
-            <div className="results__card-label">Career Readiness</div>
-            <div className="results__big">{readinessPct}%</div>
-            <div className="results__hint">Alignment with {analysis.target_role} Benchmark</div>
-            <div className="results__components">
-              <span>Skill {skillPct}%</span>
-              <span>Industry {industryPct}%</span>
-              <span>Evidence {evidencePct}%</span>
-            </div>
-            <div style={{ marginTop: 8, fontSize: "0.78rem", color: "#64748b" }}>
-              0.45×skill + 0.25×industry + 0.30×evidence — calibrated against verified industry benchmarks
-            </div>
-          </div>
-
-          <div className="results__card">
-            <div className="results__card-label">Evidence Confidence</div>
-            <div className="results__big" style={{ color: "#0f766e" }}>
-              {evidencePct}%
-            </div>
-            <div className="results__hint">Average verification confidence across assessed skills</div>
-            <div style={{ marginTop: 8, fontSize: "0.84rem", color: "#475569" }}>
-              Skills assessed: <strong>{analysis.assessment_count}</strong> · Priority gaps: <strong>{analysis.gap_count}</strong>
-            </div>
-          </div>
-        </section>
-
-        {assessable.length > 0 && (
-          <section className="results__section">
-            <h2>Skill Assessments</h2>
-            <p>
-              Show INAURA what you actually know — validate each skill with the layers that apply
-              to it. Results feed back into your skill profile and roadmap.
-            </p>
-            <SkillAssessmentLayers
-              items={assessable}
-              onStartKnowledge={(item) => setActiveAssessment(item)}
-              onCompleted={refreshAfterAssessment}
-            />
-          </section>
-        )}
-
-        {strengths.length > 0 && (
-          <section className="results__section">
-            <h2>Top Strengths</h2>
-            <p>
-              Skills where your submitted evidence meets or exceeds industry expectations for{" "}
-              {analysis.target_role}. Repository and project evidence is a supporting
-              <em> estimate</em> — only a completed INAURA assessment marks a skill as validated.
-            </p>
-            <div className="results__evidence">
-              {strengths.slice(0, 4).map((g) => {
-                const displayName = g.skills?.display_name || g.skills?.canonical_name || "Unknown";
-                return (
-                  <div key={g.id} className="results__evidence-card" style={{ borderColor: "#10b981" }}>
-                    <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
-                      <h3 style={{ display: "flex", alignItems: "center", gap: 6 }}>
-                        <span style={{ color: "#10b981" }}>✓</span> {displayName}
-                      </h3>
-                      <span className="priority priority--covered">Covered</span>
-                    </div>
-                    <div style={{ fontSize: "0.84rem", color: "#475569", marginTop: 4 }}>{g.explanation}</div>
-                    <div style={{ marginTop: 8, fontSize: "0.82rem", color: "#059669", display: "flex", gap: 10, flexWrap: "wrap" }}>
-                      <span>Estimated: <strong>{Math.round(g.current_proficiency * 100)}%</strong></span>
-                      <span>Required: <strong>{Math.round(g.required_level * 100)}%</strong></span>
-                      <span>Confidence: <strong>{Math.round(g.confidence * 100)}%</strong></span>
-                      {g.quadrant_title && <span className="results__quadrant-tag">{g.quadrant_title}</span>}
-                      <button className="results__evidence-link results__evidence-link--small" onClick={() => setProvenanceGap(g)}>{g.evidence_state_label}</button>
-                    </div>
+            <div className="prov__body">
+              <SkillEvidenceCard gap={provenanceGap} />
+              <div className="prov__sources">
+                <div style={{ marginTop: 12, padding: 10, background: "#f8fafc", border: "1px solid #e2e8f0", borderRadius: 8 }}>
+                  <h4 style={{ margin: "0 0 6px", fontSize: "0.90rem" }}>Why is this skill required for {analysis.target_role}?</h4>
+                  <div style={{ fontSize: "0.82rem", color: "#334155", display: "flex", flexDirection: "column", gap: 4 }}>
+                    <div><strong>Source:</strong> {provenanceGap.requirement_source || provenanceGap.source || "Industry requirements"} {provenanceGap.requirement_source_url ? <a href={provenanceGap.requirement_source_url} target="_blank" rel="noreferrer" style={{ color: "#0f766e", wordBreak: "break-all" }}>{provenanceGap.requirement_source_url}</a> : null}</div>
+                    {provenanceGap.requirement_source_version && <div><strong>Source version:</strong> {provenanceGap.requirement_source_version}</div>}
+                    {provenanceGap.requirement_source_reference && <div><strong>Reference:</strong> {provenanceGap.requirement_source_reference}</div>}
+                    {provenanceGap.requirement_role_relevance && <div><strong>Role relevance:</strong> {provenanceGap.requirement_role_relevance}</div>}
+                    {provenanceGap.requirement_description && <div><strong>Description:</strong> {provenanceGap.requirement_description}</div>}
+                    {provenanceGap.evidence_context && <div><strong>Evidence context:</strong> {provenanceGap.evidence_context}</div>}
                   </div>
-                );
-              })}
-            </div>
-          </section>
-        )}
-
-        <section className="results__section">
-          <h2>Priority Gaps</h2>
-          <p>Multi-factor prioritization — gap size × role importance × interview relevance × demand × evidence confidence.</p>
-          <div className="results__gaps">
-            {priorityGaps.slice(0, 6).map((g, idx) => {
-              const displayName = g.skills?.display_name || g.skills?.canonical_name || "Unknown";
-              const prio = getPriorityLabel(g.priority_score, g.priority_category);
-              const typeBadge = getGapTypeBadge(g.gap_type);
-              const currentPct = Math.round(g.current_proficiency * 100);
-              const requiredPct = Math.round(g.required_level * 100);
-              const gapPct = Math.round(g.gap * 100);
-              const confPct = Math.round(g.confidence * 100);
-
-              return (
-                <div key={g.id} className="results__gap-card">
-                  <div className="results__gap-num">{idx + 1}</div>
-                  <div style={{ flex: 1 }}>
-                    <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", flexWrap: "wrap", gap: 8 }}>
-                      <div>
-                        <strong style={{ fontSize: "1.05rem" }}>{displayName}</strong>
-                        <span className="results__cat" style={{ marginLeft: 8 }}>{g.skills?.category || ""}</span>
-                      </div>
-                      <div className="results__gap-tags" style={{ margin: 0, display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
-                        <span className={`gap-type-badge ${typeBadge.cls}`}>{typeBadge.label}</span>
-                        <span className={`priority ${prio.cls}`}>
-                          {prio.label} · {g.priority_score.toFixed(1)}
-                        </span>
-                        {renderAssessmentAction(g)}
-                      </div>
-                    </div>
-
-                    <div style={{ fontSize: "0.85rem", color: "#475569", marginTop: 6, lineHeight: 1.5 }}>
-                      {g.explanation}
-                    </div>
-
-                    {g.actionable_advice && (
-                      <div className="results__advice-box">
-                        <strong>Recommended Action:</strong> {g.actionable_advice}
-                      </div>
-                    )}
-
-                    <div style={{ marginTop: 8, fontSize: "0.80rem", color: "#64748b", display: "flex", gap: 12, flexWrap: "wrap", alignItems: "center" }}>
-                      <span>Estimated: <strong>{currentPct}%</strong></span>
-                      <span>Target Level: <strong>{requiredPct}%</strong></span>
-                      <span>Gap: <strong style={{ color: "#e11d48" }}>{gapPct}%</strong></span>
-                      <span>Confidence: <strong>{confPct}%</strong></span>
-                      <span>Role Importance: <strong>{g.importance.toFixed(2)}</strong></span>
-                      <span>Interview Weight: <strong>{g.interview_relevance.toFixed(2)}</strong></span>
-                      {g.quadrant_title && <span className="results__quadrant-tag">{g.quadrant_title}</span>}
-                      <button className="results__evidence-link results__evidence-link--small" onClick={() => setProvenanceGap(g)} title="Why this score?">{g.evidence_state_label}</button>
-                    </div>
-                    {!g.is_overridden && g.evidence_state !== "no_evidence" && g.evidence_state !== "user_override" && (
-                      <div style={{ marginTop: 8 }}>
-                        <button className="results__override-btn" onClick={() => setOverrideConfirm(g)}>I don't actually know this yet</button>
-                      </div>
-                    )}
-                    {g.is_overridden && <div style={{ marginTop: 6, fontSize: "0.80rem", color: "#dc2626" }}>User marked as not known — new evidence or assessment required to restore.</div>}
-                  </div>
-                </div>
-              );
-            })}
-            {priorityGaps.length === 0 && (
-              <div style={{ color: "#64748b", fontSize: "0.9rem" }}>No priority gaps — all required skills are covered.</div>
-            )}
-          </div>
-        </section>
-
-        {evidenceGaps.length > 0 && (
-          <section className="results__section">
-            <h2>Evidence Gaps · Missing Independent Proof</h2>
-            <p>
-              The following skills are required or claimed, but INAURA lacks sufficient independent proof.
-              <strong> Note: This indicates absence of submitted evidence, NOT confirmed inability.</strong>
-            </p>
-            <div className="results__evidence">
-              {evidenceGaps.slice(0, 4).map((g) => {
-                const displayName = g.skills?.display_name || g.skills?.canonical_name || "Unknown";
-                return (
-                  <div key={g.id} className="results__evidence-card" style={{ borderColor: "#f59e0b" }}>
-                    <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
-                      <h3>{displayName}</h3>
-                      <span className="gap-type-badge gap-type--evidence">Missing Evidence</span>
-                    </div>
-                    <div style={{ fontSize: "0.84rem", color: "#475569", marginTop: 4 }}>{g.explanation}</div>
-                    <div className="results__advice-box" style={{ borderLeftColor: "#f59e0b" }}>
-                      <strong>Action to Verify:</strong> {g.actionable_advice || `Submit a GitHub repo, project, or certificate demonstrating ${displayName}.`}
-                    </div>
-                    <div style={{ marginTop: 8, display: "flex", gap: 8 }}>
-                      {renderAssessmentAction(g)}
-                      <button className="results__evidence-link results__evidence-link--small" onClick={() => setProvenanceGap(g)}>Why this score?</button>
-                    </div>
-                  </div>
-                );
-              })}
-            </div>
-          </section>
-        )}
-
-        {lcTopicMeta && lcTopicMeta.status === "available" && lcTopicMeta.pillar_breakdown && (
-          <section className="results__section">
-            <h2>DSA Topic Coverage Analysis</h2>
-            <div className="results__leetcode-card">
-              <div className="results__leetcode-header">
-                <div>
-                  <h3 style={{ margin: 0, fontSize: "1.05rem" }}>LeetCode DSA Topic Coverage · {lcUsername}</h3>
-                  <div style={{ fontSize: "0.82rem", color: "var(--muted)", marginTop: 2 }}>
-                    Topic breadth & depth across 9 canonical DSA pillars
-                  </div>
-                </div>
-                <div className="results__leetcode-diffs">
-                  <span className="results__badge-diff results__badge-diff--easy">Easy: {lcEasy}</span>
-                  <span className="results__badge-diff results__badge-diff--medium">Medium: {lcMed}</span>
-                  <span className="results__badge-diff results__badge-diff--hard">Hard: {lcHard}</span>
-                  <span style={{ fontWeight: 700, fontSize: "0.82rem", marginLeft: 4 }}>Total: {lcTotal}</span>
+                  <div style={{ fontSize: "0.72rem", color: "#64748b", fontStyle: "italic", marginTop: 8 }}>Industry-grounded role requirements based on O*NET/ESCO with INAURA mapping heuristics — not universally required.</div>
                 </div>
               </div>
-
-              <div className="results__leetcode-meta-row">
-                <span>
-                  Topic Breadth: <strong>{Math.round((lcTopicMeta.breadth_score ?? lcTopicMeta.topic_breadth_score ?? 0) * 100)}%</strong> ({lcTopicMeta.covered_pillars?.length || lcTopicMeta.covered_topics?.length || 0} covered, {lcTopicMeta.moderate_pillars?.length || lcTopicMeta.moderate_topics?.length || 0} moderate, {lcTopicMeta.missing_pillars?.length || lcTopicMeta.missing_topics?.length || 0} unpracticed)
-                </span>
-                <span>·</span>
-                <span>
-                  Topic Depth: <strong>{Math.round((lcTopicMeta.depth_score ?? lcTopicMeta.topic_depth_score ?? 0) * 100)}%</strong>
-                </span>
-              </div>
-
-              <div className="results__leetcode-pillars-grid">
-                {Object.entries(lcTopicMeta.pillar_breakdown).map(([pillar, data]: [string, any]) => {
-                  const badgeClass =
-                    data.status === "covered"
-                      ? "results__pillar-badge--covered"
-                      : data.status === "moderate"
-                      ? "results__pillar-badge--moderate"
-                      : data.status === "weak"
-                      ? "results__pillar-badge--weak"
-                      : "results__pillar-badge--missing";
-                  const pctBar = Math.min(100, Math.round((data.solved / 15) * 100));
-                  return (
-                    <div key={pillar} className="results__pillar-box">
-                      <div className="results__pillar-top">
-                        <strong>{pillar}</strong>
-                        <span className={`results__pillar-badge ${badgeClass}`}>{data.status}</span>
-                      </div>
-                      <div className="results__pillar-count">
-                        {data.solved} problems solved {lcTotal > 0 ? `(${data.percentage}%)` : ""}
-                      </div>
-                      <div className="results__pillar-bar-wrap">
-                        <div className="results__pillar-bar" style={{ width: `${pctBar}%` }} />
-                      </div>
-                    </div>
-                  );
-                })}
-              </div>
-
-              <div style={{ marginTop: 12, fontSize: "0.78rem", color: "#64748b", fontStyle: "italic" }}>
-                * INAURA assesses algorithmic competency based on balanced pillar breadth and depth. High problem volume concentrated in single topics does not substitute for practice across Trees, Graphs, Dynamic Programming, and Backtracking.
+              <div className="prov__footer-note">
+                Industry requirements tell us what is required. Evidence tells us what is demonstrated. An assessment tells us what you can directly demonstrate.
               </div>
             </div>
-          </section>
-        )}
-
-        {cfInspection && (
-          <section className="results__section">
-            <h2>Codeforces Performance Analysis</h2>
-            <div className="results__leetcode-card" style={{ borderLeft: "4px solid #1f8acb" }}>
-              <div className="results__leetcode-header">
-                <div>
-                  <h3 style={{ margin: 0, fontSize: "1.05rem" }}>Codeforces · {cfInspection?.handle || cfProfile?.handle || "Candidate"}</h3>
-                  <div style={{ fontSize: "0.82rem", color: "var(--muted)", marginTop: 2 }}>
-                    Verified competitive programming rating, contest participation and solved problem tags
-                  </div>
-                </div>
-                <div className="results__leetcode-diffs" style={{ alignItems: "center" }}>
-                  <span style={{ fontWeight: 700, fontSize: "0.9rem", background: cfInspection?.rating ? "#e0f2fe" : "#f1f5f9", border: "1px solid #bae6fd", padding: "4px 8px", borderRadius: 6 }}>
-                    Rating: {cfInspection?.rating ?? 0} {cfInspection?.rank ? `· ${cfInspection.rank}` : ""}
-                  </span>
-                  <span style={{ fontWeight: 600, fontSize: "0.82rem" }}>Max: {cfInspection?.max_rating ?? 0}</span>
-                </div>
-              </div>
-
-              <div className="results__leetcode-meta-row">
-                <span>Contests: <strong>{cfInspection?.contest_count ?? 0}</strong> rated</span>
-                <span>·</span>
-                <span>Solved: <strong>{cfInspection?.solved_count ?? 0}</strong> verified problems</span>
-                {cfVerifiedSignals.length > 0 && (
-                  <>
-                    <span>·</span>
-                    <span>Signals: <strong>{cfVerifiedSignals.length}</strong> ({cfVerifiedSignals.map((s: any) => s.skill).join(", ")})</span>
-                  </>
-                )}
-              </div>
-
-              {cfInspection?.problem_tags && Object.keys(cfInspection.problem_tags).length > 0 && (
-                <div style={{ marginTop: 10 }}>
-                  <div style={{ fontSize: "0.82rem", fontWeight: 600, color: "#334155", marginBottom: 6 }}>Verified problem tags (top):</div>
-                  <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
-                    {Object.entries(cfInspection.problem_tags)
-                      .sort((a: any, b: any) => (b[1] as number) - (a[1] as number))
-                      .slice(0, 8)
-                      .map(([tag, cnt]: any) => (
-                        <span key={tag} style={{ background: "#f1f5f9", border: "1px solid #e2e8f0", padding: "3px 8px", borderRadius: 12, fontSize: "0.78rem" }}>
-                          {tag} · {cnt as number}
-                        </span>
-                      ))}
-                  </div>
-                </div>
+            <div className="prov__actions">
+              <Button variant="secondary" size="md" onClick={() => setProvenanceGap(null)}>Close</Button>
+              {!provenanceGap.is_overridden && !provenanceGap.is_portfolio && provenanceGap.evidence_state !== "no_evidence" && provenanceGap.evidence_state !== "user_override" && (
+                <Button variant="secondary" size="md" onClick={() => { const g = provenanceGap; setProvenanceGap(null); setOverrideConfirm(g); }}>
+                  I don't actually know this yet
+                </Button>
               )}
-
-              <div style={{ marginTop: 10, display: "flex", flexDirection: "column", gap: 4 }}>
-                {cfFacts.map((fact: string, idx: number) => (
-                  <div key={idx} style={{ fontSize: "0.82rem", color: "#334155" }}>• {fact}</div>
-                ))}
-                {cfWarnings.map((w: string, idx: number) => (
-                  <div key={`w-${idx}`} style={{ fontSize: "0.78rem", color: "#b45309", background: "#fffbeb", border: "1px solid #fde68a", padding: "4px 8px", borderRadius: 6 }}>⚠ {w}</div>
-                ))}
-                {cfVerifiedSignals.length === 0 && (
-                  <div style={{ fontSize: "0.78rem", color: "#64748b", fontStyle: "italic", marginTop: 4 }}>
-                    No rated contests or verified solves yet — profile exists but does not yet demonstrate competitive programming proficiency. Solve problems and enter rated contests to generate skill signals.
-                  </div>
-                )}
-              </div>
-
-              <div style={{ marginTop: 12, fontSize: "0.78rem", color: "#64748b", fontStyle: "italic" }}>
-                * Codeforces rating is a rigorous peer-ranked signal. Even unrated profiles are verified; proficiency is only credited when contests and solves are present.
-              </div>
-            </div>
-          </section>
-        )}
-
-        <section className="results__section">
-          <h2>Confidence-Aware Skill Quadrants</h2>
-          <p>Cross-referencing demonstrated proficiency against evidence confidence level.</p>
-          <div className="results__quadrants-grid">
-            <div className="results__quadrant-card results__quadrant-card--strong">
-              <div className="results__quadrant-header">
-                <span>Strong & Validated</span>
-                <span className="results__quadrant-count">{strongValidated.length}</span>
-              </div>
-              <div className="results__quadrant-desc">High proficiency backed by robust independent evidence.</div>
-              <div className="results__quadrant-skills">
-                {strongValidated.map((s) => (
-                  <span key={s.id} className="results__quadrant-skill-chip">{s.skills?.display_name || s.skills?.canonical_name}</span>
-                ))}
-                {strongValidated.length === 0 && <span style={{ fontSize: "0.76rem", color: "#94a3b8" }}>None yet</span>}
-              </div>
-            </div>
-
-            <div className="results__quadrant-card results__quadrant-card--unverified">
-              <div className="results__quadrant-header">
-                <span>Unverified Claims / Emergent</span>
-                <span className="results__quadrant-count">{unverifiedClaims.length}</span>
-              </div>
-              <div className="results__quadrant-desc">Promising proficiency but needs independent proof.</div>
-              <div className="results__quadrant-skills">
-                {unverifiedClaims.map((s) => (
-                  <span key={s.id} className="results__quadrant-skill-chip">{s.skills?.display_name || s.skills?.canonical_name}</span>
-                ))}
-                {unverifiedClaims.length === 0 && <span style={{ fontSize: "0.76rem", color: "#94a3b8" }}>None</span>}
-              </div>
-            </div>
-
-            <div className="results__quadrant-card results__quadrant-card--confirmed">
-              <div className="results__quadrant-header">
-                <span>Confirmed Growth Needs</span>
-                <span className="results__quadrant-count">{confirmedNeeds.length}</span>
-              </div>
-              <div className="results__quadrant-desc">Demonstrated deficit below benchmark with verified evidence.</div>
-              <div className="results__quadrant-skills">
-                {confirmedNeeds.map((s) => (
-                  <span key={s.id} className="results__quadrant-skill-chip">{s.skills?.display_name || s.skills?.canonical_name}</span>
-                ))}
-                {confirmedNeeds.length === 0 && <span style={{ fontSize: "0.76rem", color: "#94a3b8" }}>None</span>}
-              </div>
-            </div>
-
-            <div className="results__quadrant-card results__quadrant-card--exploratory">
-              <div className="results__quadrant-header">
-                <span>Exploratory / Unclear</span>
-                <span className="results__quadrant-count">{exploratory.length}</span>
-              </div>
-              <div className="results__quadrant-desc">Limited evidence to benchmark definitively.</div>
-              <div className="results__quadrant-skills">
-                {exploratory.map((s) => (
-                  <span key={s.id} className="results__quadrant-skill-chip">{s.skills?.display_name || s.skills?.canonical_name}</span>
-                ))}
-                {exploratory.length === 0 && <span style={{ fontSize: "0.76rem", color: "#94a3b8" }}>None</span>}
-              </div>
             </div>
           </div>
-        </section>
-
-        <section className="results__section">
-          <h2>Skill Overview — Target-Role Requirements</h2>
-          <p>Current vs required, gap, confidence, evidence provenance, market demand, and priority — sorted by priority. Click Evidence to see why INAURA gave this score.</p>
-          <p style={{ fontSize: "0.82rem", color: "#64748b", marginTop: -6 }}>
-            Evidence reliability: INAURA assessment (direct validation, 0.95) &gt; LeetCode/Codeforces/Kaggle
-            performance and verified coursework (0.85/0.80) &gt; certifications (0.55) &gt; GitHub/project artifacts (0.40,
-            supporting evidence). A repository shows that you worked with a technology; a passed
-            assessment shows demonstrated understanding. Until a skill is validated its estimate is
-            held back toward "not yet validated" — verifying it can move the number up <em>or</em> down
-            and is what raises confidence.
-            <em> Prototype heuristic model — not a validated measurement of proficiency.</em>
-          </p>
-
-          <div className="results__table-wrap">
-            <table className="results__table">
-              <thead>
-                <tr>
-                  <th>Skill</th>
-                  <th>Type</th>
-                  <th>Current</th>
-                  <th>Required</th>
-                  <th>Gap</th>
-                  <th>Confidence</th>
-                  <th>Evidence</th>
-                  <th>Priority</th>
-                  <th>Actions</th>
-                </tr>
-              </thead>
-              <tbody>
-                {targetGaps.map((g) => {
-                  const currentPct = Math.round(g.current_proficiency * 100);
-                  const requiredPct = Math.round(g.required_level * 100);
-                  const gapPct = Math.round(g.gap * 100);
-                  const confPct = Math.round(g.confidence * 100);
-                  const prio = getPriorityLabel(g.priority_score, g.priority_category);
-                  const typeBadge = getGapTypeBadge(g.gap_type);
-                  const displayName = g.skills?.display_name || g.skills?.canonical_name || g.canonical_name || "Unknown";
-                  return (
-                    <tr key={g.id} style={g.is_overridden ? { opacity: 0.7, background: "#fef2f2" } : undefined}>
-                      <td>
-                        <strong>{displayName}</strong>
-                        <span className="results__cat">{g.skills?.category || ""}</span>
-                        {g.is_overridden && <span style={{ fontSize: "0.70rem", color: "#dc2626", display: "block" }}>Overridden to 0%</span>}
-                      </td>
-                      <td>
-                        <span className={`gap-type-badge ${typeBadge.cls}`}>{typeBadge.label}</span>
-                      </td>
-                      <td>{currentPct}%</td>
-                      <td>{requiredPct}%</td>
-                      <td>{gapPct}%</td>
-                      <td>{confPct}%</td>
-                      <td>{renderEvidenceCell(g)}</td>
-                      <td>
-                        <span className={`priority ${prio.cls}`}>{prio.label}</span>
-                      </td>
-                      <td>
-                        <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
-                          {renderAssessmentAction(g)}
-                          {!g.is_overridden && g.evidence_state !== "no_evidence" && g.evidence_state !== "user_override" && (
-                            <button className="results__override-btn" onClick={() => setOverrideConfirm(g)} style={{ fontSize: "0.75rem", padding: "4px 8px" }}>
-                              I don't know this yet
-                            </button>
-                          )}
-                          {g.is_overridden && <span style={{ fontSize: "0.70rem", color: "#dc2626" }}>User override</span>}
-                        </div>
-                      </td>
-                    </tr>
-                  );
-                })}
-                {targetGaps.length === 0 && (
-                  <tr>
-                    <td colSpan={9} style={{ textAlign: "center", color: "#64748b", padding: 16 }}>
-                      No gaps found — all required skills covered or no requirements for this role.
-                    </td>
-                  </tr>
-                )}
-              </tbody>
-            </table>
-          </div>
-        </section>
-
-        {portfolioGaps.length > 0 && (
-          <section className="results__section" style={{ background: "#f8fafc" }}>
-            <h2>Secondary Skills</h2>
-            {/* <p>Skills discovered in your evidence but not required for {analysis.target_role}. They do not affect your target-role readiness score, but are shown for completeness.</p> */}
-            <div className="results__table-wrap">
-              <table className="results__table">
-                <thead>
-                  <tr>
-                    <th>Skill</th>
-                    <th>Current</th>
-                    <th>Confidence</th>
-                    <th>Evidence</th>
-                    {/* <th>Note</th> */}
-                  </tr>
-                </thead>
-                <tbody>
-                  {portfolioGaps.map((g) => {
-                    const displayName = g.skills?.display_name || g.skills?.canonical_name || g.canonical_name || "Unknown";
-                    return (
-                      <tr key={g.id}>
-                        <td><strong>{displayName}</strong><span className="results__cat">{g.skills?.category || "Additional"}</span></td>
-                        <td>{Math.round(g.current_proficiency*100)}%</td>
-                        <td>{Math.round(g.confidence*100)}%</td>
-                        <td>{renderEvidenceCell(g)}</td>
-                        {/* <td style={{ fontSize: "0.82rem", color: "#64748b" }}>Not required for this role — does not inflate readiness.</td> */}
-                      </tr>
-                    );
-                  })}
-                </tbody>
-              </table>
-            </div>
-          </section>
-        )}
-
-        {(evidence.length > 0 || projects.length > 0 || githubRepos.length > 0) && (
-          <section className="results__section">
-            <h2>Evidence Sources — Personalization Controls</h2>
-            <p>Exclude specific evidence from scoring or flag as AI-assisted. Raw evidence is preserved; only the scoring contribution changes and analysis is recalculated. Each repository has independent controls.</p>
-            {githubRepos.length > 0 && (
-              <div style={{ marginTop: 12 }}>
-                <h3 style={{ fontSize: "0.95rem", margin: "12px 0 8px" }}>GitHub Repositories — {githubRepos.length} discovered</h3>
-                <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
-                  {githubRepos.map((repo) => (
-                    <div key={repo.full_name} className="results__evidence-card" style={{ display: "flex", justifyContent: "space-between", alignItems: "center", flexWrap: "wrap", gap: 8, borderLeft: repo.fork ? "3px solid #f59e0b" : "3px solid #e2e8f0" }}>
-                      <div style={{ flex: 1, minWidth: 200 }}>
-                        <strong style={{ fontSize: "0.92rem" }}>{repo.full_name}</strong> {repo.status === "inspected" ? <span style={{ fontSize: "0.72rem", color: "#047857", background: "#ecfdf5", border: "1px solid #a7f3d0", padding: "1px 6px", borderRadius: 4, marginLeft: 6 }}>Deep inspection complete</span> : repo.status === "failed" ? <span style={{ fontSize: "0.72rem", color: "#b45309", background: "#fffbeb", border: "1px solid #fde68a", padding: "1px 6px", borderRadius: 4, marginLeft: 6 }}>Inspection unavailable</span> : <span style={{ fontSize: "0.72rem", color: "#64748b", background: "#f8fafc", border: "1px solid #e2e8f0", padding: "1px 6px", borderRadius: 4, marginLeft: 6 }}>{repo.status === "skipped_low_evidence" ? "Skipped · low evidence" : "Discovered"}</span>} {repo.fork && <span style={{ fontSize: "0.72rem", background: "#fef3c7", border: "1px solid #fde68a", padding: "1px 6px", borderRadius: 4, marginLeft: 6 }}>Forked repository</span>} {!repo.fork && <span style={{ fontSize: "0.72rem", background: "#ecfdf5", border: "1px solid #a7f3d0", padding: "1px 6px", borderRadius: 4, marginLeft: 6 }}>Original repository</span>} {repo.archived && <span style={{ fontSize: "0.72rem", background: "#f1f5f9", padding: "1px 6px", borderRadius: 4, marginLeft: 4 }}>Archived</span>}
-                        <div style={{ fontSize: "0.78rem", color: "#64748b" }}>{repo.classification || "—"} {repo.pushed_at ? `· pushed ${new Date(repo.pushed_at).toLocaleDateString()}` : ""}</div>
-                        {repo.html_url && <div style={{ fontSize: "0.78rem", color: "#0f766e", wordBreak: "break-all" }}><a href={repo.html_url} target="_blank" rel="noreferrer">{repo.html_url}</a></div>}
-                        {repo.error && <div style={{ fontSize: "0.78rem", color: "#b45309", marginTop: 4 }}>⚠ {repo.error}</div>}
-                      </div>
-                      <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
-                        <button
-                          className={`results__evidence-toggle ${repo.is_excluded ? "results__evidence-toggle--excluded" : ""}`}
-                          onClick={() => handleGithubRepoExclude(repo.full_name, !repo.is_excluded)}
-                          disabled={evidenceActionLoading === repo.full_name}
-                        >
-                          {repo.is_excluded ? "Excluded from current analysis" : "Included"}
-                        </button>
-                        <label style={{ fontSize: "0.82rem", display: "flex", alignItems: "center", gap: 4 }}>
-                          <input type="checkbox" checked={!!repo.is_ai_assisted} onChange={(e) => handleGithubRepoAi(repo.full_name, e.target.checked)} disabled={evidenceActionLoading === repo.full_name} />
-                          AI-assisted
-                        </label>
-                      </div>
-                    </div>
-                  ))}
-                </div>
-                <div style={{ fontSize: "0.78rem", color: "#64748b", marginTop: 6, fontStyle: "italic" }}>New repositories default to Included, not AI-assisted. Forked repositories are marked as forks with lower authorship confidence.</div>
-              </div>
-            )}
-            <div style={{ display: "flex", flexDirection: "column", gap: 10, marginTop: 12 }}>
-              {evidence.filter(ev => ev.evidence_type !== "github").map((ev) => (
-                <div key={ev.id} className="results__evidence-card" style={{ display: "flex", justifyContent: "space-between", alignItems: "center", flexWrap: "wrap", gap: 8 }}>
-                  <div>
-                    <strong style={{ fontSize: "0.92rem" }}>{ev.title || ev.evidence_type}</strong> <span style={{ fontSize: "0.78rem", color: "#64748b" }}>· {ev.evidence_type} · {ev.verification_status}</span>
-                    {ev.source_url && <div style={{ fontSize: "0.78rem", color: "#0f172a", wordBreak: "break-all" }}>{ev.source_url}</div>}
-                  </div>
-                  <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
-                    <button
-                      className={`results__evidence-toggle ${ev.is_excluded ? "results__evidence-toggle--excluded" : ""}`}
-                      onClick={() => handleEvidenceExclude(ev.id, !ev.is_excluded, "evidence")}
-                      disabled={evidenceActionLoading === ev.id}
-                    >
-                      {ev.is_excluded ? "Excluded from current analysis" : "Use this evidence"}
-                    </button>
-                    <label style={{ fontSize: "0.82rem", display: "flex", alignItems: "center", gap: 4 }}>
-                      <input type="checkbox" checked={!!ev.is_ai_assisted} onChange={(e) => handleAiToggle(ev.id, e.target.checked, "evidence")} disabled={evidenceActionLoading === ev.id} />
-                      AI-assisted
-                    </label>
-                  </div>
-                </div>
-              ))}
-              {projects.map((pr) => (
-                <div key={pr.id} className="results__evidence-card" style={{ display: "flex", justifyContent: "space-between", alignItems: "center", flexWrap: "wrap", gap: 8 }}>
-                  <div>
-                    <strong style={{ fontSize: "0.92rem" }}>{pr.name}</strong> <span style={{ fontSize: "0.78rem", color: "#64748b" }}>· Project · {pr.technologies?.join(", ")}</span>
-                    {pr.github_url && <div style={{ fontSize: "0.78rem", color: "#0f172a" }}>{pr.github_url}</div>}
-                  </div>
-                  <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
-                    <button
-                      className={`results__evidence-toggle ${(pr as any).is_excluded ? "results__evidence-toggle--excluded" : ""}`}
-                      onClick={() => handleEvidenceExclude(pr.id, !(pr as any).is_excluded, "project")}
-                      disabled={evidenceActionLoading === pr.id}
-                    >
-                      {(pr as any).is_excluded ? "Excluded from current analysis" : "Use this evidence"}
-                    </button>
-                    <label style={{ fontSize: "0.82rem", display: "flex", alignItems: "center", gap: 4 }}>
-                      <input type="checkbox" checked={!!(pr as any).is_ai_assisted} onChange={(e) => handleAiToggle(pr.id, e.target.checked, "project")} disabled={evidenceActionLoading === pr.id} />
-                      AI-assisted
-                    </label>
-                  </div>
-                </div>
-              ))}
-            </div>
-          </section>
-        )}
-
-        <section className="results__next">
-          <h3>Next: Build Your Personalized Roadmap</h3>
-          <p>Your analysis is saved and versioned ({analysis.engine_version}). Your roadmap is built from your highest-priority gaps — not a generic template.</p>
-          <div style={{ marginTop: 12, display: "flex", gap: 8, justifyContent: "center" }}>
-            <Button variant="secondary" size="md" onClick={() => (window.location.href = "/analysis")}>
-              Back to Evidence
-            </Button>
-            <Button variant="secondary" size="md" onClick={() => (window.location.href = "/analysis/capabilities")}>
-              Skill Capability Map →
-            </Button>
-            <Button variant="primary" size="md" onClick={() => (window.location.href = "/roadmap")}>
-              View Personalized Roadmap →
-            </Button>
-          </div>
-        </section>
-      </main>
-
-      {provenanceGap && renderProvenanceDrawer()}
+        </div>
+      )}
 
       {overrideConfirm && (
-        <div className="prov__overlay" onClick={() => setOverrideConfirm(null)}>
+        <div className="prov__overlay" onClick={() => setOverrideConfirm(null)} role="dialog" aria-modal="true">
           <div className="prov__drawer" onClick={(e) => e.stopPropagation()} style={{ maxWidth: 480 }}>
-            <h3 style={{ margin: 0 }}>Set this skill to 0%?</h3>
+            <h3 style={{ margin: 0 }}>Set {skillName(overrideConfirm)} to 0%?</h3>
             <p style={{ marginTop: 8, fontSize: "0.92rem", color: "#475569", lineHeight: 1.5 }}>
-              This will override the current estimate in future analyses.<br />
-              Your existing evidence and assessment history will be preserved.<br />
-              You cannot manually restore the previous estimate.<br />
-              New evidence or a new assessment can change the result.
+              This overrides the current estimate in future analyses. Your evidence and assessment history are kept. You can’t restore the previous estimate yourself, but new evidence or a new assessment can change the result.
             </p>
-            <p style={{ fontSize: "0.85rem", color: "#64748b" }}>Skill: <strong>{overrideConfirm.skills?.display_name || overrideConfirm.skills?.canonical_name || overrideConfirm.canonical_name}</strong> · Current: {Math.round(overrideConfirm.current_proficiency*100)}% · Required: {Math.round(overrideConfirm.required_level*100)}%</p>
+            <p style={{ fontSize: "0.85rem", color: "#64748b" }}>
+              Current: {pct(overrideConfirm.current_proficiency)}%, required: {pct(overrideConfirm.required_level)}%
+            </p>
             <div style={{ display: "flex", gap: 8, justifyContent: "flex-end", marginTop: 16 }}>
               <Button variant="secondary" size="md" onClick={() => setOverrideConfirm(null)} disabled={overriding}>Cancel</Button>
-              <Button variant="primary" size="md" onClick={() => handleOverride(overrideConfirm)} disabled={overriding}>{overriding ? "Updating…" : "Confirm — Set to 0%"}</Button>
+              <Button variant="primary" size="md" onClick={() => handleOverride(overrideConfirm)} disabled={overriding}>{overriding ? "Updating…" : "Set to 0%"}</Button>
             </div>
           </div>
         </div>
@@ -1035,6 +362,285 @@ export default function AnalysisResults() {
           }}
         />
       )}
+    </>
+  );
+
+  /* ---------------- Focused views from the Skill Assessment sidebar group ---------------- */
+
+  if (focusView === "skill-assessments") {
+    return (
+      <div className="an">
+        <div className="an__inner">
+          <Link to="/analysis/results" className="an-link sa-back">← Full analysis</Link>
+
+          <section className="an-sec an-overview" id="skill-assessments" aria-labelledby="h-assess">
+            <div className="an-overview__head">
+              <div>
+                <h1 id="h-assess" className="an-overview__title">Skills you know</h1>
+                <p className="an-overview__sub">Show INAURA what you can actually do. Every check you finish sharpens your skill gaps and your roadmap.</p>
+              </div>
+              <Button asChild variant="secondary"><Link to="/analysis">Update evidence</Link></Button>
+            </div>
+
+            {assessable.length > 0 ? (
+              <SkillAssessmentLayers items={assessable} onStartKnowledge={(item) => setActiveAssessment(item)} onCompleted={refreshAfterAssessment} />
+            ) : (
+              <>
+                <p className="an-empty">There’s nothing to validate yet. Add your evidence and run your analysis first — INAURA then suggests the skills worth proving.</p>
+                <div className="an-actions">
+                  <Button asChild variant="primary"><Link to="/analysis">Add evidence</Link></Button>
+                </div>
+              </>
+            )}
+          </section>
+
+          {coding.cfInspection && (
+            <section className="an-sec" aria-labelledby="h-cf">
+              <header className="an-sec__head">
+                <h2 id="h-cf">Codeforces performance</h2>
+                <p>Verified from your Codeforces profile — it counts as evidence on its own, so there’s nothing to take here.</p>
+              </header>
+              <CodeforcesPanel data={coding} />
+            </section>
+          )}
+        </div>
+        {overlays}
+      </div>
+    );
+  }
+
+  if (focusView) {
+    return (
+      <div className="results">
+        <main className="container results__main">
+          <Link to="/analysis/results" className="results__back" style={{ alignSelf: "flex-start" }}>
+            ← Full analysis
+          </Link>
+          {focusView === "dsa" && (
+            <section className="results__section" id="dsa">
+              <h2>DSA Topic Coverage Analysis</h2>
+              {coding.hasDsa ? (
+                <DsaCoverage data={coding} />
+              ) : (
+                <p>Add your LeetCode profile under Evidence → Profile URLs, then run your analysis again to see your DSA topic coverage.</p>
+              )}
+            </section>
+          )}
+        </main>
+        {overlays}
+      </div>
+    );
+  }
+
+  /* ---------------- The single analysis page ---------------- */
+
+  const topGap = groups.priority[0];
+  const claimToProve = groups.evidence.find((g) => assessmentFor(g));
+  const topLink = topGap ? actions.roadmapFor(topGap) : null;
+
+  return (
+    <div className="an">
+      {/* Phones and tablets: the sidebar is hidden, so sections get a compact bar */}
+      <nav className="an-sectionbar" aria-label="Analysis sections">
+        {NAV.map((n) => (
+          <a
+            key={n.id}
+            href={`#${n.id}`}
+            data-id={n.id}
+            className={navActive === n.id ? "is-active" : ""}
+            aria-current={navActive === n.id ? "true" : undefined}
+            onClick={(e) => {
+              e.preventDefault();
+              scrollToSection(n.id);
+            }}
+          >
+            {n.label}
+          </a>
+        ))}
+      </nav>
+
+      <div className="an__inner">
+        {actionError && (
+          <div className="an-alert" role="alert">
+            <span>{actionError}</span>
+            <button type="button" className="an-link an-link--btn" onClick={() => setActionError(null)}>Dismiss</button>
+          </div>
+        )}
+
+        {/* ---------- Overview ---------- */}
+        <section id="overview" className="an-sec an-overview" aria-labelledby="an-title">
+          <div className="an-overview__head">
+            <div>
+              <h1 id="an-title" className="an-overview__title">Your analysis</h1>
+              <p className="an-overview__sub">Here’s what INAURA found about your career profile. Analysed {analysedOn}.</p>
+            </div>
+            <Button asChild variant="secondary"><Link to="/analysis">Update evidence or re-run</Link></Button>
+          </div>
+
+          <dl className="an-stats">
+            <div className="an-stat">
+              <dt>Target role</dt>
+              <dd className="an-stat__role">{analysis.target_role}</dd>
+            </div>
+            <div className="an-stat an-stat--main">
+              <dt>Career readiness</dt>
+              <dd>
+                <span className="an-stat__big an-num">{readiness}<span className="an-stat__unit">%</span></span>
+                <button type="button" className="an-link an-link--btn" aria-expanded={showFormula} onClick={() => setShowFormula((s) => !s)}>
+                  {showFormula ? "Hide" : "How is this calculated?"}
+                </button>
+              </dd>
+            </div>
+            <div className="an-stat">
+              <dt>Evidence sources</dt>
+              <dd><span className="an-stat__num an-num">{usage.kinds}</span> analysed</dd>
+            </div>
+            <div className="an-stat">
+              <dt>Skills assessed</dt>
+              <dd><span className="an-stat__num an-num">{analysis.assessment_count}</span>, {groups.priority.length} with gaps</dd>
+            </div>
+          </dl>
+
+          {showFormula && (
+            <div className="an-formula">
+              <div className="an-formula__parts">
+                {[
+                  { label: "Skills", value: analysis.skill_component, weight: 45 },
+                  { label: "Industry fit", value: analysis.industry_component, weight: 25 },
+                  { label: "Evidence", value: analysis.evidence_component, weight: 30 },
+                ].map((c) => (
+                  <div key={c.label} className="an-formula__part">
+                    <span>{c.label} <span className="an-faint">× {c.weight}%</span></span>
+                    <span className="an-meter"><span style={{ width: `${pct(c.value)}%` }} /></span>
+                    <span className="an-num">{pct(c.value)}%</span>
+                  </div>
+                ))}
+              </div>
+              <p className="an-note">
+                {analysis.disclaimer ||
+                  "Career readiness measures how well your verified evidence matches industry benchmarks for this role. It’s a development indicator, not a hiring probability."}
+              </p>
+            </div>
+          )}
+
+          <p className="an-insight">{headlineInsight(analysis, groups)}</p>
+        </section>
+
+        {/* ---------- Priority gaps ---------- */}
+        <section id="priority-gaps" className="an-sec" aria-labelledby="h-priority">
+          <header className="an-sec__head">
+            <h2 id="h-priority">Priority gaps</h2>
+            <p>Ranked by how far you are from the requirement, how much the role and interviews weigh it, and how sure INAURA is.</p>
+          </header>
+          <PriorityGaps gaps={groups.priority} actions={actions} />
+        </section>
+
+        {/* ---------- Evidence gaps ---------- */}
+        <section id="evidence-gaps" className="an-sec" aria-labelledby="h-evidence">
+          <header className="an-sec__head">
+            <h2 id="h-evidence">Evidence gaps</h2>
+            <p>Skills you claim or the role needs, where INAURA lacks independent proof. Missing proof isn’t the same as not knowing it.</p>
+          </header>
+          <EvidenceGaps gaps={groups.evidence} actions={actions} />
+        </section>
+
+        {/* ---------- Quadrants ---------- */}
+        <section id="skill-quadrants" className="an-sec" aria-labelledby="h-quad">
+          <header className="an-sec__head">
+            <h2 id="h-quad">Skill quadrants</h2>
+            <p>Each skill placed by how strong it looks and how confident INAURA is in that. Select a skill to see why.</p>
+          </header>
+          <SkillQuadrant skills={groups.target} actions={actions} />
+        </section>
+
+        {/* ---------- Skill overview ---------- */}
+        <section id="skill-overview" className="an-sec" aria-labelledby="h-overview">
+          <header className="an-sec__head">
+            <h2 id="h-overview">Skill overview</h2>
+            <p>What {analysis.target_role} roles require, and where you stand on each skill.</p>
+          </header>
+          <SkillOverview roleSkills={groups.target} secondary={groups.secondary} actions={actions} />
+        </section>
+
+        {/* ---------- Evidence sources ---------- */}
+        <section id="evidence-sources" className="an-sec" aria-labelledby="h-sources">
+          <header className="an-sec__head">
+            <h2 id="h-sources">Evidence sources</h2>
+            <p>What INAURA used to understand you, and control over what counts.</p>
+          </header>
+          <EvidenceSources
+            evidence={evidence}
+            projects={projects}
+            repos={githubRepos}
+            busyId={evidenceActionLoading}
+            onToggleEvidence={(id, exclude, type) =>
+              runSourceAction(id, () => (type === "evidence" ? setEvidenceExcluded(id, exclude) : setProjectExcluded(id, exclude)))
+            }
+            onToggleEvidenceAi={(id, ai, type) =>
+              runSourceAction(id, () => (type === "evidence" ? setEvidenceAiAssisted(id, ai) : setProjectAiAssisted(id, ai)))
+            }
+            onToggleRepo={(name, exclude) => runSourceAction(name, () => setGithubRepoExcluded(name, exclude))}
+            onToggleRepoAi={(name, ai) => runSourceAction(name, () => setGithubRepoAiAssisted(name, ai))}
+          />
+        </section>
+
+        {/* ---------- Next steps ---------- */}
+        <section id="next-steps" className="an-sec an-next" aria-labelledby="h-next">
+          <header className="an-sec__head">
+            <h2 id="h-next">Next steps</h2>
+          </header>
+          <ol className="an-next__list">
+            <li>
+              <span className="an-next__k">Close your biggest gap</span>
+              {topGap ? (
+                <>
+                  <span className="an-next__v">{skillName(topGap)}</span>
+                  <span className="an-note">
+                    {topLink?.state === "planned"
+                      ? `Planned for week ${topLink.week.week_number} of your roadmap.`
+                      : topLink?.state === "missing"
+                        ? "Not in your current roadmap yet."
+                        : "Build a roadmap to plan it."}
+                  </span>
+                </>
+              ) : (
+                <span className="an-next__v">No open gaps</span>
+              )}
+            </li>
+            <li>
+              <span className="an-next__k">Prove a claimed skill</span>
+              {claimToProve ? (
+                <>
+                  <span className="an-next__v">{skillName(claimToProve)}</span>
+                  <button type="button" className="an-link an-link--btn" onClick={() => { const a = assessmentFor(claimToProve); if (a) setActiveAssessment(a); }}>
+                    Take the assessment
+                  </button>
+                </>
+              ) : (
+                <span className="an-next__v">Nothing waiting</span>
+              )}
+            </li>
+            <li>
+              <span className="an-next__k">Follow your plan</span>
+              <span className="an-next__v">{hasRoadmap ? "Weekly roadmap" : "No roadmap yet"}</span>
+              {hasRoadmap ? (
+                <Link to="/roadmap" className="an-link">Open roadmap</Link>
+              ) : roadmapData ? (
+                <button type="button" className="an-link an-link--btn" onClick={handleGenerateRoadmap} disabled={generatingRoadmap}>
+                  {generatingRoadmap ? "Building…" : "Build my roadmap"}
+                </button>
+              ) : (
+                <Link to="/roadmap" className="an-link">Go to roadmap</Link>
+              )}
+            </li>
+          </ol>
+          <p className="an-note">
+            Want a deeper view of each skill? <Link to="/analysis/capabilities" className="an-link">Open the capability map</Link>.
+          </p>
+        </section>
+      </div>
+
+      {overlays}
     </div>
   );
 }

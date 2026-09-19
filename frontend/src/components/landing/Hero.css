@@ -110,8 +110,8 @@
 
 .hero__card {
   width: min(480px, 100%);
-  background: #fff;
-  border: 1px solid var(--line);
+  background: var(--glass-bg);
+  border: 1px solid var(--glass-edge);
   border-radius: 22px;
   box-shadow: var(--shadow-lg);
   padding: 26px 22px 22px;

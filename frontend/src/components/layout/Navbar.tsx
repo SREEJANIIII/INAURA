@@ -1,6 +1,6 @@
 import { useState } from "react";
 import { Link, useNavigate } from "react-router-dom";
-import Button from "../ui/Button";
+import Button from "../ui/app-button";
 import { useAuth } from "../../context/AuthContext";
 import "./Navbar.css";
 
@@ -28,14 +28,14 @@ export default function Navbar() {
 
   return (
     <header className="nav">
-      <div className="nav__inner container">
+      <div className="nav__inner">
         <Link to="/" className="nav__brand" aria-label="INAURA — Home">
           <img
             src="/logo.png"
             alt="INAURA"
             className="nav__logo"
-            width={144}
-            height={36}
+            width={1748}
+            height={899}
             decoding="async"
           />
         </Link>
@@ -54,7 +54,7 @@ export default function Navbar() {
               <Link to="/dashboard" className="nav__login">
                 Dashboard
               </Link>
-              <Button variant="primary" size="sm" onClick={handleLogout}>
+              <Button variant="primary" size="md" onClick={handleLogout}>
                 Logout
               </Button>
             </>
@@ -63,7 +63,7 @@ export default function Navbar() {
               <Link to="/login" className="nav__login">
                 Log in
               </Link>
-              <Button variant="primary" size="sm" onClick={handleGetStarted}>
+              <Button variant="primary" size="md" onClick={handleGetStarted}>
                 Get Started
               </Button>
             </>

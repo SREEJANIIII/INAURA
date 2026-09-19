@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useState } from "react";
 import { Link } from "react-router-dom";
-import Button from "../components/ui/Button";
+import Button from "../components/ui/app-button";
 import { getLatestAnalysis } from "../services/analysis";
 import {
   getCapabilityMap,

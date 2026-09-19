@@ -5,7 +5,7 @@ import {
   type AIComparison,
   type AIReviewResult,
 } from "../services/aiReview";
-import Button from "../components/ui/Button";
+import Button from "../components/ui/app-button";
 import "./AIReviewTest.css";
 
 const CATEGORY_LABELS: Record<string, string> = {

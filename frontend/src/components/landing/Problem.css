@@ -15,13 +15,16 @@
   font-weight: 550;
 }
 
-.problem__desc {
-  margin-top: 18px;
-  font-size: 1.08rem;
-  color: var(--muted);
-  max-width: 62ch;
-  margin-inline: auto;
-  line-height: 1.6;
+/* Apple-style statement: large, and each word lights up as you scroll */
+.problem__statement {
+  max-width: 24ch;
+  margin: 56px auto 72px;
+  font-size: clamp(1.75rem, 4.2vw, 3.25rem);
+  font-weight: 650;
+  line-height: 1.18;
+  letter-spacing: -0.03em;
+  color: var(--ink);
+  text-align: center;
 }
 
 .problem__grid {
@@ -33,8 +36,8 @@
 }
 
 .problem__card {
-  background: #fff;
-  border: 1px solid var(--line);
+  background: var(--glass-bg);
+  border: 1px solid var(--glass-edge);
   border-radius: 18px;
   padding: 26px 22px 22px;
   position: relative;
@@ -100,8 +103,8 @@
   gap: 16px;
   max-width: 760px;
   margin-inline: auto;
-  background: #fff;
-  border: 1px solid var(--line);
+  background: var(--glass-bg);
+  border: 1px solid var(--glass-edge);
   border-radius: 9999px;
   padding: 14px 18px 14px 20px;
   box-shadow: var(--shadow-sm);

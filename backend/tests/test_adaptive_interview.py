@@ -652,7 +652,9 @@ def test_follow_up_inserted_at_correct_position():
     assert resp.get("action") == "FOLLOW_UP"
     # Ack and question are separate fields: ack carries no question text,
     # the question travels in current_question (frontend voices each once).
-    assert resp.get("spoken_response") == "I see."
+    # The ack is one of several natural phrases so the interviewer does not
+    # repeat one stock line every turn.
+    assert resp.get("spoken_response") in iv.COUNTER_ACKS
     assert "Why did you do that?" in nq.get("prompt", "")
     assert "Why did you do that?" not in (resp.get("spoken_response") or "")
     # The persisted plan should have the follow-up inserted between q0 and q1

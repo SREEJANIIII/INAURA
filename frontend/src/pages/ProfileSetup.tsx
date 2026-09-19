@@ -2,36 +2,9 @@ import { useEffect, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { useAuth } from "../context/AuthContext";
 import { createProfile, getProfile, type ProfilePayload } from "../services/profile";
-import Button from "../components/ui/Button";
+import Button from "../components/ui/app-button";
+import { branches, degrees, interestOptions, years } from "../lib/profileOptions";
 import "./Auth.css";
-
-const degrees = ["B.Tech", "B.E.", "B.Sc", "BCA", "M.Tech", "M.Sc", "MCA", "MBA", "Diploma", "Other"];
-const branches = [
-  "Computer Science",
-  "Information Technology",
-  "Electronics",
-  "Electrical",
-  "Mechanical",
-  "Civil",
-  "AI/ML",
-  "Data Science",
-  "Other",
-];
-const years = ["1st Year", "2nd Year", "3rd Year", "Final Year", "Graduate"];
-const interestOptions = [
-  "Software Engineering",
-  "Data Science",
-  "AI/ML",
-  "Web Development",
-  "Mobile Development",
-  "DevOps",
-  "Cloud",
-  "Cybersecurity",
-  "Product Management",
-  "UI/UX Design",
-  "Data Analytics",
-  "Blockchain",
-];
 
 export default function ProfileSetup() {
   const { user, isConfigured } = useAuth();

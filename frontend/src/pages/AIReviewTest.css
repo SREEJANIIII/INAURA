@@ -57,19 +57,21 @@
   display: flex;
   flex-wrap: wrap;
   gap: 8px 24px;
-  background: #fff;
-  border: 1px solid #e2e8f0;
+  background: var(--glass-bg);
+  border: 1px solid var(--glass-edge);
   border-radius: 14px;
   padding: 14px 18px;
   font-size: 0.9rem;
+  box-shadow: var(--glass-shadow);
 }
 
 .airev-hero {
-  background: #fff;
-  border: 1px solid #e2e8f0;
+  background: var(--glass-bg);
+  border: 1px solid var(--glass-edge);
   border-radius: 18px;
   padding: 24px;
   text-align: center;
+  box-shadow: var(--glass-shadow);
 }
 
 .airev-hero-grid {
@@ -101,10 +103,11 @@
 }
 
 .airev-section {
-  background: #fff;
-  border: 1px solid #e2e8f0;
+  background: var(--glass-bg);
+  border: 1px solid var(--glass-edge);
   border-radius: 18px;
   padding: 22px;
+  box-shadow: var(--glass-shadow);
 }
 
 .airev-section-title {

@@ -1,0 +1,241 @@
+.sidebar {
+  width: 236px;
+  flex-shrink: 0;
+  background: rgba(255, 255, 255, 0.42);
+  border-right: 1px solid var(--glass-edge);
+  padding: 16px 10px;
+  position: sticky;
+  top: var(--appbar-h);
+  height: calc(100vh - var(--appbar-h));
+  overflow-y: auto;
+  display: none;
+  flex-direction: column;
+  backdrop-filter: var(--glass-blur);
+  -webkit-backdrop-filter: var(--glass-blur);
+}
+
+.sidebar.is-open {
+  display: flex;
+}
+
+/* Takes the free space so the footer below it sits at the bottom */
+.sidebar__nav {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.sidebar__group {
+  display: flex;
+  flex-direction: column;
+}
+
+.sidebar__link {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  min-height: 38px;
+  padding: 0 10px;
+  border: 0;
+  border-radius: 8px;
+  background: transparent;
+  font: 500 14px/1.2 var(--shell-sans);
+  color: var(--shell-ink-2);
+  text-align: left;
+  text-decoration: none;
+  cursor: pointer;
+  transition: background-color 0.15s, color 0.15s;
+}
+
+.sidebar__link:hover {
+  background: var(--shell-hover);
+  color: var(--shell-ink);
+}
+
+.sidebar__link:focus-visible {
+  outline: 2px solid var(--shell-accent);
+  outline-offset: -2px;
+}
+
+.sidebar__icon {
+  flex-shrink: 0;
+  color: var(--shell-ink-3);
+  transition: color 0.15s;
+}
+
+.sidebar__link:hover .sidebar__icon {
+  color: var(--shell-ink-2);
+}
+
+.sidebar__text {
+  flex: 1;
+  min-width: 0;
+}
+
+.sidebar__link.is-active {
+  background: var(--shell-accent-soft);
+  color: var(--shell-accent-deep);
+  font-weight: 600;
+}
+
+.sidebar__link.is-active .sidebar__icon {
+  color: var(--shell-accent);
+}
+
+/* Sub-items hang off a thin guide line under the parent icon */
+.sidebar__submenu {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  padding: 2px 0 6px;
+}
+
+.sidebar__submenu::before {
+  content: "";
+  position: absolute;
+  left: 18.5px;
+  top: 2px;
+  bottom: 8px;
+  width: 1px;
+  background: var(--shell-line);
+}
+
+.sidebar__link--sub {
+  position: relative;
+  min-height: 34px;
+  padding-top: 7px;
+  padding-bottom: 7px;
+  padding-left: 38px;
+  font-size: 13.5px;
+  line-height: 1.35;
+}
+
+.sidebar__link--sub.is-active {
+  background: transparent;
+  color: var(--shell-accent-deep);
+}
+
+.sidebar__link--sub.is-active::before {
+  content: "";
+  position: absolute;
+  left: 17.5px;
+  top: 9px;
+  bottom: 9px;
+  width: 3px;
+  border-radius: 2px;
+  background: var(--shell-accent);
+}
+
+.sidebar__link--sub.is-active:hover {
+  background: var(--shell-hover);
+}
+
+.sidebar__group-toggle.has-active {
+  color: var(--shell-ink);
+}
+
+.sidebar__group-toggle.has-active .sidebar__icon {
+  color: var(--shell-accent);
+}
+
+.sidebar__chevron {
+  flex-shrink: 0;
+  color: var(--shell-ink-3);
+  transition: transform 0.2s;
+}
+
+.sidebar__group-toggle.is-expanded .sidebar__chevron {
+  transform: rotate(180deg);
+}
+
+.sidebar__link--soon {
+  color: var(--shell-ink-3);
+  cursor: default;
+}
+
+.sidebar__link--soon:hover {
+  background: transparent;
+  color: var(--shell-ink-3);
+}
+
+.sidebar__link--soon .sidebar__icon,
+.sidebar__link--soon:hover .sidebar__icon {
+  color: #b9b6ad;
+}
+
+/* Upcoming pages sit apart from the working ones */
+.sidebar__nav > a + .sidebar__link--soon {
+  margin-top: 13px;
+  position: relative;
+}
+
+.sidebar__nav > a + .sidebar__link--soon::before {
+  content: "";
+  position: absolute;
+  left: 10px;
+  right: 10px;
+  top: -8px;
+  height: 1px;
+  background: var(--shell-line);
+}
+
+.sidebar__badge {
+  font-size: 11.5px;
+  font-weight: 500;
+  padding: 2px 7px;
+  border-radius: 6px;
+  background: var(--shell-hover);
+  color: var(--shell-ink-3);
+}
+
+/* Log out, pinned under everything else */
+.sidebar__foot {
+  flex-shrink: 0;
+  margin-top: 16px;
+  padding-top: 10px;
+  border-top: 1px solid var(--shell-line);
+}
+
+.sidebar__link--logout {
+  color: var(--shell-ink-3);
+}
+
+.sidebar__link--logout:hover {
+  background: #f6e5e2;
+  color: #8c3a30;
+}
+
+.sidebar__link--logout:hover .sidebar__icon {
+  color: #a8463c;
+}
+
+.sidebar__link--logout:disabled {
+  cursor: progress;
+  opacity: 0.6;
+}
+
+/* Phones & tablets: sidebar slides over the page instead of pushing it aside */
+@media (max-width: 860px) {
+  .sidebar {
+    display: flex;
+    position: fixed;
+    top: var(--appbar-h);
+    left: 0;
+    height: calc(100vh - var(--appbar-h));
+    z-index: 40;
+    transform: translateX(-100%);
+    visibility: hidden;
+    transition: transform 0.25s cubic-bezier(0.2, 0.8, 0.2, 1), visibility 0.25s;
+    box-shadow: 0 16px 40px rgba(23, 27, 47, 0.14);
+    /* Over page content the glass needs more body to stay readable */
+    background: var(--glass-bg-strong);
+  }
+
+  .sidebar.is-open {
+    transform: translateX(0);
+    visibility: visible;
+  }
+}

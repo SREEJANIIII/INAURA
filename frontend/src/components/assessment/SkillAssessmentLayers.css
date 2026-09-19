@@ -1,133 +1,341 @@
-/* SkillAssessmentLayers — progression UX in the AnalysisResults language. */
+/* ==========================================================================
+   Skills you know — assessment layers.
+   Same paper/serif language as the analysis page: one row per skill, the
+   checks shown as pills, detail only when a row is opened.
+   ========================================================================== */
 
-.layers {
-  display: flex;
-  flex-direction: column;
-  gap: 16px;
-}
-
-.layers__intro {
-  background: #f0fdfa;
-  border: 1px solid #99f6e4;
-  border-radius: 12px;
-  padding: 16px 18px;
-}
-
-.layers__intro h2 {
-  margin: 0 0 6px;
-  font-size: 1.05rem;
-  color: #0f172a;
-}
-
-.layers__intro p {
-  margin: 6px 0;
-  font-size: 0.86rem;
-  color: #334155;
-  line-height: 1.55;
-}
-
-.layers__intro-list {
-  list-style: none;
-  margin: 8px 0;
-  padding: 0;
-  display: flex;
-  flex-direction: column;
-  gap: 4px;
-  font-size: 0.86rem;
-  color: #334155;
-}
-
-.layers__intro-note {
-  font-size: 0.8rem;
-  color: #475569;
-}
-
-.layers__cards {
-  display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(300px, 1fr));
-  gap: 12px;
-}
-
-.layers__skill {
-  border: 1px solid #e2e8f0;
-  border-radius: 12px;
-  padding: 12px 14px;
-  background: #fff;
-  display: flex;
-  flex-direction: column;
-  gap: 8px;
+.sa {
   min-width: 0;
 }
 
-.layers__skill-head {
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-  gap: 8px;
-  font-size: 0.95rem;
-  color: #0f172a;
+/* Back to the full analysis — sits above the page heading */
+.an .sa-back {
+  display: inline-block;
+  margin: 14px 0 2px;
 }
 
-.layers__skill-progress {
-  font-size: 0.75rem;
-  color: #64748b;
-  font-weight: 600;
-  white-space: nowrap;
+/* ---------- Summary ---------- */
+
+.sa-sum {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  margin: 0 0 18px;
+  background: var(--an-surface);
+  border: 1px solid var(--glass-edge);
+  border-radius: 12px;
+  box-shadow: var(--glass-shadow);
 }
 
-.layers__steps {
+.sa-sum > div {
   display: flex;
   flex-direction: column;
+  gap: 3px;
+  min-width: 0;
+  padding: 13px 18px 15px;
 }
 
-.layers__step {
+.sa-sum > div + div {
+  border-left: 1px solid var(--an-line-2);
+}
+
+.sa-sum dt {
+  font-size: 12.5px;
+  font-weight: 500;
+  color: var(--an-ink-3);
+}
+
+.sa-sum dd {
+  font-family: var(--an-serif);
+  font-size: 27px;
+  line-height: 1.05;
+  color: var(--an-ink);
+  font-variant-numeric: lining-nums tabular-nums;
+}
+
+.sa-sum dd small {
+  margin-left: 5px;
+  font-family: var(--an-sans);
+  font-size: 13px;
+  color: var(--an-ink-3);
+}
+
+.sa-intro {
+  max-width: 76ch;
+  margin-bottom: 16px;
+  font-size: 14px;
+  line-height: 1.55;
+  color: var(--an-ink-2);
+}
+
+.sa-intro strong {
+  font-weight: 600;
+  color: var(--an-ink);
+}
+
+.sa-bar {
   display: flex;
-  justify-content: space-between;
+  flex-wrap: wrap;
   align-items: center;
-  gap: 10px;
-  border: 1px solid #e2e8f0;
-  border-radius: 10px;
-  padding: 10px 12px;
-  background: #f8fafc;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 8px;
 }
 
-.layers__step--done {
-  border-color: #a7f3d0;
-  background: #ecfdf5;
+/* ---------- Skill rows ---------- */
+
+.sa-skills {
+  border-top: 1px solid var(--an-line);
 }
 
-.layers__step-info {
+.sa-skill {
+  border-bottom: 1px solid var(--an-line);
+}
+
+.sa-skill.is-open {
+  background: rgba(255, 255, 255, 0.55);
+}
+
+.sa-skill__row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 14px;
+  padding-right: 10px;
+  transition: background-color 0.15s;
+}
+
+.sa-skill__row:hover {
+  background: var(--an-hover);
+}
+
+.sa-skill__main {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 18px;
+  min-width: 0;
+  padding: 13px 10px;
+  border: 0;
+  background: transparent;
+  font: inherit;
+  color: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.sa-skill__name {
   display: flex;
   flex-direction: column;
   gap: 2px;
   min-width: 0;
+  font-size: 14.5px;
+  font-weight: 600;
 }
 
-.layers__step-title {
-  font-weight: 700;
-  font-size: 0.86rem;
-  color: #0f172a;
+.sa-skill__name .an-faint {
+  font-size: 12.5px;
+  font-weight: 400;
 }
 
-.layers__step-desc {
-  font-size: 0.78rem;
-  color: #64748b;
+/* ---------- Check pills ---------- */
+
+.sa-track {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
 }
 
-.layers__step-eta {
-  font-size: 0.78rem;
-  color: #475569;
+.sa-pip {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 4px 10px;
+  border: 1px solid var(--an-line);
+  border-radius: 999px;
+  background: var(--an-surface);
+  font-size: 12.5px;
+  color: var(--an-ink-3);
+  white-space: nowrap;
 }
 
-.layers__arrow {
-  text-align: center;
-  color: #94a3b8;
-  font-size: 0.8rem;
-  line-height: 1.2;
-  padding: 2px 0;
+.sa-pip b {
+  font-weight: 600;
 }
 
-.layers__none {
-  font-size: 0.82rem;
-  color: #64748b;
+.sa-pip.is-done {
+  border-color: #cfe0d5;
+  background: var(--an-green-soft);
+  color: var(--an-green);
+  font-weight: 600;
+}
+
+.sa-pip.is-next {
+  border-color: var(--an-accent-mid);
+  background: var(--an-accent-soft);
+  color: var(--an-accent-deep);
+  font-weight: 600;
+}
+
+.sa-pip.is-review {
+  border-color: #ecdcc0;
+  background: var(--an-amber-soft);
+  color: var(--an-amber);
+}
+
+.sa-pip__tick {
+  flex-shrink: 0;
+}
+
+.sa-cta {
+  flex-shrink: 0;
+}
+
+.sa-flag {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  font-size: 13px;
+  white-space: nowrap;
+}
+
+.sa-flag.is-done {
+  font-weight: 600;
+  color: var(--an-green);
+}
+
+/* ---------- Opened row ---------- */
+
+.sa-skill__detail {
+  padding: 0 10px 16px;
+}
+
+.sa-layers {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.sa-layer {
+  display: grid;
+  grid-template-columns: 24px minmax(0, 1fr) auto auto;
+  align-items: center;
+  gap: 14px;
+  padding: 10px 12px;
+  border: 1px solid var(--glass-edge);
+  border-radius: 10px;
+  background: var(--an-surface);
+  box-shadow: var(--glass-shadow);
+}
+
+.sa-layer.is-done {
+  border-color: #cfe0d5;
+  background: var(--an-green-soft);
+}
+
+.sa-layer.is-review {
+  border-color: #ecdcc0;
+  background: var(--an-amber-soft);
+}
+
+.sa-layer__n {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 24px;
+  height: 24px;
+  border: 1px solid var(--an-line-strong);
+  border-radius: 50%;
+  font-size: 12px;
+  color: var(--an-ink-3);
+  font-variant-numeric: tabular-nums;
+}
+
+.sa-layer.is-done .sa-layer__n {
+  border-color: var(--an-green);
+  color: var(--an-green);
+}
+
+.sa-layer__text {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  min-width: 0;
+}
+
+.sa-layer__title {
+  font-size: 13.5px;
+  font-weight: 600;
+  color: var(--an-ink);
+}
+
+.sa-layer__q {
+  font-size: 12.5px;
+  color: var(--an-ink-3);
+}
+
+.sa-layer__status {
+  font-size: 12.5px;
+  color: var(--an-ink-2);
+  text-align: right;
+}
+
+.sa-layer__status .an-faint {
+  display: block;
+}
+
+.sa-layer__btn {
+  height: 30px;
+  padding: 0 12px;
+}
+
+/* ---------- Narrow screens ---------- */
+
+@container an (max-width: 780px) {
+  .sa-sum {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .sa-sum > div:nth-child(odd) {
+    border-left: 0;
+  }
+
+  .sa-sum > div:nth-child(n + 3) {
+    border-top: 1px solid var(--an-line-2);
+  }
+
+  .sa-skill__row {
+    grid-template-columns: minmax(0, 1fr);
+    gap: 0;
+    padding: 0 10px 12px;
+  }
+
+  .sa-skill__main {
+    grid-template-columns: minmax(0, 1fr);
+    gap: 8px;
+    padding: 12px 0 10px;
+  }
+
+  .sa-cta,
+  .sa-flag {
+    justify-self: start;
+  }
+
+  .sa-skill__detail {
+    padding: 0 10px 14px;
+  }
+
+  .sa-layer {
+    grid-template-columns: 24px minmax(0, 1fr) auto;
+    row-gap: 8px;
+  }
+
+  .sa-layer__status {
+    grid-column: 2 / -1;
+    text-align: left;
+  }
+
+  .sa-layer__btn {
+    grid-column: 3;
+    grid-row: 1;
+  }
 }

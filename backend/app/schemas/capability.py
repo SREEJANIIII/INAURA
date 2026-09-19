@@ -115,6 +115,8 @@ class SkillCapability(BaseModel):
     skill: str
     slug: str = ""
     role: str = ""
+    category: str = ""
+    prerequisites: List[str] = Field(default_factory=list)
     proficiency: float = 0.0
     confidence: float = 0.0
     required_level: float = 0.0

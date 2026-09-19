@@ -1,3 +1,4 @@
+import { Reveal, ScrubWords, Stagger, StaggerItem } from "./scroll";
 import "./Problem.css";
 
 const items = [
@@ -27,40 +28,43 @@ export default function Problem() {
   return (
     <section id="problem" className="problem section section--subtle">
       <div className="container">
-        <div className="problem__header">
+        <Reveal className="problem__header">
           <div className="eyebrow">The reality for most students</div>
           <h2 className="problem__title">
             Talent isn&rsquo;t the problem.
             <br />
             <span>Clarity is.</span>
           </h2>
-          <p className="problem__desc">
-            Most students aren&rsquo;t behind because they lack ability — they
-            lack a clear view of where they stand and what the industry
-            actually expects.
-          </p>
-        </div>
+        </Reveal>
 
-        <div className="problem__grid" role="list">
+        {/* Lights up word by word as it scrolls through the screen */}
+        <ScrubWords
+          className="problem__statement"
+          text="Most students aren’t behind because they lack ability. They lack a clear view of where they stand, and of what the industry actually expects."
+        />
+
+        <Stagger className="problem__grid" role="list">
           {items.map((item) => (
-            <div key={item.step} className="problem__card" role="listitem">
-              <div className="problem__step">{item.step}</div>
-              <h3 className="problem__card-title">{item.title}</h3>
-              <p className="problem__card-desc">{item.desc}</p>
-              <div className="problem__arrow" aria-hidden="true">
-                →
+            <StaggerItem key={item.step} className="lp-cell" role="listitem">
+              <div className="problem__card">
+                <div className="problem__step">{item.step}</div>
+                <h3 className="problem__card-title">{item.title}</h3>
+                <p className="problem__card-desc">{item.desc}</p>
+                <div className="problem__arrow" aria-hidden="true">
+                  →
+                </div>
               </div>
-            </div>
+            </StaggerItem>
           ))}
-        </div>
+        </Stagger>
 
-        <div className="problem__footer">
+        <Reveal className="problem__footer">
           <span className="problem__footer-line" aria-hidden="true" />
           <p>
             INAURA replaces guesswork with a structured, evidence-aligned view
             of your path — so effort leads to outcomes.
           </p>
-        </div>
+        </Reveal>
       </div>
     </section>
   );

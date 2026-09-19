@@ -11,7 +11,7 @@ router = APIRouter(prefix="/analysis", tags=["analysis"])
 
 
 @router.get("/state", response_model=AnalysisStateResponse)
-async def get_analysis_state(current_user: CurrentUser = Depends(get_current_user)):
+def get_analysis_state(current_user: CurrentUser = Depends(get_current_user)):
     data = analysis_service.get_state(current_user.id)
     if not data:
         # Return not_started with no target
@@ -65,7 +65,7 @@ async def run_skill_analysis(
 
 
 @router.get("/latest")
-async def get_latest_analysis(current_user: CurrentUser = Depends(get_current_user)):
+def get_latest_analysis(current_user: CurrentUser = Depends(get_current_user)):
     c = get_supabase_client()
     if c is None:
         raise HTTPException(status_code=503, detail="Supabase not configured")
@@ -84,7 +84,7 @@ async def get_latest_analysis(current_user: CurrentUser = Depends(get_current_us
 
 
 @router.get("/skills")
-async def get_latest_skills(current_user: CurrentUser = Depends(get_current_user)):
+def get_latest_skills(current_user: CurrentUser = Depends(get_current_user)):
     c = get_supabase_client()
     if c is None:
         raise HTTPException(status_code=503, detail="Supabase not configured")
@@ -109,7 +109,7 @@ async def get_latest_skills(current_user: CurrentUser = Depends(get_current_user
 
 
 @router.get("/gaps")
-async def get_latest_gaps(current_user: CurrentUser = Depends(get_current_user)):
+def get_latest_gaps(current_user: CurrentUser = Depends(get_current_user)):
     c = get_supabase_client()
     if c is None:
         raise HTTPException(status_code=503, detail="Supabase not configured")
@@ -176,7 +176,7 @@ class SkillOverrideResponse(BaseModel):
     updated_at: Optional[str] = None
 
 @router.get("/skill-overrides")
-async def list_skill_overrides(current_user: CurrentUser = Depends(get_current_user)):
+def list_skill_overrides(current_user: CurrentUser = Depends(get_current_user)):
     return evidence_service.list_skill_overrides(current_user.id)
 
 @router.post("/skill-overrides", response_model=SkillOverrideResponse, status_code=201)
@@ -246,7 +246,7 @@ async def refresh_analysis(current_user: CurrentUser = Depends(get_current_user)
 
 
 @router.get("/evidence-summary")
-async def get_evidence_summary(current_user: CurrentUser = Depends(get_current_user)):
+def get_evidence_summary(current_user: CurrentUser = Depends(get_current_user)):
     """Return honest evidence audit: sources analyzed, available, unavailable, and snapshot."""
     from ....services import learner_state_service
     sources_analyzed, sources_available, sources_unavailable = learner_state_service.audit_user_sources(current_user.id)

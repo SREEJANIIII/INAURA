@@ -1,11 +1,11 @@
 .section {
   padding: 104px 0;
-  background: var(--bg);
+  background: transparent;
   border-top: 1px solid transparent;
 }
 
 .section--subtle {
-  background: var(--bg-subtle);
+  background: var(--glass-bg-soft);
   border-top-color: var(--line);
   border-bottom: 1px solid var(--line);
 }

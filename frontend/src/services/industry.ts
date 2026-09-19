@@ -49,6 +49,20 @@ export type AnalysisState = {
   updated_at: string;
 };
 
+export type RoleSummary = {
+  title: string;
+  slug: string;
+  category: string;
+  description: string;
+  aliases: string[];
+  source_benchmarks: string[];
+};
+
+/** The catalog roles INAURA has industry benchmarks for, with descriptions */
+export function getRolesCatalog() {
+  return apiFetch<RoleSummary[]>("/industry/roles/catalog");
+}
+
 export function listRoles() {
   return apiFetch<string[]>("/industry/roles");
 }

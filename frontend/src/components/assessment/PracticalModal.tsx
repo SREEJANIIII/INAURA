@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
-import Button from "../ui/Button";
+import Button from "../ui/app-button";
 import {
   startPracticalAssessment,
   submitPracticalAssessment,

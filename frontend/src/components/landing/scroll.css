@@ -1,0 +1,31 @@
+/* Shared pieces of the landing page's scroll animations */
+
+/* A grid cell that animates; the card inside fills it so rows keep equal heights */
+.lp-cell {
+  display: flex;
+}
+
+.lp-cell > * {
+  flex: 1;
+  min-width: 0;
+}
+
+/* A word in a scroll-lit statement */
+.lp-word {
+  display: inline;
+}
+
+/* Read by screen readers, not shown */
+.lp-sr {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+}
+
+/* Sections reached from the navbar's links stop just below the floating pill */
+.landing section[id] {
+  scroll-margin-top: var(--nav-clear, 86px);
+}

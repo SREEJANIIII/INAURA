@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import Button from "../ui/Button";
+import Button from "../ui/app-button";
 import {
   answerInterviewQuestion,
   completeSkillInterview,
@@ -9,7 +9,7 @@ import {
   type StartInterviewResponse,
 } from "../../services/assessment";
 import { useMediaDevices } from "../../hooks/useMediaDevices";
-import { useSpeechRecognition } from "../../hooks/useSpeechRecognition";
+import { normalizeTechnicalTerms, useSpeechRecognition } from "../../hooks/useSpeechRecognition";
 import { useInterviewAudioCapture } from "../../hooks/useInterviewAudioCapture";
 import { useTextToSpeech } from "../../hooks/useTextToSpeech";
 import { withTimeout } from "../../services/tts";
@@ -39,6 +39,9 @@ type Question = {
   prompt: string;
   follow_ups: string[];
 };
+
+/** What the AI interviewer calls itself, on screen and out loud. */
+const INTERVIEWER_NAME = "Donald Duck";
 
 const SILENCE_TIMEOUT_MS = 2800;
 /** Watchdogs so no phase can wedge forever (backend budgets are shorter). */
@@ -260,8 +263,19 @@ export default function InterviewModal({ skill, onClose, onCompleted }: Props) {
       if (!interviewActiveRef.current) return;
       isSubmittingRef.current = false;
       const msg = e instanceof Error ? e.message : "Could not submit answer";
-      if (msg.includes("409") || msg.includes("not the current question")) {
-        setError("Session out of sync. Recovering session...");
+      // The backend distinguishes "still working on it" from "genuinely stuck";
+      // only the second sort should end the call.
+      if (msg.includes("answer_in_progress") || msg.includes("completion_in_progress")) {
+        setError("Your answer is still being graded. Give it a few seconds, then retry.");
+        setPhase("recoverable_error");
+      } else if (msg.includes("duplicate_answer_conflict")) {
+        setError("A different answer is already saved for this question. End the interview to see your report.");
+        setPhase("error");
+      } else if (msg.includes("not the current question")) {
+        setError("The interview has already moved past that question. Retry the question or end the interview.");
+        setPhase("error");
+      } else if (msg.includes("409")) {
+        setError("Session out of sync. Retry the question, or end the interview to keep what you've answered.");
         setPhase("error");
       } else if (msg.includes("Timed out")) {
         // Recovery path: the SAME answer can be retried — the backend
@@ -299,7 +313,11 @@ export default function InterviewModal({ skill, onClose, onCompleted }: Props) {
         startListening();
         return;
       }
-      await submitAnswer(transcript);
+      // Speech recognition writes technical names phonetically ("fast api"); the
+      // grader reads the words, so tidy them before the answer is sent.
+      const cleaned = normalizeTechnicalTerms(transcript);
+      setSubmittedTranscript(cleaned);
+      await submitAnswer(cleaned);
     } finally {
       transcriptionBusyRef.current = false;
     }
@@ -348,7 +366,10 @@ export default function InterviewModal({ skill, onClose, onCompleted }: Props) {
 
     try {
       // Device retries and browser recovery reuse the existing backend session.
-      // Only the first successful start is allowed to create one.
+      // Only the first successful start is allowed to create one. Whether this
+      // attempt is a resume has to be read BEFORE the session is stored below,
+      // or the greeting can never play.
+      const resuming = sessionRef.current !== null;
       const data = sessionRef.current ?? await startSkillInterview(skill);
       if (!interviewActiveRef.current) {
         setLoading(false);
@@ -377,9 +398,9 @@ export default function InterviewModal({ skill, onClose, onCompleted }: Props) {
       setLoading(false);
       speechRef.current.reset();
 
-      const greeting = sessionRef.current
+      const greeting = resuming
         ? firstQ.prompt
-        : `Hi! I'm Donald Duck, your technical interviewer. I've reviewed your profile and we'll focus on ${skill} today. Let's begin. ${firstQ.prompt}`;
+        : `Hi! I'm ${INTERVIEWER_NAME}, your technical interviewer. I've reviewed your profile and we'll focus on ${skill} today. Let's begin. ${firstQ.prompt}`;
       await speakThenListen(greeting);
     } catch (e) {
       if (!interviewActiveRef.current) return;
@@ -492,7 +513,7 @@ export default function InterviewModal({ skill, onClose, onCompleted }: Props) {
     <div className="iv__overlay" role="dialog" aria-modal="true" aria-label={`${skill} live AI interview`}>
       {/* ===== INTRO SCREEN ===== */}
       {phase === "intro" && (
-        <div className="iv__intro">
+        <div className="dark iv__intro">
           <div className="iv__intro-card">
             <div className="iv__intro-icon">🎙</div>
             <h1 className="iv__intro-title">INAURA AI Interview</h1>
@@ -521,7 +542,7 @@ export default function InterviewModal({ skill, onClose, onCompleted }: Props) {
 
       {/* ===== CALL SCREEN ===== */}
       {phase !== "intro" && phase !== "completed" && (
-        <div className="iv__call">
+        <div className="dark iv__call">
           <header className="iv__call-header">
             <div className="iv__call-brand">
               <span className="iv__call-logo">INAURA</span>
@@ -604,7 +625,7 @@ export default function InterviewModal({ skill, onClose, onCompleted }: Props) {
                   <span className="iv__avatar-icon" role="img" aria-label="Funny duck interviewer">🦆</span>
                 </div>
               </div>
-              <div className="iv__call-panel-label">Donald Duck</div>
+              <div className="iv__call-panel-label">{INTERVIEWER_NAME}</div>
               {/* The question stays visible while listening when voice failed,
                   so it can still be read and answered. Cleared on success. */}
               {(phase === "ai_speaking" || phase === "listening") && aiText && (

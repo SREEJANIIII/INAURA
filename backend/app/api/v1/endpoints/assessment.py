@@ -80,7 +80,7 @@ async def interview_stt(
 
 
 @router.get("/available", response_model=AvailableAssessmentsResponse)
-async def get_available_assessments(current_user: CurrentUser = Depends(get_current_user)):
+def get_available_assessments(current_user: CurrentUser = Depends(get_current_user)):
     """Skills INAURA has a reason to verify directly, with their latest results."""
     return assessment_service.list_available_assessments(current_user.id)
 
@@ -154,14 +154,14 @@ async def start_skill_interview(
     payload: StartInterviewRequest, current_user: CurrentUser = Depends(get_current_user)
 ):
     """Create a skill-specific interview session with its adaptive plan."""
-    return interview_service.start_interview_session(
+    return await interview_service.start_interview_session(
         user_id=current_user.id,
         skill=payload.skill,
     )
 
 
 @router.get("/interview/{session_id}", response_model=InterviewSessionOut)
-async def get_skill_interview(
+def get_skill_interview(
     session_id: str, current_user: CurrentUser = Depends(get_current_user)
 ):
     """Load an interview session (plan + transcript)."""

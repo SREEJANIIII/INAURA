@@ -7,7 +7,7 @@ router = APIRouter(prefix="/profile", tags=["profile"])
 
 
 @router.get("", response_model=ProfileResponse)
-async def get_my_profile(current_user: CurrentUser = Depends(get_current_user)):
+def get_my_profile(current_user: CurrentUser = Depends(get_current_user)):
     data = profile_service.get_profile(current_user.id)
     if not data:
         raise HTTPException(status_code=404, detail="Profile not found")

@@ -1,0 +1,326 @@
+:root {
+  --appbar-h: 56px;
+}
+
+/* Shell palette — shared with the dashboard's tokens */
+.app {
+  --shell-paper: rgba(255, 255, 255, 0.4);
+  --shell-surface: var(--glass-bg);
+  --shell-hover: rgba(255, 255, 255, 0.55);
+  --shell-ink: #171b2f;
+  --shell-ink-2: #474b5e;
+  --shell-ink-3: #7a7d8c;
+  --shell-line: var(--glass-line);
+  --shell-accent: #6452b0;
+  --shell-accent-deep: #4b3d91;
+  --shell-accent-soft: rgba(100, 82, 176, 0.12);
+  --shell-sans: "Inter", system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+
+  min-height: 100vh;
+  background: transparent;
+}
+
+.app__bar {
+  height: var(--appbar-h);
+  /* Left group, centred search, right group — the search stays centred while there's room,
+     and shrinks (never overlaps) when the account menu needs the space */
+  display: grid;
+  grid-template-columns: minmax(max-content, 1fr) minmax(160px, 440px) minmax(max-content, 1fr);
+  align-items: center;
+  gap: 16px;
+  padding: 0 16px 0 10px;
+  background: rgba(255, 255, 255, 0.42);
+  border-bottom: 1px solid var(--glass-edge);
+  position: sticky;
+  top: 0;
+  z-index: 50;
+  backdrop-filter: var(--glass-blur);
+  -webkit-backdrop-filter: var(--glass-blur);
+  box-shadow: 0 8px 30px -22px rgba(62, 48, 140, 0.35);
+}
+
+.app__menu {
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  gap: 4px;
+  width: 38px;
+  height: 38px;
+  padding: 0 11px;
+  background: transparent;
+  border: 0;
+  border-radius: 8px;
+  cursor: pointer;
+  flex-shrink: 0;
+  transition: background-color 0.15s;
+}
+
+.app__menu:hover,
+.app__menu[aria-expanded="true"] {
+  background: var(--shell-hover);
+}
+
+.app__menu:focus-visible {
+  outline: 2px solid var(--shell-accent);
+  outline-offset: 2px;
+}
+
+.app__menu span {
+  display: block;
+  height: 1.5px;
+  background: var(--shell-ink);
+  border-radius: 2px;
+}
+
+.app__lead {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  min-width: 0;
+}
+
+.app__search {
+  display: flex;
+  justify-content: center;
+  min-width: 0;
+}
+
+.app__brand {
+  line-height: 0;
+}
+
+.app__brand img {
+  height: 26px;
+  width: auto;
+  display: block;
+}
+
+.app__actions {
+  justify-self: end;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+/* Account menu (bell + avatar dropdown) */
+.acct {
+  position: relative;
+  font-family: var(--shell-sans);
+  display: flex;
+  align-items: center;
+  gap: 14px;
+}
+
+.acct__bell {
+  width: 40px;
+  height: 40px;
+  display: grid;
+  place-items: center;
+  border: 0;
+  border-radius: 50%;
+  background: transparent;
+  color: var(--shell-ink-3);
+  cursor: pointer;
+}
+
+.acct__bell:hover,
+.acct__bell[aria-expanded="true"] {
+  background: var(--shell-hover);
+  color: var(--shell-ink);
+}
+
+.acct__trigger {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 4px 8px 4px 4px;
+  border: 0;
+  border-radius: var(--radius-full);
+  background: transparent;
+  font: inherit;
+  color: var(--shell-ink);
+  cursor: pointer;
+  text-align: left;
+}
+
+.acct__trigger:hover,
+.acct__trigger[aria-expanded="true"] {
+  background: var(--shell-hover);
+}
+
+.acct__avatar {
+  width: 36px;
+  height: 36px;
+  flex-shrink: 0;
+  display: grid;
+  place-items: center;
+  border-radius: 50%;
+  background: var(--shell-ink);
+  color: #fff;
+  font-size: 0.8rem;
+  font-weight: 700;
+  letter-spacing: 0.02em;
+}
+
+.acct__who {
+  display: flex;
+  flex-direction: column;
+  line-height: 1.2;
+  min-width: 0;
+}
+
+.acct__name {
+  font-size: 0.88rem;
+  font-weight: 600;
+  color: var(--shell-ink);
+  max-width: 160px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.acct__role {
+  font-size: 0.76rem;
+  color: var(--shell-ink-3);
+}
+
+.acct__chevron {
+  color: var(--shell-ink-3);
+  transition: transform var(--duration-fast);
+}
+
+.acct__trigger[aria-expanded="true"] .acct__chevron {
+  transform: rotate(180deg);
+}
+
+.acct__panel {
+  position: absolute;
+  top: calc(100% + 8px);
+  right: 0;
+  width: 240px;
+  padding: 6px;
+  background: var(--glass-bg-strong);
+  border: 1px solid var(--glass-edge);
+  border-radius: 12px;
+  box-shadow: var(--glass-shadow-lg);
+  z-index: 60;
+  backdrop-filter: var(--glass-blur);
+  -webkit-backdrop-filter: var(--glass-blur);
+}
+
+.acct__panel--notif {
+  width: 280px;
+}
+
+.acct__panel-head {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 10px 10px 12px;
+  margin-bottom: 4px;
+  border-bottom: 1px solid var(--shell-line);
+}
+
+.acct__panel-head .acct__name {
+  max-width: none;
+}
+
+.acct__email {
+  font-size: 0.8rem;
+  color: var(--shell-ink-3);
+  overflow-wrap: anywhere;
+}
+
+.acct__panel-title {
+  padding: 10px 10px 6px;
+  font-size: 0.9rem;
+  font-weight: 700;
+}
+
+.acct__empty {
+  padding: 4px 10px 12px;
+  font-size: 0.86rem;
+  color: var(--shell-ink-3);
+}
+
+.acct__item {
+  display: block;
+  width: 100%;
+  padding: 10px;
+  border: 0;
+  border-radius: 8px;
+  background: transparent;
+  font: inherit;
+  font-size: 0.9rem;
+  font-weight: 500;
+  color: var(--shell-ink);
+  text-align: left;
+  text-decoration: none;
+  cursor: pointer;
+}
+
+.acct__item:hover {
+  background: var(--shell-hover);
+}
+
+.acct__item--danger {
+  color: #a8463c;
+}
+
+/* Phones: avatar + arrow only, to leave room for the logo */
+@media (max-width: 560px) {
+  .acct {
+    gap: 4px;
+  }
+
+  .acct__who {
+    display: none;
+  }
+
+  .acct__trigger {
+    padding-right: 4px;
+    gap: 4px;
+  }
+
+  .acct__panel--notif {
+    right: -48px;
+    width: min(280px, calc(100vw - 32px));
+  }
+}
+
+.app__body {
+  display: flex;
+  align-items: flex-start;
+}
+
+.app__content {
+  flex: 1;
+  min-width: 0;
+}
+
+/* Pages were built full-screen; fit them below the top bar */
+.app .app__content > * {
+  min-height: calc(100vh - var(--appbar-h));
+}
+
+.app__backdrop {
+  display: none;
+}
+
+@media (max-width: 860px) {
+  .app__backdrop {
+    display: block;
+    position: fixed;
+    inset: var(--appbar-h) 0 0 0;
+    background: rgba(15, 23, 42, 0.35);
+    z-index: 30;
+  }
+}
+
+/* Phones: search collapses to an icon beside the account menu */
+@media (max-width: 640px) {
+  .app__bar {
+    grid-template-columns: minmax(0, 1fr) auto auto;
+    gap: 2px;
+  }
+}

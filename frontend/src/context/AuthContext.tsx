@@ -8,7 +8,9 @@ import {
   type ReactNode,
 } from "react";
 import type { Session, User } from "@supabase/supabase-js";
-import { supabase, isSupabaseConfigured } from "../lib/supabase";
+import { supabase, isSupabaseConfigured, isProviderEnabled, type OAuthProvider } from "../lib/supabase";
+import { clearPageData } from "../lib/pageData";
+import { resetRoleSync } from "../lib/roleSync";
 
 type AuthState = {
   user: User | null;
@@ -17,6 +19,8 @@ type AuthState = {
   isConfigured: boolean;
   signUp: (email: string, password: string) => Promise<{ error: string | null }>;
   signIn: (email: string, password: string) => Promise<{ error: string | null }>;
+  /** Google/GitHub sign-in: leaves the page for the provider, then comes back signed in */
+  signInWithProvider: (provider: OAuthProvider) => Promise<{ error: string | null }>;
   signOut: () => Promise<void>;
   resetPassword: (email: string) => Promise<{ error: string | null }>;
 };
@@ -40,7 +44,12 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       setLoading(false);
     });
 
-    const { data: sub } = supabase.auth.onAuthStateChange((_event, sess) => {
+    const { data: sub } = supabase.auth.onAuthStateChange((event, sess) => {
+      // Never show one account's remembered page data to another
+      if (event === "SIGNED_OUT") {
+        clearPageData();
+        resetRoleSync();
+      }
       setSession(sess);
       setUser(sess?.user ?? null);
       setLoading(false);
@@ -70,7 +79,23 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         if (error) return { error: error.message };
         return { error: null };
       },
+      signInWithProvider: async (provider) => {
+        if (!supabase) return { error: "Supabase not configured" };
+        const name = provider === "google" ? "Google" : "GitHub";
+        if (!(await isProviderEnabled(provider))) {
+          return { error: `${name} sign-in isn't switched on yet. Please use your email for now.` };
+        }
+        const { error } = await supabase.auth.signInWithOAuth({
+          provider,
+          // New accounts land on profile setup from here; existing ones on their career track
+          options: { redirectTo: `${window.location.origin}/career-track` },
+        });
+        if (error) return { error: error.message };
+        return { error: null };
+      },
       signOut: async () => {
+        clearPageData();
+        resetRoleSync();
         if (supabase) await supabase.auth.signOut();
       },
       resetPassword: async (email) => {
