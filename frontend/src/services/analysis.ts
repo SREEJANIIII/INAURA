@@ -44,7 +44,12 @@ export type AnalysisResult = {
     strengths_count?: number;
     priority_breakdown?: Record<string, number>;
     topic_gaps_count?: number;
+    evidence_fingerprint?: string | null;
   };
+  /** Your evidence was added to, deleted or switched off since this ran (null: not recorded) */
+  evidence_changed?: boolean | null;
+  /** This ran on an older version of the readiness formula */
+  scoring_outdated?: boolean;
 };
 
 export type SkillAssessment = {
