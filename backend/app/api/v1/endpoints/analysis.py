@@ -1,7 +1,7 @@
 from fastapi import APIRouter, Depends, HTTPException, Body
 from pydantic import BaseModel
 from ....schemas.analysis import AnalysisStateResponse, SetTargetRoleRequest, PrepareAnalysisRequest, PrepareAnalysisResponse
-from ....services import analysis_service, evidence_service
+from ....services import analysis_service, evidence_service, skill_engine
 from ....services.analysis_run_service import run_analysis
 from ....core.security import get_current_user, CurrentUser
 from ....core.supabase import get_supabase_client
@@ -64,6 +64,24 @@ async def run_skill_analysis(
     return result
 
 
+def with_freshness(row: dict, user_id: str) -> dict:
+    """Add whether a saved analysis still reflects the student's evidence and the current scoring.
+
+    evidence_changed: True/False when the run recorded what it was based on; None for older
+    runs that didn't. scoring_outdated: the run used an older version of the readiness formula.
+    """
+    recorded = (row.get("metadata") or {}).get("evidence_fingerprint")
+    changed = None
+    if recorded:
+        current = evidence_service.current_evidence_fingerprint(user_id)
+        changed = None if current is None else current != recorded
+    return {
+        **row,
+        "evidence_changed": changed,
+        "scoring_outdated": bool(row.get("engine_version")) and row.get("engine_version") != skill_engine.ENGINE_VERSION,
+    }
+
+
 @router.get("/latest")
 def get_latest_analysis(current_user: CurrentUser = Depends(get_current_user)):
     c = get_supabase_client()
@@ -73,7 +91,7 @@ def get_latest_analysis(current_user: CurrentUser = Depends(get_current_user)):
         r = c.table("analysis_results").select("*").eq("user_id", current_user.id).order("created_at", desc=True).limit(1).execute()
         if not r.data or len(r.data) == 0:
             raise HTTPException(status_code=404, detail="No analysis found — run analysis first")
-        return r.data[0]
+        return with_freshness(r.data[0], current_user.id)
     except HTTPException:
         raise
     except Exception as e:

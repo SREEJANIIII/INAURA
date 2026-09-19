@@ -3,6 +3,7 @@ from supabase import Client
 import asyncio
 from typing import List, Optional, Dict
 from datetime import datetime, timezone
+import hashlib
 import uuid
 import re
 
@@ -77,6 +78,34 @@ def _enrich_cert_row(row: dict) -> dict:
 
 
 # Evidence
+def evidence_fingerprint(evidence: List[dict], projects: List[dict], certs: List[dict]) -> str:
+    """A short fingerprint of what an analysis runs on: every evidence item, project and
+    certificate, and whether each is switched off or marked AI-assisted.
+
+    Adding, deleting or toggling any of them changes it. The analysis's own verification
+    writes (signals, verification status) don't, so a finished run never flags itself.
+    """
+    def flag(row: dict, key: str) -> int:
+        meta = row.get("metadata") or {}
+        value = row.get(key) if key in row else meta.get(key, False)
+        return 1 if value else 0
+
+    parts = sorted(
+        f"{kind}:{row.get('id')}:{flag(row, 'is_excluded')}:{flag(row, 'is_ai_assisted')}"
+        for kind, rows in (("evidence", evidence), ("project", projects), ("cert", certs))
+        for row in (rows or [])
+    )
+    return hashlib.sha256("|".join(parts).encode("utf-8")).hexdigest()[:16]
+
+
+def current_evidence_fingerprint(user_id: str) -> Optional[str]:
+    """The fingerprint of the evidence as it stands now, or None if it can't be read."""
+    try:
+        return evidence_fingerprint(list_evidence(user_id), list_projects(user_id), list_certs(user_id))
+    except Exception:
+        return None
+
+
 def list_evidence(user_id: str) -> List[dict]:
     c = _client()
     try:

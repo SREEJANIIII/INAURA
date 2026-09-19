@@ -1382,6 +1382,7 @@ def persist_analysis(
     strengths: Optional[List[dict]] = None,
     topic_gaps: Optional[List[dict]] = None,
     github_diagnostics: Optional[Dict[str, int]] = None,
+    evidence_fingerprint: Optional[str] = None,
 ) -> str:
     """Persist analysis run results and records to Supabase tables."""
     now = datetime.now(timezone.utc).isoformat()
@@ -1425,6 +1426,8 @@ def persist_analysis(
             },
             "topic_gaps_count": len(topic_gaps or []),
             "github_diagnostics": github_diagnostics or {},
+            # What this run was based on, so a later change of evidence can be spotted
+            "evidence_fingerprint": evidence_fingerprint,
         },
         "created_at": now,
         "updated_at": now,
@@ -1610,6 +1613,8 @@ async def run_analysis(user_id: str, target_role: str) -> dict:
 
     # 2. Load evidence
     evidence, projects, certs = load_evidence(user_id)
+    # Recorded with the result; taken now, before verification writes to these rows
+    fingerprint = evidence_service.evidence_fingerprint(evidence, projects, certs)
 
     # 2b. Best-effort backfill: parse legacy resume/syllabus uploads that
     # have no parsed_text yet so they still contribute skill signals.
@@ -1720,6 +1725,7 @@ async def run_analysis(user_id: str, target_role: str) -> dict:
         strengths=strengths,
         topic_gaps=topic_gaps,
         github_diagnostics=github_diagnostics,
+        evidence_fingerprint=fingerprint,
     )
 
     # 14. Return structured, versioned result matching frontend and API expectations

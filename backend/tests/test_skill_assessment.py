@@ -496,7 +496,7 @@ def test_existing_formulas_unchanged():
     assert skill_engine.READINESS_WEIGHTS == {"skill": 0.45, "industry": 0.25, "evidence": 0.30}
     assert skill_engine.readiness(0.6, 0.5, 0.4) == pytest.approx(0.45 * 0.6 + 0.25 * 0.5 + 0.30 * 0.4)
     assert skill_engine.gap(0.6, 0.8) == pytest.approx(0.2)
-    assert skill_engine.ENGINE_VERSION == "4C-v1"
+    assert skill_engine.ENGINE_VERSION == "4C-v2"
 
 
 def test_failed_reverification_keeps_previously_verified_evidence(monkeypatch):

@@ -4,7 +4,8 @@ import { getRoleSync, resetRoleSync, subscribeRoleSync } from "../../lib/roleSyn
 
 /**
  * Says what's happening while INAURA catches your analysis and roadmap up to a
- * newly chosen career. Shows nothing when there's nothing to say.
+ * newly chosen career, or re-runs an out-of-date analysis. Shows nothing when
+ * there's nothing to say.
  */
 export default function RoleSyncNotice() {
   const sync = useSyncExternalStore(subscribeRoleSync, getRoleSync);
@@ -27,14 +28,18 @@ export default function RoleSyncNotice() {
             Building your new weekly plan for <strong>{sync.role}</strong>…
           </>
         )}
-        {sync.stage === "done" && (sync.message ?? (
+        {sync.stage === "done" && (sync.message ?? (sync.reason === "refresh" ? (
+          <>
+            Your readiness for <strong>{sync.role}</strong> now reflects your current evidence.
+          </>
+        ) : (
           <>
             Your analysis and roadmap are now for <strong>{sync.role}</strong>.
           </>
-        ))}
+        )))}
         {sync.stage === "failed" && sync.message}
       </p>
-      {sync.stage === "done" && !sync.message && (
+      {sync.stage === "done" && !sync.message && sync.reason === "role" && (
         <Link to="/roadmap" className="ct-sync__link">See your plan</Link>
       )}
       {!busy && (
