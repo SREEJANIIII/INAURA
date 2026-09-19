@@ -26,19 +26,19 @@ async def generate_roadmap(
 
 
 @router.get("/latest")
-async def get_latest_roadmap(current_user: CurrentUser = Depends(get_current_user)):
+def get_latest_roadmap(current_user: CurrentUser = Depends(get_current_user)):
     data = roadmap_service.get_latest_roadmap(current_user.id)
     return data
 
 
 @router.get("/items")
-async def get_roadmap_items(current_user: CurrentUser = Depends(get_current_user)):
+def get_roadmap_items(current_user: CurrentUser = Depends(get_current_user)):
     data = roadmap_service.get_all_items_for_user(current_user.id)
     return data
 
 
 @router.get("/milestones")
-async def get_roadmap_milestones(current_user: CurrentUser = Depends(get_current_user)):
+def get_roadmap_milestones(current_user: CurrentUser = Depends(get_current_user)):
     data = roadmap_service.get_all_milestones_for_user(current_user.id)
     return data
 
@@ -63,7 +63,7 @@ async def patch_roadmap_item(
 # --- Weekly Adaptive Endpoints ---
 
 @router.get("/weeks")
-async def get_roadmap_weeks(
+def get_roadmap_weeks(
     roadmap_id: Optional[str] = Query(None),
     current_user: CurrentUser = Depends(get_current_user),
 ):
@@ -71,7 +71,7 @@ async def get_roadmap_weeks(
 
 
 @router.get("/weeks/{week_id}")
-async def get_roadmap_week(
+def get_roadmap_week(
     week_id: str,
     current_user: CurrentUser = Depends(get_current_user),
 ):
@@ -79,7 +79,7 @@ async def get_roadmap_week(
 
 
 @router.get("/tasks")
-async def get_roadmap_tasks(
+def get_roadmap_tasks(
     week_id: Optional[str] = Query(None),
     current_user: CurrentUser = Depends(get_current_user),
 ):

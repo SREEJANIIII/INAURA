@@ -6,7 +6,7 @@ python-dotenv
 python-multipart
 httpx
 supabase
-pyjwt
+pyjwt[crypto]
 pypdf
 python-docx
 langchain-google-genai

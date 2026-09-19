@@ -117,6 +117,10 @@ export type SkillCapability = {
   skill: string;
   slug: string;
   role: string;
+  /** Requirement category, e.g. "Frontend" (optional: older backends omit it) */
+  category?: string;
+  /** Canonical prerequisite skill slugs, e.g. ["javascript", "html_css"] */
+  prerequisites?: string[];
   proficiency: number;
   confidence: number;
   required_level: number;

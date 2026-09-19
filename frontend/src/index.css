@@ -1,4 +1,5 @@
 /* INAURA Design System — Tokens & Globals */
+@layer theme, base, components, utilities;
 /* Premium, minimal, human-designed: navy primary, restrained indigo accent */
 
 :root {
@@ -9,15 +10,15 @@
   --muted: #475569;
   --muted-2: #64748b;
   --muted-3: #94a3b8;
-  --line: #e2e8f0;
-  --line-strong: #cbd5e1;
-  --bg: #ffffff;
-  --bg-subtle: #f8fafc;
-  --bg-muted: #f1f5f9;
-  --bg-soft: #f8fafc;
+  --line: rgba(92, 80, 160, 0.14);
+  --line-strong: rgba(92, 80, 160, 0.24);
+  --bg: var(--glass-bg);
+  --bg-subtle: rgba(255, 255, 255, 0.34);
+  --bg-muted: rgba(255, 255, 255, 0.42);
+  --bg-soft: rgba(255, 255, 255, 0.34);
   --accent: #4f46e5;
   --accent-hover: #4338ca;
-  --accent-soft: #eef2ff;
+  --accent-soft: rgba(79, 70, 229, 0.1);
   --accent-soft-2: rgba(79, 70, 229, 0.08);
   --accent-border: rgba(79, 70, 229, 0.14);
   --success: #0f766e;
@@ -46,6 +47,17 @@
   --ease-out: cubic-bezier(0.2, 0.8, 0.2, 1);
   --duration: 0.6s;
   --duration-fast: 0.2s;
+
+  /* Liquid glass: every surface is frosted glass over one flowing colour field */
+  --glass-bg: rgba(255, 255, 255, 0.56);
+  --glass-bg-strong: rgba(255, 255, 255, 0.74);
+  --glass-bg-soft: rgba(255, 255, 255, 0.36);
+  --glass-edge: rgba(255, 255, 255, 0.72);
+  --glass-line: rgba(92, 80, 160, 0.14);
+  --glass-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.85), 0 12px 32px -18px rgba(62, 48, 140, 0.28);
+  --glass-shadow-lg: inset 0 1px 0 rgba(255, 255, 255, 0.9), 0 24px 60px -24px rgba(40, 30, 110, 0.38);
+  --glass-blur: blur(22px) saturate(170%);
+  --glass-blur-sm: blur(10px) saturate(150%);
 
   color-scheme: light;
 }
@@ -77,74 +89,123 @@ html {
   }
 }
 
+html {
+  background: #eceef8;
+}
+
 body {
   margin: 0;
   font-family: var(--sans);
   font-size: 16px;
   line-height: 1.65;
   color: var(--ink);
-  background: var(--bg);
+  background: transparent;
+}
+
+/* The colour field every glass surface sits on: soft pools of lavender, sky, peach and mint
+   that drift slowly. Fixed, so pages scroll over it like glass over light. */
+body::before,
+body::after {
+  content: "";
+  position: fixed;
+  inset: -25vmax;
+  z-index: -1;
+  pointer-events: none;
+}
+
+body::before {
+  background:
+    radial-gradient(34vmax 30vmax at 18% 22%, rgba(150, 120, 250, 0.62), transparent 70%),
+    radial-gradient(32vmax 30vmax at 84% 16%, rgba(100, 190, 255, 0.55), transparent 70%),
+    radial-gradient(36vmax 32vmax at 76% 84%, rgba(255, 170, 140, 0.5), transparent 70%),
+    radial-gradient(30vmax 28vmax at 22% 82%, rgba(120, 220, 185, 0.46), transparent 70%);
+  animation: liquid-drift 38s ease-in-out infinite alternate;
+  will-change: transform;
+}
+
+/* A second, slower layer so the colours flow through each other rather than just sliding */
+body::after {
+  background:
+    radial-gradient(26vmax 24vmax at 58% 42%, rgba(205, 165, 255, 0.42), transparent 70%),
+    radial-gradient(22vmax 22vmax at 38% 60%, rgba(140, 205, 255, 0.34), transparent 70%);
+  animation: liquid-drift-2 52s ease-in-out infinite alternate;
+  will-change: transform;
+}
+
+@keyframes liquid-drift {
+  0% { transform: translate3d(0, 0, 0) rotate(0deg) scale(1); }
+  50% { transform: translate3d(4vmax, -3vmax, 0) rotate(8deg) scale(1.06); }
+  100% { transform: translate3d(-3vmax, 3vmax, 0) rotate(-6deg) scale(1.02); }
+}
+
+@keyframes liquid-drift-2 {
+  0% { transform: translate3d(0, 0, 0) scale(1); }
+  100% { transform: translate3d(-6vmax, 4vmax, 0) scale(1.12); }
 }
 
 #root {
   min-height: 100svh;
   display: flex;
   flex-direction: column;
-  background: var(--bg);
+  background: transparent;
   isolation: isolate;
 }
 
-/* Typography */
-h1, h2, h3, h4 {
-  font-family: var(--display);
-  color: var(--ink);
-  letter-spacing: -0.03em;
-  line-height: 0.98;
-  margin: 0;
-  font-weight: 650;
-}
+/* Typography — in Tailwind's "base" layer, so Tailwind classes (e.g. in src/components/ui)
+   can size and colour their own headings; every INAURA class still overrides these as before */
+@layer base {
+  /* Typography */
+  h1, h2, h3, h4 {
+    font-family: var(--display);
+    color: var(--ink);
+    letter-spacing: -0.03em;
+    line-height: 0.98;
+    margin: 0;
+    font-weight: 650;
+  }
 
-h1 {
-  font-size: clamp(2.5rem, 6vw, 3.75rem);
-  line-height: 0.95;
-  letter-spacing: -0.045em;
-  font-weight: 700;
-}
+  h1 {
+    font-size: clamp(2.5rem, 6vw, 3.75rem);
+    line-height: 0.95;
+    letter-spacing: -0.045em;
+    font-weight: 700;
+  }
 
-h2 {
-  font-size: clamp(1.75rem, 4vw, 2.5rem);
-  letter-spacing: -0.035em;
-  line-height: 1;
-}
+  h2 {
+    font-size: clamp(1.75rem, 4vw, 2.5rem);
+    letter-spacing: -0.035em;
+    line-height: 1;
+  }
 
-h3 {
-  font-size: 1.25rem;
-  letter-spacing: -0.02em;
-  line-height: 1.2;
-}
+  h3 {
+    font-size: 1.25rem;
+    letter-spacing: -0.02em;
+    line-height: 1.2;
+  }
 
-p {
-  margin: 0;
-  color: var(--muted);
-  line-height: 1.65;
-}
+  p {
+    margin: 0;
+    color: var(--muted);
+    line-height: 1.65;
+  }
 
-a {
-  color: var(--ink);
-  text-decoration: none;
-}
+  a {
+    color: var(--ink);
+    text-decoration: none;
+  }
 
-a:hover {
-  color: var(--accent);
-}
+  a:hover {
+    color: var(--accent);
+  }
 
-:focus-visible {
-  outline: 2px solid var(--accent);
-  outline-offset: 2px;
-}
+  :focus-visible {
+    outline: 2px solid var(--accent);
+    outline-offset: 2px;
+  }
 
-::selection {
-  background: var(--accent-soft);
+  ::selection {
+    background: var(--accent-soft);
+  }
 }
 
 /* Utilities */

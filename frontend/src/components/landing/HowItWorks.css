@@ -20,8 +20,8 @@
 }
 
 .how__card {
-  background: #fff;
-  border: 1px solid var(--line);
+  background: var(--glass-bg);
+  border: 1px solid var(--glass-edge);
   border-radius: 16px;
   padding: 20px 18px 18px;
   display: flex;
@@ -93,19 +93,32 @@
 .how__bar span {
   display: block;
   height: 100%;
-  width: 38%;
+  width: 100%;
   background: var(--ink);
   border-radius: 9999px;
-  transition: width 0.4s var(--ease-out);
+  /* Filled by scroll: scaleX grows from the left */
+  transform-origin: left center;
 }
 
-.how__card:nth-child(2) .how__bar span { width: 56%; background: var(--ink); }
-.how__card:nth-child(3) .how__bar span { width: 72%; background: var(--accent); }
-.how__card:nth-child(4) .how__bar span { width: 84%; background: var(--accent); }
-.how__card:nth-child(5) .how__bar span { width: 100%; background: #0f766e; }
+.lp-cell:nth-child(3) .how__bar span,
+.lp-cell:nth-child(4) .how__bar span { background: var(--accent); }
+.lp-cell:nth-child(5) .how__bar span { background: #0f766e; }
 
-.how__card:hover .how__bar span {
-  width: 100% !important;
+/* Pinned scene (wide screens): the section holds still while the steps play */
+.how__track--pinned {
+  height: 300vh;
+}
+
+.how__track--pinned .how__stage {
+  position: sticky;
+  top: var(--nav-clear, 86px); /* below the floating navbar */
+  min-height: calc(100vh - var(--nav-clear, 86px));
+  display: flex;
+  align-items: center;
+}
+
+.how__track--pinned .how__stage > .container {
+  padding-block: 24px;
 }
 
 .how__note {

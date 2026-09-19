@@ -50,6 +50,7 @@ from . import analysis_service
 from . import skill_engine as engine
 from .roadmap_catalog import get_resources_for_skill, get_template_for_skill
 from .skill_taxonomy import normalize_skill, normalize_skill_slug
+from . import skill_dependencies
 
 
 # ---------------------------------------------------------------------------
@@ -1246,6 +1247,10 @@ def build_skill_capability(
         "skill": canonical or skill,
         "slug": slug,
         "role": role,
+        # Additive context for the Career Track view: the requirement's category and
+        # the canonical learning prerequisites from skill_dependencies (read-only).
+        "category": str((requirement or {}).get("skill_category") or ""),
+        "prerequisites": skill_dependencies.get_prerequisites(slug),
         "proficiency": proficiency,
         "confidence": confidence,
         "required_level": 0.0,

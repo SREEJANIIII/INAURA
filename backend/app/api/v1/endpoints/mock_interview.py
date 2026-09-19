@@ -29,7 +29,7 @@ async def start_mock_interview(
 
 
 @router.get("/{session_id}", response_model=MockInterviewSessionOut)
-async def get_mock_interview(session_id: str, current_user: CurrentUser = Depends(get_current_user)):
+def get_mock_interview(session_id: str, current_user: CurrentUser = Depends(get_current_user)):
     """Load session state (plan + current question)."""
     return svc.get_session(user_id=current_user.id, session_id=session_id)
 
@@ -58,6 +58,6 @@ async def complete_mock_interview(
 
 
 @router.get("/{session_id}/report", response_model=MockInterviewReport)
-async def get_mock_report(session_id: str, current_user: CurrentUser = Depends(get_current_user)):
+def get_mock_report(session_id: str, current_user: CurrentUser = Depends(get_current_user)):
     """Read the evidence report for a completed session."""
     return svc.build_report(user_id=current_user.id, session_id=session_id)

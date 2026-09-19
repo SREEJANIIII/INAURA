@@ -1,0 +1,107 @@
+/*
+ * Tailwind for shadcn-style components in src/components/ui.
+ * Only the theme and utility classes are loaded, not Tailwind's reset ("preflight"),
+ * so the app's existing hand-written styles look exactly as before.
+ */
+@layer theme, base, components, utilities;
+@import "tailwindcss/theme.css" layer(theme);
+@import "tailwindcss/utilities.css" layer(utilities);
+
+/* INAURA has no dark mode, so "dark:" styles apply only inside a .dark element (the dark
+   interview screen, the landing page's dark band), never from the phone's or computer's setting */
+@custom-variant dark (&:where(.dark, .dark *));
+
+/* shadcn colour names, mapped to INAURA's palette */
+@theme {
+  --color-background: #ffffff;
+  --color-foreground: #0f172a;
+  --color-primary: #171b2f;
+  --color-primary-foreground: #ffffff;
+  --color-secondary: #f1f5f9;
+  --color-secondary-foreground: #0f172a;
+  --color-muted: #f1f5f9;
+  --color-muted-foreground: #64748b;
+  --color-accent: #edeaf8;
+  --color-accent-foreground: #4b3d91;
+  --color-destructive: #dc2626;
+  --color-border: #e2e8f0;
+  --color-input: #e2e8f0;
+  --color-ring: #6452b0;
+  --color-card: rgba(255, 255, 255, 0.56);
+  --color-card-foreground: #0f172a;
+  --color-destructive-foreground: #ffffff;
+  /* Chart colours: INAURA's soft lavender, sky, peach, mint and rose */
+  --color-chart-1: #a78bfa;
+  --color-chart-2: #7cc4fa;
+  --color-chart-3: #fdba8c;
+  --color-chart-4: #86e3c3;
+  --color-chart-5: #f9a8d4;
+  --font-serif: "Newsreader", "Iowan Old Style", "Palatino Linotype", Georgia, serif;
+}
+
+/* Plain shadcn colour names some components read directly (e.g. var(--foreground)) */
+:root {
+  --foreground: #0f172a;
+  --background: #ffffff;
+}
+
+/* Tailwind's own "container" would otherwise also apply to INAURA's .container (landing page)
+   and narrow it at some screen widths; match INAURA's definition instead */
+@utility container {
+  width: min(1200px, calc(100% - 48px));
+  margin-inline: auto;
+}
+
+/* The same names on dark backgrounds, so buttons stay readable there */
+@layer base {
+  .dark {
+    --color-primary: #f1f5f9;
+    --color-primary-foreground: #0f172a;
+    --color-destructive: #fca5a5;
+    --color-ring: #a5b4fc;
+  }
+}
+
+/*
+ * Tailwind's reset, but only inside .tw-scope. INAURA doesn't load the global reset (it would
+ * restyle every page), so shadcn components that expect it opt in by sitting inside .tw-scope.
+ * It's in the base layer: the component's own classes still win.
+ */
+@layer base {
+  .tw-scope *,
+  .tw-scope ::before,
+  .tw-scope ::after {
+    box-sizing: border-box;
+    margin: 0;
+    padding: 0;
+    border: 0 solid;
+  }
+  .tw-scope :where(button, input, select, textarea) {
+    font: inherit;
+    letter-spacing: inherit;
+    color: inherit;
+    background-color: transparent;
+    border-radius: 0;
+  }
+  .tw-scope :where(button) {
+    cursor: pointer;
+    appearance: none;
+  }
+  .tw-scope :where(hr) {
+    height: 0;
+    color: inherit;
+    border-top-width: 1px;
+  }
+  .tw-scope :where(img, svg, canvas) {
+    display: block;
+    vertical-align: middle;
+  }
+  /* Images keep their own shape unless a class sizes both sides */
+  .tw-scope :where(img) {
+    max-width: 100%;
+    height: auto;
+  }
+  .tw-scope :where(fieldset) {
+    min-width: 0;
+  }
+}

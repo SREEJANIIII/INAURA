@@ -4,9 +4,10 @@
 }
 
 .results__header {
-  background: #fff;
+  background: var(--glass-bg);
   border-bottom: 1px solid var(--line);
   padding: 28px 0 20px;
+  box-shadow: var(--glass-shadow);
 }
 
 .results__back {
@@ -47,15 +48,15 @@
 }
 
 .results__card {
-  background: #fff;
-  border: 1px solid var(--line);
+  background: var(--glass-bg);
+  border: 1px solid var(--glass-edge);
   border-radius: 16px;
   padding: 20px;
   box-shadow: var(--shadow-sm);
 }
 
 .results__card--primary {
-  background: linear-gradient(180deg, #fff, #f8fafc);
+  background: linear-gradient(160deg, rgba(255, 255, 255, 0.72) 0%, rgba(255, 255, 255, 0.46) 100%);
   border-color: var(--line);
 }
 
@@ -102,8 +103,8 @@
 }
 
 .results__section {
-  background: #fff;
-  border: 1px solid var(--line);
+  background: var(--glass-bg);
+  border: 1px solid var(--glass-edge);
   border-radius: 18px;
   padding: 22px;
   box-shadow: var(--shadow-sm);
@@ -287,10 +288,11 @@
 .results__gap-card {
   display: flex;
   gap: 12px;
-  background: #fff;
-  border: 1px solid var(--line);
+  background: var(--glass-bg);
+  border: 1px solid var(--glass-edge);
   border-radius: 12px;
   padding: 14px;
+  box-shadow: var(--glass-shadow);
 }
 
 .results__gap-num {
@@ -307,8 +309,8 @@
 }
 
 .results__next {
-  background: #fff;
-  border: 1px solid var(--line);
+  background: var(--glass-bg);
+  border: 1px solid var(--glass-edge);
   border-radius: 18px;
   padding: 22px;
   text-align: center;
@@ -405,10 +407,11 @@
 }
 
 .results__pillar-box {
-  background: #fff;
-  border: 1px solid var(--line);
+  background: var(--glass-bg);
+  border: 1px solid var(--glass-edge);
   border-radius: 10px;
   padding: 10px 12px;
+  box-shadow: var(--glass-shadow);
 }
 
 .results__pillar-top {
@@ -548,10 +551,11 @@
 }
 
 .results__quadrant-card {
-  background: #fff;
-  border: 1px solid var(--line);
+  background: var(--glass-bg);
+  border: 1px solid var(--glass-edge);
   border-radius: 12px;
   padding: 14px;
+  box-shadow: var(--glass-shadow);
 }
 
 .results__quadrant-card--strong {
@@ -636,7 +640,7 @@
 .results__evidence-link--small { font-size: 0.74rem; padding: 3px 7px; }
 
 .results__override-btn {
-  background: #fff;
+  background: var(--glass-bg);
   border: 1px solid #fecaca;
   color: #dc2626;
   border-radius: 6px;
@@ -697,21 +701,26 @@
 .prov__overlay {
   position: fixed;
   inset: 0;
-  background: rgba(15,23,42,0.48);
+  background: rgba(30, 24, 70, 0.26);
   display: grid;
   place-items: center;
   z-index: 60;
   padding: 16px;
+  backdrop-filter: blur(6px);
+  -webkit-backdrop-filter: blur(6px);
 }
 .prov__drawer {
-  background: #fff;
+  background: var(--glass-bg-strong);
   border-radius: 16px;
   max-width: 720px;
   width: 100%;
   max-height: 88vh;
   overflow-y: auto;
-  box-shadow: 0 20px 60px rgba(0,0,0,0.18);
+  box-shadow: var(--glass-shadow-lg);
   padding: 18px;
+  border: 1px solid var(--glass-edge);
+  backdrop-filter: var(--glass-blur);
+  -webkit-backdrop-filter: var(--glass-blur);
 }
 .prov__header {
   display: flex;

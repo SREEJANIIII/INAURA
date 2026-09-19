@@ -31,7 +31,7 @@ router = APIRouter(prefix="/evidence", tags=["evidence"])
 # raises 500 "Failed to fetch evidence" (invalid UUID).
 # ---------------------------------------------------------------------------
 @router.get("/github-repos")
-async def list_github_repos(current_user: CurrentUser = Depends(get_current_user)):
+def list_github_repos(current_user: CurrentUser = Depends(get_current_user)):
     """
     List all discovered GitHub repositories for the current user with their personalization state.
     Each repo has independent included/excluded and AI-assisted flags. Defaults: included, not AI.
@@ -142,7 +142,7 @@ async def set_github_repo_ai_assisted(
 
 # Generic evidence
 @router.get("", response_model=list[EvidenceResponse])
-async def list_evidence(current_user: CurrentUser = Depends(get_current_user)):
+def list_evidence(current_user: CurrentUser = Depends(get_current_user)):
     return evidence_service.list_evidence(current_user.id)
 
 
@@ -227,7 +227,7 @@ async def reparse_evidence_file(
 
 # Projects
 @router.get("/projects", response_model=list[ProjectResponse])
-async def list_projects(current_user: CurrentUser = Depends(get_current_user)):
+def list_projects(current_user: CurrentUser = Depends(get_current_user)):
     return evidence_service.list_projects(current_user.id)
 
 
@@ -248,7 +248,7 @@ async def delete_project(
 
 # Certifications
 @router.get("/certifications", response_model=list[CertResponse])
-async def list_certs(current_user: CurrentUser = Depends(get_current_user)):
+def list_certs(current_user: CurrentUser = Depends(get_current_user)):
     return evidence_service.list_certs(current_user.id)
 
 
@@ -369,7 +369,7 @@ async def set_cert_excluded(
 
 # Summary — convenience for frontend
 @router.get("/summary")
-async def evidence_summary(current_user: CurrentUser = Depends(get_current_user)):
+def evidence_summary(current_user: CurrentUser = Depends(get_current_user)):
     evidence = evidence_service.list_evidence(current_user.id)
     projects = evidence_service.list_projects(current_user.id)
     certs = evidence_service.list_certs(current_user.id)

@@ -17,13 +17,13 @@ router = APIRouter(prefix="/industry", tags=["industry"])
 
 
 @router.get("/roles/catalog", response_model=List[RoleSummaryResponse])
-async def get_roles_catalog(current_user: CurrentUser = Depends(get_current_user)):
+def get_roles_catalog(current_user: CurrentUser = Depends(get_current_user)):
     """Return all 11 catalog roles with structured metadata and benchmark sources."""
     return list_catalog_roles()
 
 
 @router.get("/roles/compare", response_model=RoleComparisonResponse)
-async def compare_roles_endpoint(
+def compare_roles_endpoint(
     role_a: str = Query(..., description="First role title, e.g. Frontend Developer"),
     role_b: str = Query(..., description="Second role title, e.g. Full Stack Developer"),
     current_user: CurrentUser = Depends(get_current_user),
@@ -35,13 +35,13 @@ async def compare_roles_endpoint(
 
 
 @router.get("/roles", response_model=List[str])
-async def get_roles(current_user: CurrentUser = Depends(get_current_user)):
+def get_roles(current_user: CurrentUser = Depends(get_current_user)):
     """Return list of distinct role names available in industry knowledge."""
     return industry_service.list_roles()
 
 
 @router.get("/requirements", response_model=List[IndustryRequirementResponse])
-async def get_requirements(
+def get_requirements(
     role: str = Query(..., description="Role name e.g., Software Engineer"),
     current_user: CurrentUser = Depends(get_current_user),
 ):

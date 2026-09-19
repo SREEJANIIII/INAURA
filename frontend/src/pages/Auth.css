@@ -4,13 +4,13 @@
   display: grid;
   place-items: center;
   padding: 40px 16px;
-  background: var(--bg-subtle);
+  background: transparent;
 }
 
 .auth__card {
   width: min(440px, 100%);
-  background: #fff;
-  border: 1px solid var(--line);
+  background: var(--glass-bg);
+  border: 1px solid var(--glass-edge);
   border-radius: 20px;
   box-shadow: var(--shadow);
   padding: 32px 28px 28px;
@@ -73,7 +73,7 @@
   padding: 11px 13px;
   border: 1px solid var(--line-strong);
   border-radius: 12px;
-  background: #fff;
+  background: var(--glass-bg-strong);
   font-size: 0.95rem;
   color: var(--ink);
   transition: border-color 0.15s, box-shadow 0.15s;
@@ -238,7 +238,7 @@
   padding: 7px 12px;
   border-radius: 9999px;
   border: 1px solid var(--line);
-  background: #fff;
+  background: var(--glass-bg);
   font-size: 0.86rem;
   font-weight: 550;
   color: var(--ink-700);

@@ -8,7 +8,7 @@ router = APIRouter(prefix="/analysis", tags=["analysis"])
 
 
 @router.get("/capability-map", response_model=CapabilityMapResponse)
-async def get_capability_map(
+def get_capability_map(
     target_role: Optional[str] = Query(default=None, description="Target role, e.g. Backend Developer"),
     skill: Optional[str] = Query(default=None, description="Optional single skill filter, e.g. Python"),
     current_user: CurrentUser = Depends(get_current_user),

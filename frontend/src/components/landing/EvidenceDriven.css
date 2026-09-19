@@ -22,10 +22,11 @@
 
 .evidence__list {
   margin-top: 28px;
-  background: #fff;
-  border: 1px solid var(--line);
+  background: var(--glass-bg);
+  border: 1px solid var(--glass-edge);
   border-radius: 16px;
   padding: 16px;
+  box-shadow: var(--glass-shadow);
 }
 
 .evidence__list-head {
@@ -57,7 +58,7 @@
 
 .evidence__chip:hover {
   border-color: var(--line-strong);
-  background: #fff;
+  background: var(--glass-bg);
 }
 
 .evidence__hint {
@@ -75,8 +76,8 @@
 }
 
 .evidence__mock {
-  background: #fff;
-  border: 1px solid var(--line);
+  background: var(--glass-bg);
+  border: 1px solid var(--glass-edge);
   border-radius: 20px;
   box-shadow: var(--shadow);
   overflow: hidden;
@@ -124,7 +125,7 @@
   padding: 12px 12px;
   border: 1px solid var(--line);
   border-radius: 12px;
-  background: #fff;
+  background: var(--glass-bg);
   transition: border-color 0.15s, background 0.15s;
 }
 
@@ -186,7 +187,7 @@
 }
 
 .evidence__row-pill--muted {
-  background: #fff;
+  background: var(--glass-bg);
   color: var(--muted-2);
 }
 

@@ -94,6 +94,34 @@ export function normalizeTechnicalTerms(text: string): string {
   return s;
 }
 
+/** The shape of one recognition result this module reads. */
+type RecognitionResultLike = {
+  readonly isFinal: boolean;
+  readonly [index: number]: { readonly transcript: string };
+};
+
+/**
+ * Split one recognition event into settled text and the browser's running guess.
+ *
+ * Only `final` results are settled. Interim results are re-delivered, reworded and
+ * extended as the browser hears more, so anything that appends them verbatim ends
+ * up repeating every half-finished phrase.
+ */
+export function splitRecognitionResults(event: {
+  resultIndex: number;
+  results: ArrayLike<RecognitionResultLike>;
+}): { final: string; interim: string } {
+  let final = "";
+  let interim = "";
+  for (let i = event.resultIndex; i < event.results.length; i++) {
+    const result = event.results[i];
+    if (!result) continue;
+    if (result.isFinal) final += result[0].transcript;
+    else interim += result[0].transcript;
+  }
+  return { final, interim };
+}
+
 /**
  * Append a newly finalized transcript chunk, guarding against browsers that
  * re-deliver the same final result (which would otherwise duplicate text).
@@ -222,17 +250,7 @@ export function useSpeechRecognition(
       recog.maxAlternatives = 1;
 
       recog.onresult = (ev: SpeechRecognitionEvent) => {
-        let interim = "";
-        let newFinal = "";
-        for (let i = ev.resultIndex; i < ev.results.length; i++) {
-          const res = ev.results[i];
-          const t = res[0].transcript;
-          if (res.isFinal) {
-            newFinal += t;
-          } else {
-            interim += t;
-          }
-        }
+        const { final: newFinal, interim } = splitRecognitionResults(ev);
 
         if (newFinal) {
           const updated = mergeFinalTranscript(finalTranscriptRef.current, newFinal);

@@ -1,5 +1,21 @@
 import { describe, it } from "node:test";
 import assert from "node:assert";
+import {
+  mergeFinalTranscript,
+  normalizeTechnicalTerms,
+  splitRecognitionResults,
+} from "../src/hooks/useSpeechRecognition.ts";
+
+/** One recognition event as the browser delivers it. */
+function recognitionEvent(
+  results: Array<{ transcript: string; isFinal: boolean }>,
+  resultIndex = 0
+) {
+  return {
+    resultIndex,
+    results: results.map((r) => ({ isFinal: r.isFinal, 0: { transcript: r.transcript } })),
+  };
+}
 
 // Mock minimal DOM types for Node environment testing
 class MockMediaStreamTrack {
@@ -129,31 +145,6 @@ describe("1. Media Devices & Stream Management", () => {
 });
 
 describe("2. Technical Transcription & Vocabulary Quality", () => {
-  function normalizeTechnicalTerms(text: string): string {
-    let s = text;
-    const terms: Array<[RegExp, string]> = [
-      [/\b(fast\s*api|fastapi)\b/gi, "FastAPI"],
-      [/\b(post\s*gres|postgres|postgresql)\b/gi, "PostgreSQL"],
-      [/\b(pg\s*vector|pgvector)\b/gi, "pgvector"],
-      [/\b(type\s*script|typescript)\b/gi, "TypeScript"],
-      [/\b(java\s*script|javascript)\b/gi, "JavaScript"],
-      [/\b(rest\s*api|restful\s*api)\b/gi, "REST API"],
-      [/\b(rag)\b/gi, "RAG"],
-      [/\b(gemini)\b/gi, "Gemini"],
-      [/\b(docker)\b/gi, "Docker"],
-      [/\b(kubernetes|k8s)\b/gi, "Kubernetes"],
-      [/\b(oop)\b/gi, "OOP"],
-      [/\b(sql)\b/gi, "SQL"],
-      [/\b(lang\s*chain|langchain)\b/gi, "LangChain"],
-      [/\b(supabase)\b/gi, "Supabase"],
-      [/\b(react)\b/gi, "React"],
-    ];
-    for (const [regex, replacement] of terms) {
-      s = s.replace(regex, replacement);
-    }
-    return s;
-  }
-
   it("normalizes common technical spoken names without altering sentence semantics", () => {
     const raw = "we built a rest api using fast api with post gres and pg vector for rag embeddings in gemini";
     const cleaned = normalizeTechnicalTerms(raw);
@@ -174,6 +165,43 @@ describe("2. Technical Transcription & Vocabulary Quality", () => {
     const normalized = normalizeTechnicalTerms(raw);
     assert.strictEqual(raw, "I used post gray SQL with pg vector");
     assert.notStrictEqual(normalized, raw);
+  });
+
+  it("takes only settled text from a recognition event, never the running guess", () => {
+    const event = recognitionEvent([
+      { transcript: "I built a REST API ", isFinal: true },
+      { transcript: "using fast", isFinal: false },
+    ]);
+    const { final, interim } = splitRecognitionResults(event);
+    assert.strictEqual(final, "I built a REST API ");
+    assert.strictEqual(interim, "using fast");
+  });
+
+  it("dictating a phrase writes it once, not once per interim guess", () => {
+    // What a browser really delivers while someone says one sentence
+    const stream = [
+      recognitionEvent([{ transcript: "I built", isFinal: false }]),
+      recognitionEvent([{ transcript: "I built a rest", isFinal: false }]),
+      recognitionEvent([{ transcript: "I built a rest api", isFinal: false }]),
+      recognitionEvent([{ transcript: "I built a rest api", isFinal: true }]),
+    ];
+
+    let answer = "";
+    for (const event of stream) {
+      const { final } = splitRecognitionResults(event);
+      if (!final.trim()) continue;
+      answer = mergeFinalTranscript(answer, normalizeTechnicalTerms(final));
+    }
+
+    assert.strictEqual(answer, "I built a REST API");
+  });
+
+  it("keeps appending across separate phrases without swallowing or repeating them", () => {
+    let answer = mergeFinalTranscript("", "I built a REST API");
+    answer = mergeFinalTranscript(answer, "with PostgreSQL");
+    // A browser re-delivering the same final chunk must not double it
+    answer = mergeFinalTranscript(answer, "with PostgreSQL");
+    assert.strictEqual(answer, "I built a REST API with PostgreSQL");
   });
 });
 
