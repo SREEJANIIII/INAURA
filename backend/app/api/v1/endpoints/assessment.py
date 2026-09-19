@@ -25,6 +25,12 @@ from ....schemas.assessment import (
     SubmitInterviewResponsesResponse,
     SubmitPracticalRequest,
     SubmitPracticalResponse,
+    DsaChecklistProgressRequest,
+    DsaChecklistToggleRequest,
+    DsaLeetCodeSyncRequest,
+    DsaLeetCodeSyncResponse,
+    DsaBulkImportRequest,
+    DsaBulkImportResponse,
 )
 from ....services.assessment import service as assessment_service
 from ....services.assessment import interview as interview_service
@@ -32,6 +38,7 @@ from ....services.assessment import practical_service
 from ....services.assessment.question_bank import DEFAULT_QUESTION_COUNT
 from ....services import tts_service
 from ....services import stt_service
+from ....services import dsa_checklist_service
 
 router = APIRouter(prefix="/analysis/assessment", tags=["assessment"])
 
@@ -212,4 +219,73 @@ async def answer_interview_question(
         session_id=session_id,
         question_id=payload.question_id,
         transcript=payload.transcript,
+    )
+
+
+# ---------------------------------------------------------------------------
+# Layer 4 — Compulsory Industry DSA Pattern Checklist (NeetCode / Blind 75)
+# ---------------------------------------------------------------------------
+
+@router.get("/dsa-checklist")
+def get_dsa_checklist(current_user: CurrentUser = Depends(get_current_user)):
+    """Fetch the curated industry-standard DSA question bank and user's solved progress."""
+    return dsa_checklist_service.get_user_dsa_progress(current_user.id)
+
+
+@router.post("/dsa-checklist/progress")
+async def save_dsa_checklist_progress(
+    payload: DsaChecklistProgressRequest,
+    current_user: CurrentUser = Depends(get_current_user),
+):
+    """Save solved question IDs and update user's DSA skill gap."""
+    return await dsa_checklist_service.save_user_dsa_progress(
+        user_id=current_user.id,
+        solved_question_ids=payload.solved_question_ids,
+    )
+
+
+@router.post("/dsa-checklist/toggle")
+async def toggle_dsa_question(
+    payload: DsaChecklistToggleRequest,
+    current_user: CurrentUser = Depends(get_current_user),
+):
+    """Toggle a single DSA question's solved state and dynamically update DSA skill gap."""
+    progress = dsa_checklist_service.get_user_dsa_progress(current_user.id)
+    current_solved = set(progress.get("solved_ids", []))
+    if payload.solved:
+        current_solved.add(payload.question_id)
+    else:
+        current_solved.discard(payload.question_id)
+    return await dsa_checklist_service.save_user_dsa_progress(
+        user_id=current_user.id,
+        solved_question_ids=list(current_solved),
+    )
+
+
+@router.post("/dsa-checklist/sync-leetcode", response_model=DsaLeetCodeSyncResponse)
+async def sync_dsa_leetcode(
+    payload: DsaLeetCodeSyncRequest,
+    current_user: CurrentUser = Depends(get_current_user),
+):
+    """
+    Fetch user's recent accepted submissions from LeetCode, match against compulsory pattern questions,
+    and automatically update progress & DSA skill gap.
+    """
+    return await dsa_checklist_service.sync_leetcode_solved(
+        user_id=current_user.id,
+        username=payload.username,
+    )
+
+
+@router.post("/dsa-checklist/import-text", response_model=DsaBulkImportResponse)
+async def import_dsa_text(
+    payload: DsaBulkImportRequest,
+    current_user: CurrentUser = Depends(get_current_user),
+):
+    """
+    Parse problem names, slugs, or URLs from text and mark them as solved in the DSA checklist.
+    """
+    return await dsa_checklist_service.import_solved_from_text(
+        user_id=current_user.id,
+        raw_text=payload.text,
     )

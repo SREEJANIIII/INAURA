@@ -16,6 +16,7 @@ import { type AvailableAssessment } from "../services/assessment";
 import { generateRoadmap } from "../services/roadmap";
 import AssessmentModal from "../components/assessment/AssessmentModal";
 import SkillAssessmentLayers from "../components/assessment/SkillAssessmentLayers";
+import DsaChecklist from "../components/assessment/DsaChecklist";
 import SkillEvidenceCard from "../components/analysis/SkillEvidenceCard";
 import Button from "../components/ui/app-button";
 import { profileData, resultsPageData, roadmapPageData, subscribePageData } from "../lib/pageData";
@@ -409,24 +410,26 @@ export default function AnalysisResults() {
     );
   }
 
-  if (focusView) {
+  if (focusView === "dsa") {
     return (
-      <div className="results">
-        <main className="container results__main">
-          <Link to="/analysis/results" className="results__back" style={{ alignSelf: "flex-start" }}>
-            ← Full analysis
-          </Link>
-          {focusView === "dsa" && (
-            <section className="results__section" id="dsa">
-              <h2>DSA Topic Coverage Analysis</h2>
-              {coding.hasDsa ? (
-                <DsaCoverage data={coding} />
-              ) : (
-                <p>Add your LeetCode profile under Evidence → Profile URLs, then run your analysis again to see your DSA topic coverage.</p>
-              )}
+      <div className="an">
+        <div className="an__inner">
+          <Link to="/analysis/results" className="an-link sa-back">← Full analysis</Link>
+
+          {/* Interactive Compulsory Questions & Pattern Checklist */}
+          <DsaChecklist onProgressUpdate={() => void reload(true)} />
+
+          {/* Connected LeetCode profile insights if available */}
+          {coding.hasDsa && (
+            <section className="an-sec" style={{ marginTop: "24px" }} aria-labelledby="h-lc-coverage">
+              <header className="an-sec__head">
+                <h2 id="h-lc-coverage">Connected LeetCode Profile Insights</h2>
+                <p>Real-time submission analytics parsed from your verified LeetCode profile.</p>
+              </header>
+              <DsaCoverage data={coding} />
             </section>
           )}
-        </main>
+        </div>
         {overlays}
       </div>
     );

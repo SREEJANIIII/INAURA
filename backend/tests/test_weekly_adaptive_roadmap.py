@@ -151,3 +151,66 @@ def test_backward_compatibility_preserved():
     assert rs.validate_completion_percentage(50) == 50.0
     with pytest.raises(Exception):
         rs.validate_completion_percentage(150)
+
+
+# 6. Comprehensive Multi-Month & Granular Decomposition Tests
+
+def test_granular_task_decomposition_multi_tasks():
+    # When granular=True, returns 6 to 8 structured tasks covering sub-topics and practical drills
+    tasks = rc.decompose_skill_into_tasks(
+        canonical="python",
+        total_hours=20.0,
+        learner_state_classification="UNKNOWN",
+        target_role="Software Engineer",
+        granular=True,
+    )
+    assert len(tasks) >= 6
+    stages = set(t["task_type"] for t in tasks)
+    assert stages == {"learn", "practice", "build", "validate"}
+    total_mins = sum(t["estimated_minutes"] for t in tasks)
+    assert total_mins == 1200  # 20 hours * 60 minutes
+
+
+def test_realistic_multi_month_hours_estimation():
+    # Full curriculum realistic hours for industry readiness
+    dsa_hours = rs.estimate_hours_for_gap("dsa", 0.8, 0.95, learner_state="UNKNOWN")
+    assert dsa_hours >= 30.0  # Real DSA mastery requires substantial commitment
+
+    sys_design_hours = rs.estimate_hours_for_gap("system_design", 0.7, 0.90, learner_state="UNKNOWN")
+    assert sys_design_hours >= 24.0
+
+    # 10 role gaps totaling ~180-240h
+    gaps = [
+        ("dsa", 0.8, 0.95),
+        ("system_design", 0.7, 0.90),
+        ("python", 0.6, 0.85),
+        ("sql", 0.5, 0.80),
+        ("docker", 0.5, 0.75),
+        ("rest_apis", 0.6, 0.85),
+        ("testing", 0.5, 0.80),
+        ("operating_systems", 0.6, 0.75),
+        ("computer_networks", 0.6, 0.75),
+        ("git", 0.4, 0.80),
+    ]
+    total_hours = sum(rs.estimate_hours_for_gap(c, g, i, learner_state="UNKNOWN") for c, g, i in gaps)
+    assert total_hours >= 150.0  # Industry-readiness requires deep cumulative hours
+
+    # At 10 hours/week, this spans 18-24 weeks (4.5 to 6 months)
+    weeks_at_10h = rs.estimate_weeks(total_hours, 10)
+    assert weeks_at_10h >= 15  # Multi-month curriculum!
+
+    # At 15 hours/week, this spans 12-16 weeks (3 to 4 months)
+    weeks_at_15h = rs.estimate_weeks(total_hours, 15)
+    assert weeks_at_15h >= 10
+
+
+def test_limit_gaps_supports_full_role_curriculum():
+    # When max_items=None, retains all non-zero gaps (up to 24) instead of truncating at 6
+    twelve_gaps = [{"id": f"g{i}", "skill_id": f"s{i}", "gap": 0.5, "priority_score": 100 - i} for i in range(12)]
+    filtered = rs.filter_and_sort_gaps(twelve_gaps)
+    unlimited = rs.limit_gaps(filtered, max_items=None)
+    assert len(unlimited) == 12  # All 12 role skills preserved!
+
+    # Explicit max_items still supported
+    limited = rs.limit_gaps(filtered, max_items=6)
+    assert len(limited) == 6

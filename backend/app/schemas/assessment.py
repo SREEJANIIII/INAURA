@@ -354,3 +354,38 @@ class AnswerInterviewResponse(BaseModel):
     provider_status: Optional[int] = None
     provider_code: Optional[str] = None
     retry_after: Optional[str] = None
+
+
+class DsaChecklistProgressRequest(BaseModel):
+    solved_question_ids: List[str] = Field(default_factory=list, description="List of question IDs the student has solved")
+
+
+class DsaChecklistToggleRequest(BaseModel):
+    question_id: str = Field(..., min_length=1, description="Question ID to toggle")
+    solved: bool = Field(..., description="Whether the question is solved")
+
+
+class DsaLeetCodeSyncRequest(BaseModel):
+    username: Optional[str] = Field(default=None, description="LeetCode username (optional if already linked in evidence)")
+
+
+class DsaLeetCodeSyncResponse(BaseModel):
+    success: bool
+    username: str
+    synced_count: int
+    matched_questions: List[str] = []
+    total_recent_fetched: int = 0
+    metrics: Dict[str, Any]
+    message: str
+
+
+class DsaBulkImportRequest(BaseModel):
+    text: str = Field(..., min_length=1, description="Raw text containing problem names, URLs, or slugs")
+
+
+class DsaBulkImportResponse(BaseModel):
+    success: bool
+    imported_count: int
+    matched_questions: List[str] = []
+    metrics: Dict[str, Any]
+    message: str

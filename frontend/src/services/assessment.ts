@@ -395,3 +395,99 @@ export function transcribeInterviewAudio(audio: Blob, session_id?: string, quest
     body,
   });
 }
+
+// ---------------------------------------------------------------------------
+// DSA Pattern Checklist (NeetCode / Blind 75 Industry Patterns & Gaps)
+// ---------------------------------------------------------------------------
+
+export type DsaQuestion = {
+  id: string;
+  title: string;
+  topic: string;
+  pattern: string;
+  difficulty: "Easy" | "Medium" | "Hard";
+  neetcode_url: string;
+  leetcode_url: string;
+  why_it_matters: string;
+};
+
+export type DsaChecklistMetrics = {
+  total_questions: number;
+  solved_count: number;
+  solved_percentage: number;
+  score: number;
+  points: number;
+  max_points: number;
+  difficulty: {
+    easy: { solved: number; total: number };
+    medium: { solved: number; total: number };
+    hard: { solved: number; total: number };
+  };
+  topics: Record<string, { total: number; solved: number }>;
+};
+
+export type DsaChecklistResponse = {
+  questions: DsaQuestion[];
+  solved_ids: string[];
+  metrics: DsaChecklistMetrics;
+};
+
+export type DsaChecklistSaveResponse = {
+  status: string;
+  solved_ids: string[];
+  metrics: DsaChecklistMetrics;
+  dsa_gap_updated: boolean;
+  new_proficiency?: number | null;
+  new_gap?: number | null;
+  message: string;
+};
+
+export function getDsaChecklist() {
+  return apiFetch<DsaChecklistResponse>("/analysis/assessment/dsa-checklist");
+}
+
+export function saveDsaChecklistProgress(solved_question_ids: string[]) {
+  return apiFetch<DsaChecklistSaveResponse>("/analysis/assessment/dsa-checklist/progress", {
+    method: "POST",
+    body: JSON.stringify({ solved_question_ids }),
+  });
+}
+
+export function toggleDsaQuestion(question_id: string, solved: boolean) {
+  return apiFetch<DsaChecklistSaveResponse>("/analysis/assessment/dsa-checklist/toggle", {
+    method: "POST",
+    body: JSON.stringify({ question_id, solved }),
+  });
+}
+
+export type DsaLeetCodeSyncResponse = {
+  success: boolean;
+  username: string;
+  synced_count: number;
+  matched_questions: string[];
+  total_recent_fetched: number;
+  metrics: DsaChecklistMetrics;
+  message: string;
+};
+
+export type DsaBulkImportResponse = {
+  success: boolean;
+  imported_count: number;
+  matched_questions: string[];
+  metrics: DsaChecklistMetrics;
+  message: string;
+};
+
+export function syncDsaLeetCode(username?: string) {
+  return apiFetch<DsaLeetCodeSyncResponse>("/analysis/assessment/dsa-checklist/sync-leetcode", {
+    method: "POST",
+    body: JSON.stringify({ username: username?.trim() || undefined }),
+  });
+}
+
+export function importDsaSolvedText(text: string) {
+  return apiFetch<DsaBulkImportResponse>("/analysis/assessment/dsa-checklist/import-text", {
+    method: "POST",
+    body: JSON.stringify({ text }),
+  });
+}
