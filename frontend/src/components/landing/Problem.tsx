@@ -1,26 +1,37 @@
+import type { LucideIcon } from "lucide-react";
+import { Compass, Layers, ScanSearch, Shuffle } from "lucide-react";
 import { Reveal, ScrubWords, Stagger, StaggerItem } from "./scroll";
+import "./shared.css";
 import "./Problem.css";
 
-const items = [
+const items: { step: string; icon: LucideIcon; title: string; desc: string; effect: string }[] = [
   {
     step: "01",
+    icon: Layers,
     title: "Too many choices",
-    desc: "Roles, stacks, courses — everything feels equally important. Without a signal, you chase everything.",
+    desc: "Courses, stacks, certifications and roles all compete for your time. Without a clear signal, everything feels equally urgent.",
+    effect: "Effort spread thin",
   },
   {
     step: "02",
+    icon: Compass,
     title: "Unclear priorities",
-    desc: "You don't know what to learn next, or what actually moves you closer to the role you want.",
+    desc: "It’s hard to tell which skill moves you closest to the role you want, so what to learn next becomes a guess.",
+    effect: "Progress feels random",
   },
   {
     step: "03",
+    icon: ScanSearch,
     title: "Hidden skill gaps",
-    desc: "What you’re missing isn’t obvious from a resume or a single course. Gaps stay invisible.",
+    desc: "What’s missing rarely shows on a resume or a course certificate. The gaps that matter stay invisible until an interview finds them.",
+    effect: "Surprises in interviews",
   },
   {
     step: "04",
+    icon: Shuffle,
     title: "Unstructured preparation",
-    desc: "Effort without sequence. Tutorials without a roadmap. Progress that can’t be measured.",
+    desc: "Tutorials without a sequence and projects without a goal: hard work that can’t be measured or shown.",
+    effect: "Little to show for it",
   },
 ];
 
@@ -28,43 +39,45 @@ export default function Problem() {
   return (
     <section id="problem" className="problem section section--subtle">
       <div className="container">
-        <Reveal className="problem__header">
-          <div className="eyebrow">The reality for most students</div>
-          <h2 className="problem__title">
+        <Reveal className="lp-head lp-head--center">
+          <div className="eyebrow">The reality for most learners</div>
+          <h2 className="lp-title problem__title">
             Talent isn&rsquo;t the problem.
             <br />
-            <span>Clarity is.</span>
+            <span className="is-muted">Clarity is.</span>
           </h2>
+          <p className="lp-lede">
+            Most people aren&rsquo;t behind because they lack ability. They&rsquo;re stuck because
+            it&rsquo;s hard to see where they stand, and what the industry actually expects.
+          </p>
         </Reveal>
-
-        {/* Lights up word by word as it scrolls through the screen */}
-        <ScrubWords
-          className="problem__statement"
-          text="Most students aren’t behind because they lack ability. They lack a clear view of where they stand, and of what the industry actually expects."
-        />
 
         <Stagger className="problem__grid" role="list">
           {items.map((item) => (
             <StaggerItem key={item.step} className="lp-cell" role="listitem">
-              <div className="problem__card">
-                <div className="problem__step">{item.step}</div>
+              <div className="lp-card problem__card">
+                <div className="problem__top">
+                  <span className="lp-icon">
+                    <item.icon aria-hidden="true" />
+                  </span>
+                  <span className="problem__step">{item.step}</span>
+                </div>
                 <h3 className="problem__card-title">{item.title}</h3>
                 <p className="problem__card-desc">{item.desc}</p>
-                <div className="problem__arrow" aria-hidden="true">
-                  →
+                <div className="problem__effect">
+                  <span aria-hidden="true">↳</span>
+                  {item.effect}
                 </div>
               </div>
             </StaggerItem>
           ))}
         </Stagger>
 
-        <Reveal className="problem__footer">
-          <span className="problem__footer-line" aria-hidden="true" />
-          <p>
-            INAURA replaces guesswork with a structured, evidence-aligned view
-            of your path — so effort leads to outcomes.
-          </p>
-        </Reveal>
+        {/* Lights up word by word as it scrolls through the screen */}
+        <ScrubWords
+          className="problem__statement"
+          text="Learning more isn’t always the answer. Knowing what matters next is."
+        />
       </div>
     </section>
   );

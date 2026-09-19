@@ -4,18 +4,20 @@ import { LiquidMetal, liquidMetalPresets } from '@paper-design/shaders-react';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
 import { Card } from '@/components/ui/card';
-import { useRef } from 'react';
+import { useRef, type ReactNode } from 'react';
 import { MotionConfig, motion, useReducedMotionConfig, useScroll, useTransform } from 'framer-motion';
 
 interface LiquidMetalHeroProps {
   badge?: string;
-  title: string;
+  title: ReactNode;
   subtitle: string;
   primaryCtaLabel: string;
   secondaryCtaLabel?: string;
   onPrimaryCtaClick: () => void;
   onSecondaryCtaClick?: () => void;
   features?: string[];
+  /** Shown under the buttons in place of the feature strip, e.g. a small product preview */
+  preview?: ReactNode;
   /** "fixed" (default): the metal fills the screen behind the whole page.
       "section": it fills only this hero and pauses once scrolled out of view. */
   background?: "fixed" | "section";
@@ -30,6 +32,7 @@ export default function LiquidMetalHero({
   onPrimaryCtaClick,
   onSecondaryCtaClick,
   features = [],
+  preview,
   background = "fixed",
 }: LiquidMetalHeroProps) {
   // Respect the device's "reduce motion" setting: still metal, no entrance animations
@@ -161,7 +164,11 @@ export default function LiquidMetalHero({
             )}
           </motion.div>
 
-          {features.length > 0 && (
+          {preview ? (
+            <motion.div className="pt-6 sm:pt-8" variants={itemVariants}>
+              {preview}
+            </motion.div>
+          ) : features.length > 0 && (
             <motion.div
               className="pt-12"
               variants={itemVariants}
