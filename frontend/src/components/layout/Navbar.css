@@ -1,9 +1,16 @@
-/* Landing navbar: a floating pill of liquid glass. It's fixed over the page, so the hero's
-   metal and every section flow underneath it. Page layouts that must clear it read --nav-clear. */
+/* Landing navbar: one compact pill of liquid glass floating over the page, sized to its
+   contents. The hero and every section flow underneath it. Page layouts that must clear it
+   read --nav-clear. */
 :root {
-  --nav-pill-h: 62px;
-  --nav-top: 12px;
+  --nav-pill-h: 54px;
+  --nav-top: 14px;
   --nav-clear: calc(var(--nav-top) + var(--nav-pill-h) + 12px);
+
+  /* Deep navy text, a quieter navy for resting links, muted lavender for the active tab.
+     Solid colours, so they stay legible when the dark closing section passes beneath. */
+  --nav-ink: #111936;
+  --nav-ink-soft: #3b4368;
+  --nav-ink-active: #2c2363;
 }
 
 .nav {
@@ -16,124 +23,236 @@
   pointer-events: none;
 }
 
-.nav__inner,
+.nav__pill,
 .nav__mobile {
   pointer-events: auto;
 }
 
-/* The glass: frosted, saturated, with a bright top edge, a faint coloured lower edge,
-   an inner glow and a soft floating shadow */
-.nav__inner {
+/* The glass: a light frost with a bright top edge and a restrained floating shadow */
+.nav__pill {
   position: relative;
   isolation: isolate;
-  width: min(1180px, calc(100% - 32px));
+  width: max-content;
+  max-width: calc(100% - 32px);
   height: var(--nav-pill-h);
   margin: 0 auto;
-  padding: 0 10px 0 24px;
+  padding: 0 7px 0 18px;
   display: flex;
   align-items: center;
-  justify-content: space-between;
-  gap: 20px;
+  gap: 6px;
   border-radius: 9999px;
-  border: 1px solid rgba(255, 255, 255, 0.78);
-  background: linear-gradient(180deg, rgba(255, 255, 255, 0.74) 0%, rgba(255, 255, 255, 0.52) 100%);
-  backdrop-filter: blur(22px) saturate(185%);
-  -webkit-backdrop-filter: blur(22px) saturate(185%);
+  background-color: rgba(255, 255, 255, 0.48);
+  background-image: linear-gradient(180deg, rgba(255, 255, 255, 0.3), rgba(255, 255, 255, 0));
+  backdrop-filter: blur(14px) saturate(160%);
+  -webkit-backdrop-filter: blur(14px) saturate(160%);
   box-shadow:
-    inset 0 1px 0 rgba(255, 255, 255, 0.95),
-    inset 0 -1px 0 rgba(92, 80, 160, 0.14),
-    inset 0 0 14px rgba(255, 255, 255, 0.4),
-    0 12px 32px -14px rgba(40, 30, 110, 0.38),
-    0 2px 6px rgba(15, 23, 42, 0.06);
+    inset 0 1px 0.5px rgba(255, 255, 255, 0.85),
+    inset 0 -1px 1px rgba(78, 66, 150, 0.06),
+    0 1px 2px rgba(17, 25, 54, 0.05),
+    0 10px 28px -16px rgba(34, 28, 96, 0.28);
+  transition:
+    background-color 0.4s var(--ease-out),
+    box-shadow 0.4s var(--ease-out),
+    backdrop-filter 0.4s var(--ease-out),
+    -webkit-backdrop-filter 0.4s var(--ease-out);
 }
 
-/* Specular sheen across the top half, like light catching curved glass */
-.nav__inner::before {
+/* Once the page moves, the glass thickens and blurs a touch so text holds up over busier sections */
+.nav[data-scrolled] .nav__pill {
+  background-color: rgba(255, 255, 255, 0.62);
+  backdrop-filter: blur(18px) saturate(170%);
+  -webkit-backdrop-filter: blur(18px) saturate(170%);
+  box-shadow:
+    inset 0 1px 0.5px rgba(255, 255, 255, 0.9),
+    inset 0 -1px 1px rgba(78, 66, 150, 0.07),
+    0 1px 2px rgba(17, 25, 54, 0.06),
+    0 12px 32px -16px rgba(34, 28, 96, 0.32);
+}
+
+/* The rim: a hairline that's brightest where light hits the top and picks up a faint
+   lavender on the underside, as the edge of curved glass would */
+.nav__pill::after {
   content: "";
   position: absolute;
-  inset: 1px 1px 50% 1px;
+  inset: 0;
+  border-radius: inherit;
+  padding: 1px;
+  background: linear-gradient(
+    172deg,
+    rgba(255, 255, 255, 0.95) 0%,
+    rgba(255, 255, 255, 0.4) 36%,
+    rgba(150, 138, 214, 0.22) 74%,
+    rgba(255, 255, 255, 0.55) 100%
+  );
+  -webkit-mask: linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0);
+  -webkit-mask-composite: xor;
+  mask-composite: exclude;
+  pointer-events: none;
+}
+
+/* Inner reflection: a soft band of light across the upper curve */
+.nav__pill::before {
+  content: "";
+  position: absolute;
+  top: 1px;
+  left: 22px;
+  right: 22px;
+  height: 46%;
   z-index: -1;
-  border-radius: 9999px 9999px 40px 40px / 9999px 9999px 18px 18px;
-  background: linear-gradient(180deg, rgba(255, 255, 255, 0.55), rgba(255, 255, 255, 0));
+  border-radius: 9999px 9999px 50% 50% / 100% 100% 60% 60%;
+  background: linear-gradient(180deg, rgba(255, 255, 255, 0.42), rgba(255, 255, 255, 0));
   pointer-events: none;
 }
 
 .nav__brand {
   display: inline-flex;
   align-items: center;
-  gap: 8px;
-  text-decoration: none;
   flex-shrink: 0;
+  margin-right: 8px;
+  border-radius: 12px;
+  text-decoration: none;
   line-height: 0;
 }
 
 .nav__logo {
   display: block;
-  height: 44px;
+  height: 38px;
   width: auto;
 }
 
-/* Legacy wordmark styles retained for fallback — no longer used */
-.nav__wordmark {
-  font-weight: 800;
-  font-size: 1.35rem;
-  letter-spacing: -0.04em;
-  color: var(--ink);
-  line-height: 1;
-}
-
-.nav__dot {
-  width: 6px;
-  height: 6px;
-  border-radius: 9999px;
-  background: var(--accent);
-  display: inline-block;
-  margin-top: 2px;
-}
-
+/* The tab track. The capsule lives here, behind the labels. */
 .nav__links {
+  position: relative;
   display: flex;
   align-items: center;
-  gap: 4px;
-  margin-left: 12px;
-}
-
-/* Links light up as small glass pills on hover */
-.nav__link,
-.nav__login {
-  padding: 8px 14px;
-  border-radius: 9999px;
-  font-size: 0.92rem;
-  letter-spacing: -0.01em;
-  line-height: 1.2;
-  transition: background-color 0.2s, box-shadow 0.2s, color 0.2s;
+  height: 38px;
 }
 
 .nav__link {
+  position: relative;
+  z-index: 1;
+  display: inline-flex;
+  align-items: center;
+  height: 100%;
+  padding: 0 15px;
+  border-radius: 9999px;
+  font-size: 0.875rem;
   font-weight: 500;
-  /* A shade darker than body text, so links stay readable when dark sections pass beneath */
-  color: var(--ink-700);
+  letter-spacing: -0.012em;
+  line-height: 1;
+  white-space: nowrap;
+  color: var(--nav-ink-soft);
+  text-decoration: none;
+  transition:
+    color 0.3s var(--ease-out),
+    background-color 0.25s var(--ease-out);
+}
+
+.nav__link:hover {
+  color: var(--nav-ink);
+}
+
+.nav__link:not(.is-active):hover {
+  background: rgba(255, 255, 255, 0.36);
+}
+
+.nav__link.is-active {
+  color: var(--nav-ink-active);
+}
+
+/* The active capsule: muted lavender glass with its own small highlight. Its position and
+   width are driven from Navbar.tsx; here it only needs its look. */
+.nav__capsule {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: 0;
+  z-index: 0;
+  border-radius: 9999px;
+  background: linear-gradient(180deg, rgba(190, 178, 238, 0.36) 0%, rgba(146, 130, 216, 0.26) 100%);
+  box-shadow:
+    inset 0 1px 0.5px rgba(255, 255, 255, 0.8),
+    inset 0 -1px 1px rgba(84, 64, 170, 0.12),
+    inset 0 0 0 0.5px rgba(118, 102, 198, 0.18),
+    0 1px 2px rgba(44, 35, 99, 0.08),
+    0 4px 12px -6px rgba(44, 35, 99, 0.22);
+  pointer-events: none;
+  will-change: transform;
+}
+
+.nav__capsule::before {
+  content: "";
+  position: absolute;
+  top: 1.5px;
+  left: 10%;
+  right: 10%;
+  height: 45%;
+  border-radius: 9999px;
+  background: linear-gradient(180deg, rgba(255, 255, 255, 0.5), rgba(255, 255, 255, 0));
+}
+
+/* Sign-in controls: their own group, set off from the tabs by a fading hairline */
+.nav__actions {
+  position: relative;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  margin-left: 8px;
+  padding-left: 12px;
+}
+
+.nav__actions::before {
+  content: "";
+  position: absolute;
+  left: 0;
+  top: 50%;
+  width: 1px;
+  height: 20px;
+  transform: translateY(-50%);
+  background: linear-gradient(180deg, rgba(44, 35, 99, 0), rgba(44, 35, 99, 0.2), rgba(44, 35, 99, 0));
 }
 
 .nav__login {
-  font-weight: 600;
-  color: var(--ink);
-}
-
-.nav__link:hover,
-.nav__login:hover {
-  color: var(--ink);
-  background: rgba(255, 255, 255, 0.7);
-  box-shadow:
-    inset 0 1px 0 rgba(255, 255, 255, 0.95),
-    0 2px 8px -2px rgba(40, 30, 110, 0.18);
-}
-
-.nav__actions {
-  display: flex;
+  display: inline-flex;
   align-items: center;
-  gap: 6px;
-  margin-left: auto;
+  height: 38px;
+  padding: 0 14px;
+  border-radius: 9999px;
+  font-size: 0.875rem;
+  font-weight: 600;
+  letter-spacing: -0.012em;
+  line-height: 1;
+  color: var(--nav-ink);
+  text-decoration: none;
+  transition: background-color 0.25s var(--ease-out);
+}
+
+.nav__login:hover {
+  background: rgba(255, 255, 255, 0.4);
+}
+
+/* The main action, sized down to sit inside the pill */
+.nav__cta {
+  height: 40px;
+  padding: 0 20px;
+  font-size: 0.86rem;
+  letter-spacing: -0.012em;
+}
+
+/* The button's own glass layers follow its pill shape here, so no square corner shows
+   when a dark section passes under the navbar */
+.nav [data-slot="button"] > div {
+  border-radius: inherit;
+}
+
+.nav__link:focus-visible,
+.nav__login:focus-visible,
+.nav__brand:focus-visible,
+.nav__burger:focus-visible,
+.nav__mobile-link:focus-visible,
+.nav__mobile-login:focus-visible {
+  outline: 2px solid rgba(110, 92, 200, 0.55);
+  outline-offset: 2px;
 }
 
 .nav__burger {
@@ -142,66 +261,131 @@
   align-items: center;
   justify-content: center;
   gap: 5px;
-  width: 44px;
-  height: 44px;
-  margin-left: 8px;
+  width: 40px;
+  height: 40px;
+  margin-left: auto;
   padding: 0;
   border: 0;
   border-radius: 9999px;
-  background: rgba(255, 255, 255, 0.55);
-  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.95), 0 2px 8px -3px rgba(40, 30, 110, 0.25);
+  background: rgba(255, 255, 255, 0.5);
+  box-shadow:
+    inset 0 1px 0.5px rgba(255, 255, 255, 0.9),
+    inset 0 0 0 0.5px rgba(118, 102, 198, 0.14),
+    0 2px 6px -3px rgba(34, 28, 96, 0.22);
   cursor: pointer;
 }
 
 .nav__burger-line {
-  width: 18px;
-  height: 1.5px;
-  background: var(--ink);
   display: block;
+  width: 16px;
+  height: 1.5px;
   border-radius: 9999px;
+  background: var(--nav-ink);
+  transition:
+    transform 0.35s var(--ease),
+    opacity 0.2s var(--ease-out);
 }
 
-/* Phone menu: a matching glass card under the pill */
+/* Open: the three lines fold into a cross */
+.nav__burger[aria-expanded="true"] .nav__burger-line:nth-child(1) {
+  transform: translateY(6.5px) rotate(45deg);
+}
+
+.nav__burger[aria-expanded="true"] .nav__burger-line:nth-child(2) {
+  opacity: 0;
+}
+
+.nav__burger[aria-expanded="true"] .nav__burger-line:nth-child(3) {
+  transform: translateY(-6.5px) rotate(-45deg);
+}
+
+/* Phone menu: a matching glass card that settles in under the pill */
 .nav__mobile {
-  width: min(1180px, calc(100% - 32px));
+  position: relative;
+  width: calc(100% - 24px);
   margin: 8px auto 0;
-  padding: 10px 20px 18px;
+  padding: 8px 8px 12px;
   display: flex;
   flex-direction: column;
-  gap: 14px;
-  border-radius: 28px;
-  border: 1px solid rgba(255, 255, 255, 0.78);
-  background: rgba(255, 255, 255, 0.8);
-  backdrop-filter: blur(22px) saturate(185%);
-  -webkit-backdrop-filter: blur(22px) saturate(185%);
+  gap: 10px;
+  border-radius: 24px;
+  border: 1px solid rgba(255, 255, 255, 0.7);
+  background: linear-gradient(180deg, rgba(255, 255, 255, 0.9), rgba(255, 255, 255, 0.84));
+  backdrop-filter: blur(14px) saturate(160%);
+  -webkit-backdrop-filter: blur(14px) saturate(160%);
   box-shadow:
-    inset 0 1px 0 rgba(255, 255, 255, 0.95),
-    0 20px 44px -18px rgba(40, 30, 110, 0.4);
+    inset 0 1px 0.5px rgba(255, 255, 255, 0.9),
+    0 1px 2px rgba(17, 25, 54, 0.05),
+    0 16px 36px -20px rgba(34, 28, 96, 0.34);
+  transform-origin: top center;
+  animation: nav-drop 0.34s var(--ease) both;
+}
+
+@keyframes nav-drop {
+  from {
+    opacity: 0;
+    transform: translateY(-6px) scale(0.98);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+.nav__mobile nav {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
 }
 
 .nav__mobile-link {
-  display: block;
-  padding: 12px 4px;
+  display: flex;
+  align-items: center;
+  min-height: 46px;
+  padding: 0 16px;
+  border-radius: 16px;
+  font-size: 0.97rem;
   font-weight: 500;
-  color: var(--ink);
-  border-bottom: 1px solid var(--line);
-  font-size: 1rem;
+  letter-spacing: -0.012em;
+  color: var(--nav-ink-soft);
+  text-decoration: none;
+}
+
+.nav__mobile-link.is-active {
+  color: var(--nav-ink-active);
+  background: linear-gradient(180deg, rgba(190, 178, 238, 0.34), rgba(146, 130, 216, 0.24));
+  box-shadow:
+    inset 0 1px 0.5px rgba(255, 255, 255, 0.8),
+    inset 0 0 0 0.5px rgba(118, 102, 198, 0.16);
 }
 
 .nav__mobile-actions {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  padding-top: 4px;
   gap: 12px;
+  margin: 0 8px;
+  padding-top: 12px;
+  border-top: 1px solid rgba(44, 35, 99, 0.08);
 }
 
 .nav__mobile-login {
+  padding: 8px 8px;
+  font-size: 0.95rem;
   font-weight: 600;
-  color: var(--ink);
+  color: var(--nav-ink);
+  text-decoration: none;
 }
 
 @media (max-width: 960px) {
+  .nav__pill {
+    width: calc(100% - 24px);
+    max-width: 720px;
+    padding: 0 7px 0 16px;
+  }
+  .nav__mobile {
+    max-width: 720px;
+  }
   .nav__links,
   .nav__actions {
     display: none;
@@ -219,17 +403,17 @@
 
 @media (max-width: 640px) {
   :root {
-    --nav-pill-h: 56px;
+    --nav-pill-h: 52px;
     --nav-top: 10px;
   }
-  .nav__inner {
+  .nav__pill {
     width: calc(100% - 20px);
-    padding: 0 6px 0 18px;
+    padding: 0 6px 0 14px;
   }
   .nav__mobile {
     width: calc(100% - 20px);
   }
   .nav__logo {
-    height: 38px;
+    height: 34px;
   }
 }
