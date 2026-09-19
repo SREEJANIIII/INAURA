@@ -1,0 +1,243 @@
+/* Building blocks shared by the landing page's sections and product previews.
+   Each section that uses them imports this file. */
+
+/* Section header: eyebrow, title, lede */
+.lp-head {
+  max-width: 720px;
+}
+
+.lp-head--center {
+  margin-inline: auto;
+  text-align: center;
+}
+
+.lp-title {
+  margin-top: 14px;
+  line-height: 0.98;
+}
+
+.lp-title .is-accent {
+  color: var(--accent);
+}
+
+.lp-title .is-muted {
+  color: var(--muted-2);
+  font-weight: 550;
+}
+
+.lp-lede {
+  margin-top: 14px;
+  font-size: 1.05rem;
+  max-width: 60ch;
+}
+
+.lp-head--center .lp-lede {
+  margin-inline: auto;
+}
+
+/* A frosted product panel: dashboards and previews */
+.lp-panel {
+  background: var(--glass-bg);
+  border: 1px solid var(--glass-edge);
+  border-radius: 20px;
+  box-shadow: var(--shadow);
+  overflow: hidden;
+}
+
+.lp-panel__head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 16px 18px;
+  border-bottom: 1px solid var(--line);
+  background: var(--bg-subtle);
+}
+
+.lp-panel__foot {
+  padding: 12px 18px;
+  border-top: 1px solid var(--line);
+  background: var(--bg-subtle);
+  font-size: 0.76rem;
+  line-height: 1.45;
+  color: var(--muted-2);
+}
+
+/* Small uppercase label, and the value under it */
+.lp-kicker {
+  display: block;
+  font-size: 0.68rem;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  font-weight: 700;
+  color: var(--muted-2);
+}
+
+.lp-panel-title {
+  display: block;
+  margin-top: 4px;
+  font-size: 1.05rem;
+  font-weight: 650;
+  letter-spacing: -0.02em;
+  line-height: 1.2;
+  color: var(--ink);
+}
+
+/* A plain glass card that lifts a little on hover */
+.lp-card {
+  background: var(--glass-bg);
+  border: 1px solid var(--glass-edge);
+  border-radius: 18px;
+  transition:
+    border-color 0.2s,
+    box-shadow 0.2s,
+    transform 0.2s;
+}
+
+.lp-card:hover {
+  border-color: var(--line-strong);
+  box-shadow: var(--shadow);
+  transform: translateY(-2px);
+}
+
+/* Step marker: 01, 02 … */
+.lp-num {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: fit-content;
+  padding: 6px 8px;
+  border-radius: 9999px;
+  font-size: 0.68rem;
+  font-weight: 750;
+  letter-spacing: 0.06em;
+  line-height: 1;
+  font-variant-numeric: tabular-nums;
+  color: var(--accent);
+  background: var(--accent-soft-2);
+  border: 1px solid var(--accent-border);
+}
+
+/* Icon tile */
+.lp-icon {
+  flex: none;
+  width: 38px;
+  height: 38px;
+  border-radius: 12px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--accent);
+  background: var(--accent-soft-2);
+  border: 1px solid var(--accent-border);
+}
+
+.lp-icon svg {
+  width: 18px;
+  height: 18px;
+}
+
+/* Chips and status tags */
+.lp-chips {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.lp-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 0.8rem;
+  font-weight: 550;
+  letter-spacing: -0.01em;
+  line-height: 1.3;
+  color: var(--ink-700);
+  background: var(--bg-subtle);
+  border: 1px solid var(--line);
+  padding: 6px 10px;
+  border-radius: 9999px;
+}
+
+.lp-chip svg {
+  width: 14px;
+  height: 14px;
+  color: var(--muted-2);
+}
+
+.lp-tag {
+  display: inline-flex;
+  align-items: center;
+  width: fit-content;
+  font-size: 0.72rem;
+  font-weight: 650;
+  line-height: 1.2;
+  color: #b45309;
+  background: #fffbeb;
+  border: 1px solid #fde68a;
+  padding: 5px 9px;
+  border-radius: 9999px;
+}
+
+.lp-tag--ready {
+  color: #0f766e;
+  background: #ccfbf1;
+  border-color: #99f6e4;
+}
+
+/* Features that aren't built yet */
+.lp-tag--soon {
+  font-size: 0.64rem;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  line-height: 1;
+  color: #5b4bc4;
+  background: rgba(124, 108, 214, 0.12);
+  border-color: rgba(124, 108, 214, 0.24);
+}
+
+/* Progress against a target: a fill, and a tick where the role expects you to be */
+.lp-bar {
+  position: relative;
+  display: block;
+  height: 6px;
+  border-radius: 9999px;
+  background: rgba(92, 80, 160, 0.12);
+}
+
+.lp-bar__fill {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: 0;
+  display: block;
+  border-radius: inherit;
+  background: var(--accent);
+}
+
+.lp-bar__fill--ready {
+  background: #0f766e;
+}
+
+.lp-bar__fill--soft {
+  background: rgba(79, 70, 229, 0.5);
+}
+
+.lp-bar__fill--ink {
+  background: var(--ink);
+}
+
+.lp-bar__target {
+  position: absolute;
+  top: -3px;
+  bottom: -3px;
+  width: 2px;
+  margin-left: -1px;
+  border-radius: 2px;
+  background: var(--ink);
+  opacity: 0.5;
+}
