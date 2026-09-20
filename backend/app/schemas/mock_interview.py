@@ -61,6 +61,13 @@ class AnswerEvaluation(BaseModel):
     demonstrated: List[str] = Field(default_factory=list)
     missing: List[str] = Field(default_factory=list)
     misconceptions: List[str] = Field(default_factory=list)
+    established: List[str] = Field(default_factory=list)
+    unproven: List[str] = Field(default_factory=list)
+    contradictions: List[str] = Field(default_factory=list)
+    interesting_claims: List[str] = Field(default_factory=list)
+    probe_target: Dict[str, str] = Field(default_factory=dict)
+    next_action: str = "counter_question"
+    probe_anchor_id: str = ""
     follow_up_needed: bool = False
     suggested_follow_up: str = ""
 

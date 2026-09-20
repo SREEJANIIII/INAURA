@@ -168,6 +168,35 @@ def test_parse_evaluation_rejects_garbage():
         svc.parse_adaptive_evaluation("[1,2,3]", "q1")
 
 
+def test_parse_evaluation_preserves_probe_target_and_investigation_state():
+    raw = json.dumps({
+        "evaluation": {
+            "technical_correctness": 0.8,
+            "depth": 0.7,
+            "established": ["Candidate described token refresh entry point"],
+            "unproven": ["Refresh-token storage and rotation remain unclear"],
+        },
+        "contradictions": ["Repository evidence shows server-side handling"],
+        "interesting_claims": ["Concurrent requests can arrive after expiry"],
+        "probe_target": {"topic": "refresh-token concurrency", "reason": "race handling is unresolved", "evidence_anchor_id": "e1", "depth": "deep"},
+        "next_action": "counter_question",
+        "next_question": "In MirrorVibes, how do you prevent two expired Spotify requests from refreshing the same token concurrently?",
+        "question_type": "scenario",
+    })
+    ev = svc.parse_adaptive_evaluation(raw, "q1")
+    assert ev["established"] == ["Candidate described token refresh entry point"]
+    assert ev["unproven"] == ["Refresh-token storage and rotation remain unclear"]
+    assert ev["contradictions"] == ["Repository evidence shows server-side handling"]
+    assert ev["probe_target"]["evidence_anchor_id"] == "e1"
+    assert ev["next_action"] == "counter_question"
+
+
+def test_explicit_model_completion_can_end_after_a_sufficient_answer():
+    assert svc.decide_next_action({"next_action": "complete"}, 1) == "complete"
+    assert svc.decide_next_action({"interview_sufficient": True}, 2) == "complete"
+    assert svc.decide_next_action({"interview_sufficient": False}, 2) == "next"
+
+
 def test_adaptive_follow_up_policy():
     # 3-question invariant: answered < 3 always continues, >= 3 completes.
     assert svc.INTERVIEW_QUESTION_COUNT == 3
