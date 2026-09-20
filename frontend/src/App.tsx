@@ -11,6 +11,7 @@ import CapabilityMap from "./pages/CapabilityMap";
 import Roadmap from "./pages/Roadmap";
 import AIReviewTest from "./pages/AIReviewTest";
 import Interview from "./pages/Interview";
+import AtsTester from "./pages/AtsTester";
 import { ProtectedRoute, GuestOnly } from "./components/auth/ProtectedRoute";
 import AppLayout from "./components/layout/AppLayout";
 
@@ -76,6 +77,9 @@ export default function App() {
         <Route path="/career-track/:careerId/:skillId" element={<CareerSkill />} />
         {/* Adaptive AI mock interview — evidence source (kept separate from AI Career Review) */}
         <Route path="/interview" element={<Interview />} />
+        {/* Resume section & ATS Tester */}
+        <Route path="/resume" element={<Navigate to="/resume/ats-tester" replace />} />
+        <Route path="/resume/ats-tester" element={<AtsTester />} />
         {/* EXPERIMENTAL side feature — isolated, no impact on other routes */}
         <Route path="/ai-review-test" element={<AIReviewTest />} />
       </Route>
