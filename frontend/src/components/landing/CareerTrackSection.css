@@ -411,6 +411,25 @@
   color: var(--muted-2);
 }
 
+/* The readiness preview intentionally stays a light glass card in dark mode.
+   Keep the surface unchanged, but opt its important copy into a dark
+   foreground so it cannot inherit the page's light dark-mode text token. */
+:root[data-theme="dark"] .ctrack__board .lp-kicker,
+:root[data-theme="dark"] .ctrack__board .ctrack__readiness-num,
+:root[data-theme="dark"] .ctrack__board .ctrack__role-title,
+:root[data-theme="dark"] .ctrack__board .ctrack__foot,
+:root[data-theme="dark"] .ctrack__board .ctrack__foot strong {
+  color: #161616;
+}
+
+:root[data-theme="dark"] .ctrack__board .ctrack__readiness-label {
+  color: #403579;
+}
+
+:root[data-theme="dark"] .ctrack__board .ctrack__foot {
+  color: #4a4a4a;
+}
+
 @media (max-width: 1080px) {
   .ctrack__stage {
     grid-template-columns: 1fr;

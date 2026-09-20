@@ -421,7 +421,7 @@ export default function InterviewModal({ skill, onClose, onCompleted }: Props) {
 
       const greeting = resuming
         ? firstQ.prompt
-        : `Hi! I'm ${INTERVIEWER_NAME}, your technical interviewer. I've reviewed your profile and we'll focus on ${skill} today. Let's begin. ${firstQ.prompt}`;
+        : `Hi! I'm ${INTERVIEWER_NAME}, your technical interviewer. We'll focus on ${skill} today, starting with your own work. Let's begin. ${firstQ.prompt}`;
       await speakThenListen(greeting);
     } catch (e) {
       if (!interviewActiveRef.current) return;

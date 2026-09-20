@@ -2,6 +2,7 @@ import { useEffect, useRef, useState, useSyncExternalStore } from "react";
 import { Link, useNavigate } from "react-router-dom";
 import { useAuth } from "../../context/AuthContext";
 import { profileData, subscribePageData } from "../../lib/pageData";
+import { applyTheme, preferredTheme, setTheme, type Theme } from "../../lib/theme";
 
 type Panel = "none" | "account" | "notifications";
 
@@ -19,6 +20,7 @@ export default function AccountMenu() {
   const nav = useNavigate();
   const profile = useSyncExternalStore(subscribePageData, profileData.peek);
   const [panel, setPanel] = useState<Panel>("none");
+  const [theme, setCurrentTheme] = useState<Theme>(() => preferredTheme());
   const rootRef = useRef<HTMLDivElement>(null);
 
   const name = profile?.full_name || user?.email?.split("@")[0] || "Account";
@@ -47,6 +49,21 @@ export default function AccountMenu() {
     await signOut();
     nav("/login", { replace: true });
   };
+
+  useEffect(() => {
+    applyTheme(theme);
+  }, [theme]);
+
+  useEffect(() => {
+    const onThemeChange = (event: Event) => {
+      const value = (event as CustomEvent<Theme>).detail;
+      if (value === "light" || value === "dark") setCurrentTheme(value);
+    };
+    window.addEventListener("inaura-theme-change", onThemeChange);
+    return () => window.removeEventListener("inaura-theme-change", onThemeChange);
+  }, []);
+
+  const toggleTheme = () => setTheme(theme === "dark" ? "light" : "dark");
 
   return (
     <div className="acct" ref={rootRef}>
@@ -98,6 +115,18 @@ export default function AccountMenu() {
           <Link to="/profile" className="acct__item" role="menuitem" onClick={() => setPanel("none")}>
             My profile
           </Link>
+          <button
+            type="button"
+            className="acct__item acct__theme"
+            role="menuitem"
+            aria-label={`Switch to ${theme === "dark" ? "light" : "dark"} mode`}
+            onClick={toggleTheme}
+          >
+            <span>Appearance</span>
+            <span className="acct__theme-value" aria-live="polite">
+              {theme === "dark" ? "☾ Dark" : "☀ Light"}
+            </span>
+          </button>
           <button type="button" className="acct__item acct__item--danger" role="menuitem" onClick={handleLogout}>
             Log out
           </button>

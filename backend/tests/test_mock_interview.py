@@ -7,6 +7,7 @@ via FastAPI dependency overrides.
 
 import asyncio
 import json
+from types import SimpleNamespace
 
 import pytest
 from fastapi import FastAPI
@@ -79,6 +80,61 @@ def test_plan_generic_fallback_without_requirements():
     opening = svc.deterministic_opening_question([], [])
     assert len(opening["question"]) >= 20
     assert opening["question"].endswith("?")
+
+
+def _grounding_anchors():
+    return [{
+        "project": "MirrorVibes",
+        "repository": "student/mirrorvibes",
+        "technology": ["Express", "Spotify API"],
+        "artifact": ["spotifyService.js"],
+        "implementation": "Spotify token refresh and playlist operations",
+        "contribution": "backend integration",
+        "source": "GitHub",
+    }]
+
+
+def test_live_question_validation_requires_real_evidence_anchor():
+    anchors = _grounding_anchors()
+    summary = "EVIDENCE ANCHORS:\n- Project: MirrorVibes\n- Technology: Express, Spotify API\n- Artifact: spotifyService.js"
+    assert svc.validate_next_question("Tell me about your project?", [], "", summary, anchors) == "generic"
+    assert svc.validate_next_question("How did you approach scalability?", [], "", summary, anchors) == "generic"
+    assert svc.validate_next_question("In MirrorVibes, how did you handle Spotify authentication?", [], "", summary, anchors) is None
+    assert svc.validate_next_question("In ResQNet, how does your FastAPI routing endpoint process vehicle constraints?", [], "", summary, anchors) == "unrelated_technology"
+    assert svc.validate_next_question("In spotifyService.js, how does token refresh work?", [], "", summary, anchors) is None
+    assert svc.validate_next_question("You said Redis reduced P95 latency. What bottleneck was removed?", [], "Redis reduced our P95 latency.", summary, anchors) is None
+    assert svc.validate_next_question("How did you configure Kubernetes autoscaling?", [], "", summary, anchors) == "unrelated_technology"
+
+
+def test_live_deterministic_fallback_and_spoken_response_are_grounded():
+    summary = "EVIDENCE ANCHORS:\n- Project: MirrorVibes\n- Technology: Spotify API"
+    fallback = svc.deterministic_next_question(
+        "The Spotify API handles playlist operations.",
+        {"technical_correctness": 0.3, "depth": 0.2}, ["In MirrorVibes, explain playlist operations?"], "Backend", summary,
+    )
+    assert "MirrorVibes" in fallback["question"] or "Spotify API" in fallback["question"]
+    spoken = svc._evidence_specific_spoken_response("I've gone through your profile.", "I implemented Spotify token refresh.", summary)
+    assert "profile" not in spoken.lower()
+    assert "Spotify" in spoken
+
+
+def test_live_q1_rejects_generic_model_question(monkeypatch):
+    async def fake_chain(*_args, **_kwargs):
+        return SimpleNamespace(
+            text=json.dumps({"question": "What challenges did you face in your project?", "target_skill": "Python"}),
+            provider_used="gemini",
+        )
+
+    monkeypatch.setattr(svc, "_run_chain", fake_chain)
+    summary = "EVIDENCE ANCHORS:\n- Project: MirrorVibes\n- Technology: Express, Spotify API"
+    out, provider = asyncio.run(svc.generate_opening_question(
+        "Backend Developer", [{"skill": "Python"}],
+        [{"name": "MirrorVibes", "technologies": ["Express", "Spotify API"], "student_contribution": "backend integration"}],
+        [], [], summary, "session-1",
+    ))
+    assert provider == "deterministic"
+    assert "MirrorVibes" in out["question"]
+    assert "What challenges did you face" not in out["question"]
 
 
 def test_parse_evaluation_strict_schema():

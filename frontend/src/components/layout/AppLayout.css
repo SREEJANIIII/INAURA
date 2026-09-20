@@ -263,6 +263,18 @@
   background: var(--shell-hover);
 }
 
+.acct__theme {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.acct__theme-value {
+  color: var(--shell-ink-3);
+  font-size: 0.78rem;
+}
+
 .acct__item--danger {
   color: #a8463c;
 }

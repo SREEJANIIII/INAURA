@@ -89,7 +89,7 @@ export default function LiquidMetalHero({
       >
         {/* Frosted glass panel: keeps the text readable over the dark swirls of the metal */}
         <motion.div
-          className="text-center space-y-8 rounded-[2rem] border border-white/60 bg-white/45 px-5 py-10 sm:px-12 sm:py-14 shadow-[inset_0_1px_0_rgba(255,255,255,0.8),0_30px_80px_-30px_rgba(20,20,40,0.5)] backdrop-blur-xl"
+          className="inaura-hero-panel text-center space-y-8 rounded-[2rem] border border-white/60 bg-white/45 px-5 py-10 sm:px-12 sm:py-14 shadow-[inset_0_1px_0_rgba(255,255,255,0.8),0_30px_80px_-30px_rgba(20,20,40,0.5)] backdrop-blur-xl"
           variants={containerVariants}
           initial="hidden"
           animate="visible"
@@ -156,7 +156,7 @@ export default function LiquidMetalHero({
                   onClick={onSecondaryCtaClick}
                   variant="outline"
                   size="lg"
-                  className="rounded-full border-foreground/30 bg-white/50 text-foreground hover:bg-white/70 hover:border-foreground/50 transition-all duration-300 backdrop-blur-sm text-lg px-8 py-6 font-semibold"
+                  className="inaura-hero-secondary rounded-full border-foreground/30 bg-white/50 text-foreground hover:bg-white/70 hover:border-foreground/50 transition-all duration-300 backdrop-blur-sm text-lg px-8 py-6 font-semibold"
                 >
                   {secondaryCtaLabel}
                 </Button>
@@ -177,7 +177,7 @@ export default function LiquidMetalHero({
                 whileHover={{ y: -4 }}
                 transition={{ duration: 0.3 }}
               >
-                <Card className="rounded-2xl bg-white/50 border-white/70 backdrop-blur-md shadow-lg">
+                <Card className="inaura-hero-preview rounded-2xl bg-white/50 border-white/70 backdrop-blur-md shadow-lg">
                   <div className="p-6 sm:p-8">
                     <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
                       {features.map((feature, index) => (

@@ -7,8 +7,7 @@
 @import "tailwindcss/theme.css" layer(theme);
 @import "tailwindcss/utilities.css" layer(utilities);
 
-/* INAURA has no dark mode, so "dark:" styles apply only inside a .dark element (the dark
-   interview screen, the landing page's dark band), never from the phone's or computer's setting */
+/* Keep local .dark surfaces working while allowing the product theme to opt in globally. */
 @custom-variant dark (&:where(.dark, .dark *));
 
 /* shadcn colour names, mapped to INAURA's palette */
@@ -43,6 +42,26 @@
 :root {
   --foreground: #0f172a;
   --background: #ffffff;
+}
+
+:root[data-theme="dark"] {
+  --foreground: #f1f5f9;
+  --background: #000000;
+  --color-background: #000000;
+  --color-foreground: #f1f5f9;
+  --color-primary: #f1f5f9;
+  --color-primary-foreground: #0f172a;
+  --color-secondary: #181818;
+  --color-secondary-foreground: #e2e8f0;
+  --color-muted: #121212;
+  --color-muted-foreground: #94a3b8;
+  --color-accent: #312e81;
+  --color-accent-foreground: #c4b5fd;
+  --color-border: rgba(148, 163, 184, 0.22);
+  --color-input: rgba(148, 163, 184, 0.28);
+  --color-ring: #a5b4fc;
+  --color-card: rgba(15, 23, 42, 0.62);
+  --color-card-foreground: #f1f5f9;
 }
 
 /* Tailwind's own "container" would otherwise also apply to INAURA's .container (landing page)

@@ -586,6 +586,31 @@
   color: var(--ct-accent-deep);
 }
 
+/* The readiness card remains a light glass surface in dark mode. Give its
+   header, percentage, and footnote their own dark foreground instead of the
+   page-level light text token. The existing count tiles keep their colours. */
+:root[data-theme="dark"] .ct-ready__label,
+:root[data-theme="dark"] .ct-ready__num {
+  color: #171717;
+}
+
+:root[data-theme="dark"] .ct-ready__source {
+  color: #4a4a4a;
+}
+
+:root[data-theme="dark"] .ct-ready__num span {
+  color: #555555;
+}
+
+:root[data-theme="dark"] .ct-ready .ct-ready__foot {
+  color: #555555;
+  opacity: 1;
+}
+
+:root[data-theme="dark"] .ct-ready .ct-counts__item dt {
+  color: #bdbdbd;
+}
+
 /* ---------- Sections ---------- */
 
 .ct-sec {

@@ -1,3 +1,6 @@
+
+
+
 /* INAURA Design System — Tokens & Globals */
 @layer theme, base, components, utilities;
 /* Premium, minimal, human-designed: navy primary, restrained indigo accent */
@@ -22,6 +25,7 @@
   --accent-soft-2: rgba(79, 70, 229, 0.08);
   --accent-border: rgba(79, 70, 229, 0.14);
   --success: #0f766e;
+  --page-bg: #eceef8;
 
   /* Typography */
   --sans: "Inter", system-ui, -apple-system, "Segoe UI", Roboto, Helvetica, Arial, sans-serif, "Apple Color Emoji", "Segoe UI Emoji";
@@ -90,7 +94,7 @@ html {
 }
 
 html {
-  background: #eceef8;
+  background: var(--page-bg);
 }
 
 body {
@@ -258,4 +262,569 @@ body::after {
   clip: rect(0, 0, 0, 0);
   white-space: nowrap;
   border: 0;
+}
+
+/* Night glass theme. Light remains the default above; this layer only changes
+   semantic tokens and the surfaces that intentionally scope their own palette. */
+:root[data-theme="dark"] {
+  color-scheme: dark;
+  --ink: #ffffff;
+  --ink-800: #f5f5f5;
+  --ink-700: #e0e0e0;
+  --muted: #b3b3b3;
+  --muted-2: #8a8a8a;
+  --muted-3: #6f6f6f;
+  --line: rgba(255, 255, 255, 0.1);
+  --line-strong: rgba(255, 255, 255, 0.16);
+  --bg: #000000;
+  --bg-subtle: #0a0a0a;
+  --bg-muted: #121212;
+  --bg-soft: #181818;
+  --accent: #a78bfa;
+  --accent-hover: #c4b5fd;
+  --accent-soft: rgba(167, 139, 250, 0.14);
+  --accent-soft-2: rgba(167, 139, 250, 0.1);
+  --accent-border: rgba(167, 139, 250, 0.3);
+  --success: #5eead4;
+  --page-bg: #000000;
+  --shadow-sm: 0 2px 8px rgba(0, 0, 0, 0.3);
+  --shadow: 0 12px 30px rgba(0, 0, 0, 0.38);
+  --shadow-lg: 0 22px 54px rgba(0, 0, 0, 0.5);
+  --glass-bg: rgba(18, 18, 18, 0.82);
+  --glass-bg-strong: rgba(10, 10, 10, 0.94);
+  --glass-bg-soft: rgba(24, 24, 24, 0.72);
+  --glass-edge: rgba(255, 255, 255, 0.14);
+  --glass-line: rgba(255, 255, 255, 0.1);
+  --glass-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.05), 0 14px 32px -18px rgba(0, 0, 0, 0.72);
+  --glass-shadow-lg: inset 0 1px 0 rgba(255, 255, 255, 0.07), 0 24px 52px -24px rgba(0, 0, 0, 0.82);
+}
+
+:root[data-theme="dark"] body,
+:root[data-theme="dark"] #root {
+  background-color: var(--page-bg);
+}
+
+:root[data-theme="dark"] body::before {
+  background:
+    radial-gradient(34vmax 30vmax at 18% 22%, rgba(110, 82, 210, 0.14), transparent 70%),
+    radial-gradient(32vmax 30vmax at 84% 16%, rgba(45, 125, 190, 0.11), transparent 70%),
+    radial-gradient(36vmax 32vmax at 76% 84%, rgba(170, 76, 114, 0.08), transparent 70%),
+    radial-gradient(30vmax 28vmax at 22% 82%, rgba(39, 145, 127, 0.08), transparent 70%);
+}
+
+:root[data-theme="dark"] body::after {
+  background:
+    radial-gradient(26vmax 24vmax at 58% 42%, rgba(116, 88, 214, 0.1), transparent 70%),
+    radial-gradient(22vmax 22vmax at 38% 60%, rgba(48, 126, 194, 0.08), transparent 70%);
+}
+
+/* Component-local palettes that otherwise shadow the global design tokens. */
+:root[data-theme="dark"] .app,
+:root[data-theme="dark"] .ct,
+:root[data-theme="dark"] .rm,
+:root[data-theme="dark"] .an {
+  --shell-paper: #0a0a0a;
+  --shell-surface: var(--glass-bg);
+  --shell-hover: rgba(255, 255, 255, 0.08);
+  --shell-ink: #ffffff;
+  --shell-ink-2: #b3b3b3;
+  --shell-ink-3: #8a8a8a;
+  --shell-accent: #c4b5fd;
+  --shell-accent-deep: #ffffff;
+  --shell-accent-soft: rgba(167, 139, 250, 0.14);
+  --ct-paper: #0a0a0a;
+  --ct-surface: var(--glass-bg);
+  --ct-hover: rgba(255, 255, 255, 0.08);
+  --ct-ink: #ffffff;
+  --ct-ink-2: #b3b3b3;
+  --ct-ink-3: #8a8a8a;
+  --ct-line: var(--glass-line);
+  --ct-line-2: rgba(255, 255, 255, 0.08);
+  --ct-line-strong: rgba(255, 255, 255, 0.16);
+  --ct-accent: #a78bfa;
+  --ct-accent-deep: #c4b5fd;
+  --ct-accent-mid: #8b5cf6;
+  --ct-accent-soft: rgba(167, 139, 250, 0.14);
+  --rm-paper: #0a0a0a;
+  --rm-surface: var(--glass-bg);
+  --rm-hover: rgba(255, 255, 255, 0.08);
+  --rm-ink: #ffffff;
+  --rm-ink-2: #b3b3b3;
+  --rm-ink-3: #8a8a8a;
+  --rm-line: var(--glass-line);
+  --rm-line-2: rgba(255, 255, 255, 0.08);
+  --rm-line-strong: rgba(255, 255, 255, 0.16);
+  --rm-accent: #a78bfa;
+  --rm-accent-deep: #c4b5fd;
+  --rm-accent-mid: #8b5cf6;
+  --rm-accent-soft: rgba(167, 139, 250, 0.14);
+  --rm-green: #5eead4;
+  --rm-green-soft: rgba(45, 212, 191, 0.14);
+  --rm-amber: #fbbf24;
+  --rm-amber-soft: rgba(251, 191, 36, 0.14);
+  --rm-red: #fca5a5;
+  --rm-red-soft: rgba(248, 113, 113, 0.14);
+}
+
+:root[data-theme="dark"] .an {
+  --an-paper: #0a0a0a;
+  --an-surface: var(--glass-bg);
+  --an-hover: rgba(255, 255, 255, 0.08);
+  --an-ink: #ffffff;
+  --an-ink-2: #b3b3b3;
+  --an-ink-3: #8a8a8a;
+  --an-line: var(--glass-line);
+  --an-line-2: rgba(255, 255, 255, 0.08);
+  --an-line-strong: rgba(255, 255, 255, 0.16);
+  --an-accent: #a78bfa;
+  --an-accent-deep: #c4b5fd;
+  --an-accent-mid: #8b5cf6;
+  --an-accent-soft: rgba(167, 139, 250, 0.14);
+  --an-green: #5eead4;
+  --an-green-soft: rgba(45, 212, 191, 0.14);
+  --an-amber: #fbbf24;
+  --an-amber-soft: rgba(251, 191, 36, 0.14);
+  --an-red: #fca5a5;
+  --an-red-soft: rgba(248, 113, 113, 0.14);
+}
+
+:root[data-theme="dark"] .app__bar,
+:root[data-theme="dark"] .sidebar {
+  background: var(--glass-bg-strong);
+  border-color: var(--glass-edge);
+}
+
+:root[data-theme="dark"] .acct__theme {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+:root[data-theme="dark"] .acct__theme-value {
+  color: var(--muted-2);
+  font-size: 0.78rem;
+}
+
+:root[data-theme="dark"] .acct__avatar {
+  background: #181818;
+  color: #ffffff;
+  border: 1px solid rgba(255, 255, 255, 0.16);
+}
+
+:root[data-theme="dark"] .nav__pill,
+:root[data-theme="dark"] .nav__mobile {
+  background-color: rgba(10, 10, 10, 0.9);
+  background-image: linear-gradient(180deg, rgba(255, 255, 255, 0.035), rgba(0, 0, 0, 0));
+  border-color: rgba(255, 255, 255, 0.14);
+  box-shadow: var(--glass-shadow-lg);
+}
+
+/* Navbar owns a separate light-theme navy palette. Override that palette at its
+   source so every desktop, mobile, active, and action label follows the dark
+   surface instead of inheriting dark navy text. */
+:root[data-theme="dark"] .nav {
+  --nav-ink: #ffffff;
+  --nav-ink-soft: #b3b3b3;
+  --nav-ink-active: #ffffff;
+}
+
+:root[data-theme="dark"] .nav__link:hover,
+:root[data-theme="dark"] .nav__link.is-active,
+:root[data-theme="dark"] .nav__login,
+:root[data-theme="dark"] .nav__mobile-link.is-active,
+:root[data-theme="dark"] .nav__mobile-login {
+  color: #ffffff;
+}
+
+:root[data-theme="dark"] .nav__mobile-link,
+:root[data-theme="dark"] .nav__mobile-actions {
+  color: #b3b3b3;
+  border-color: rgba(255, 255, 255, 0.14);
+}
+
+:root[data-theme="dark"] .nav__capsule,
+:root[data-theme="dark"] .nav__mobile-link.is-active {
+  background: rgba(255, 255, 255, 0.12);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.12);
+}
+
+:root[data-theme="dark"] .nav__burger {
+  background: #181818;
+  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.14);
+}
+
+/* The public readiness pipeline and career-track showcase have intentionally
+   light preview cards in the default theme. In dark mode their hardcoded child
+   gradients must switch together with the parent, otherwise white copy lands
+   on white glass. */
+:root[data-theme="dark"] .pipe__card,
+:root[data-theme="dark"] .pipe__card--accent,
+:root[data-theme="dark"] .pipe__card--gap,
+:root[data-theme="dark"] .pipe__card--final {
+  background: #121212;
+  color: #ffffff;
+  border-color: rgba(255, 255, 255, 0.14);
+}
+
+:root[data-theme="dark"] .pipe__card-title,
+:root[data-theme="dark"] .pipe__stage-label,
+:root[data-theme="dark"] .pipe__head-note {
+  color: #b3b3b3;
+}
+
+:root[data-theme="dark"] .pipe__rows span,
+:root[data-theme="dark"] .pipe__score,
+:root[data-theme="dark"] .pipe__card--final .pipe__card-title {
+  color: #ffffff;
+}
+
+:root[data-theme="dark"] .pipe__rows em,
+:root[data-theme="dark"] .pipe__score span {
+  color: #b3b3b3;
+}
+
+:root[data-theme="dark"] .pipe__rows--gap li {
+  background: #181818;
+  border-color: rgba(251, 191, 36, 0.32);
+}
+
+:root[data-theme="dark"] .pipe__next {
+  color: #d1d5db;
+}
+
+:root[data-theme="dark"] .pipe__stage-num--gap {
+  background: rgba(251, 191, 36, 0.14);
+  border-color: rgba(251, 191, 36, 0.36);
+  color: #fbbf24;
+}
+
+:root[data-theme="dark"] .pipe__stage-num--final {
+  background: #0f766e;
+  border-color: #0f766e;
+  color: #ffffff;
+}
+
+:root[data-theme="dark"] .ctrack__role.is-active {
+  color: #ffffff;
+}
+
+:root[data-theme="dark"] .ctrack__role-pill {
+  background: #181818;
+  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.16);
+}
+
+:root[data-theme="dark"] .ctrack__board,
+:root[data-theme="dark"] .ctrack__step,
+:root[data-theme="dark"] .ctrack__step--current {
+  background: #121212;
+  color: #ffffff;
+  border-color: rgba(255, 255, 255, 0.14);
+}
+
+:root[data-theme="dark"] .ctrack__step--current {
+  box-shadow: 0 0 0 3px rgba(167, 139, 250, 0.14), var(--shadow-sm);
+}
+
+:root[data-theme="dark"] .ctrack__stats div {
+  background: #181818;
+  border-color: rgba(255, 255, 255, 0.12);
+}
+
+:root[data-theme="dark"] .ctrack__station {
+  background: #181818;
+  color: #b3b3b3;
+  border-color: rgba(255, 255, 255, 0.18);
+}
+
+:root[data-theme="dark"] .ctrack__phase--done .ctrack__station {
+  background: #0f766e;
+  border-color: #0f766e;
+  color: #ffffff;
+}
+
+:root[data-theme="dark"] .ctrack__step--locked {
+  background: #0a0a0a;
+  opacity: 1;
+}
+
+:root[data-theme="dark"] .evidence__note,
+:root[data-theme="dark"] .final,
+:root[data-theme="dark"] .final__card,
+:root[data-theme="dark"] .footer {
+  background: #0a0a0a;
+}
+
+:root[data-theme="dark"] .final__card {
+  border-color: rgba(255, 255, 255, 0.14);
+}
+
+:root[data-theme="dark"] .evidence__note {
+  color: #d1d5db;
+  border-color: rgba(255, 255, 255, 0.14);
+}
+
+:root[data-theme="dark"] .final__eyebrow,
+:root[data-theme="dark"] .final__desc,
+:root[data-theme="dark"] .footer__desc,
+:root[data-theme="dark"] .footer__col a,
+:root[data-theme="dark"] .footer__bottom,
+:root[data-theme="dark"] .footer__tagline {
+  color: #b3b3b3 !important;
+}
+
+:root[data-theme="dark"] .footer__heading {
+  color: #ffffff;
+}
+
+:root[data-theme="dark"] .final__title {
+  color: #ffffff !important;
+}
+
+:root[data-theme="dark"] .final__primary {
+  color: #0a0a0a;
+  background: #a78bfa;
+}
+
+/* Three intentional dark-mode exceptions from the landing screenshots. Keep
+   their existing geometry and effects; only correct the foreground/surface
+   contrast for the affected components. */
+:root[data-theme="dark"] .nav__pill,
+:root[data-theme="dark"] .nav__mobile {
+  background: #ffffff;
+  background-image: none;
+  border-color: rgba(17, 17, 17, 0.18);
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.9),
+    0 10px 28px -16px rgba(0, 0, 0, 0.42);
+}
+
+:root[data-theme="dark"] .nav {
+  --nav-ink: #111111;
+  --nav-ink-soft: #333333;
+  --nav-ink-active: #000000;
+}
+
+:root[data-theme="dark"] .nav__link:hover,
+:root[data-theme="dark"] .nav__link.is-active,
+:root[data-theme="dark"] .nav__login,
+:root[data-theme="dark"] .nav__mobile-link,
+:root[data-theme="dark"] .nav__mobile-link.is-active,
+:root[data-theme="dark"] .nav__mobile-login {
+  color: #111111;
+}
+
+:root[data-theme="dark"] .nav__link:not(.is-active):hover,
+:root[data-theme="dark"] .nav__login:hover,
+:root[data-theme="dark"] .nav__burger:hover {
+  background: rgba(17, 17, 17, 0.08);
+}
+
+:root[data-theme="dark"] .nav__capsule,
+:root[data-theme="dark"] .nav__mobile-link.is-active {
+  background: rgba(17, 17, 17, 0.09);
+  box-shadow: inset 0 1px 0 rgba(17, 17, 17, 0.08);
+}
+
+:root[data-theme="dark"] .nav__actions::before,
+:root[data-theme="dark"] .nav__mobile-actions {
+  border-color: rgba(17, 17, 17, 0.14);
+  background: none;
+}
+
+:root[data-theme="dark"] .nav__cta,
+:root[data-theme="dark"] .nav__cta * {
+  color: #111111 !important;
+}
+
+:root[data-theme="dark"] .nav__burger {
+  background: #ffffff;
+  box-shadow: inset 0 0 0 1px rgba(17, 17, 17, 0.16);
+}
+
+:root[data-theme="dark"] .nav__burger-line {
+  background: #111111;
+}
+
+:root[data-theme="dark"] .hflow .lp-kicker,
+:root[data-theme="dark"] .hflow__chip {
+  color: #222222;
+}
+
+:root[data-theme="dark"] .hflow__chip svg,
+:root[data-theme="dark"] .hflow__group:last-child .hflow__chip svg {
+  color: #333333;
+}
+
+:root[data-theme="dark"] .ctrack__board .lp-kicker,
+:root[data-theme="dark"] .ctrack__role-title,
+:root[data-theme="dark"] .ctrack__readiness-num,
+:root[data-theme="dark"] .ctrack__phase-name,
+:root[data-theme="dark"] .ctrack__foot,
+:root[data-theme="dark"] .ctrack__foot strong {
+  color: #111111;
+}
+
+:root[data-theme="dark"] .ctrack__board .ctrack__readiness-label {
+  color: #4b3d91;
+}
+
+:root[data-theme="dark"] .ctrack__board .ctrack__phase-meta,
+:root[data-theme="dark"] .ctrack__board .ctrack__step-levels,
+:root[data-theme="dark"] .ctrack__board .ctrack__step-status,
+:root[data-theme="dark"] .ctrack__board .ctrack__cta-note {
+  color: #555555;
+}
+
+/* Analysis quadrant: the plot is a dark surface, so its axis, quadrant,
+   tick, and point labels need solid light text. Remove the white halo that
+   was blurring labels against the chart. */
+:root[data-theme="dark"] .an-plot__axis,
+:root[data-theme="dark"] .an-plot__tick,
+:root[data-theme="dark"] .an-plot__q,
+:root[data-theme="dark"] .an-pt__label {
+  color: #f1f5f9;
+  text-shadow: none;
+}
+
+:root[data-theme="dark"] .an-pt.is-active .an-pt__label {
+  color: #ffffff;
+}
+
+/* The readiness card keeps its existing light glass surface. Use a deep
+   foreground for the headline percentage and supporting labels; the three
+   existing dark status tiles retain light, readable values. */
+:root[data-theme="dark"] .ctrack__board .ctrack__readiness-num {
+  color: #111111;
+}
+
+:root[data-theme="dark"] .ctrack__board .ctrack__readiness-label {
+  color: #4b3d91;
+}
+
+:root[data-theme="dark"] .ctrack__board .ctrack__stats dt {
+  color: #b8b8b8;
+}
+
+:root[data-theme="dark"] .ctrack__board .ctrack__stats dd {
+  color: #f8fafc;
+}
+
+/* Form controls and media should stay charcoal, never blue/navy, in the
+   product shell. */
+:root[data-theme="dark"] input,
+:root[data-theme="dark"] select,
+:root[data-theme="dark"] textarea {
+  background-color: #121212;
+}
+
+:root[data-theme="dark"] .nav__link:not(.is-active):hover,
+:root[data-theme="dark"] .nav__login:hover,
+:root[data-theme="dark"] .nav__burger:hover {
+  background: rgba(255, 255, 255, 0.08);
+}
+
+:root[data-theme="dark"] .nav__pill::after {
+  background: linear-gradient(172deg, rgba(255, 255, 255, 0.32), rgba(255, 255, 255, 0.08));
+}
+
+/* The shader remains visible, but the hero content sits on an opaque-enough
+   charcoal reading surface so the rainbow never competes with the copy. */
+:root[data-theme="dark"] .inaura-hero-panel {
+  color: #ffffff;
+  background: rgba(10, 10, 10, 0.88) !important;
+  border-color: rgba(255, 255, 255, 0.14) !important;
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.06), 0 30px 70px -30px rgba(0, 0, 0, 0.86) !important;
+}
+
+:root[data-theme="dark"] .inaura-hero-panel .bg-foreground {
+  background: #a78bfa !important;
+  color: #0a0a0a !important;
+}
+
+:root[data-theme="dark"] .inaura-hero-secondary {
+  color: #ffffff !important;
+  background: rgba(18, 18, 18, 0.9) !important;
+  border-color: rgba(255, 255, 255, 0.28) !important;
+}
+
+:root[data-theme="dark"] .inaura-hero-secondary:hover {
+  background: #181818 !important;
+  border-color: rgba(255, 255, 255, 0.48) !important;
+}
+
+:root[data-theme="dark"] .inaura-hero-preview {
+  background: rgba(18, 18, 18, 0.76) !important;
+  border-color: rgba(255, 255, 255, 0.12) !important;
+}
+
+:root[data-theme="dark"] .search {
+  --search-ink: #ffffff;
+  --search-ink-2: #e0e0e0;
+  --search-muted: #8a8a8a;
+  --search-bg: #121212;
+  --search-kbd-bg: #181818;
+}
+
+/* Landing cards stay charcoal rather than becoming a field of white frosted panels. */
+:root[data-theme="dark"] .lp-card,
+:root[data-theme="dark"] .lp-panel,
+:root[data-theme="dark"] .feat__card,
+:root[data-theme="dark"] .how__card,
+:root[data-theme="dark"] .evidence__mock,
+:root[data-theme="dark"] .ctrack__board,
+:root[data-theme="dark"] .compare__side {
+  background: #0f0f0f !important;
+  border-color: rgba(255, 255, 255, 0.1) !important;
+  box-shadow: 0 18px 42px rgba(0, 0, 0, 0.28) !important;
+}
+
+:root[data-theme="dark"] .lp-card p,
+:root[data-theme="dark"] .lp-panel p,
+:root[data-theme="dark"] .feat__desc,
+:root[data-theme="dark"] .how__card-desc,
+:root[data-theme="dark"] .lp-lede {
+  color: #b3b3b3;
+}
+
+:root[data-theme="dark"] .final-cta,
+:root[data-theme="dark"] .final-cta__inner {
+  background: #000000 !important;
+}
+
+:root[data-theme="dark"] input,
+:root[data-theme="dark"] select,
+:root[data-theme="dark"] textarea {
+  color: var(--ink);
+  background-color: rgba(15, 23, 42, 0.58);
+  border-color: var(--line-strong);
+}
+
+:root[data-theme="dark"] input::placeholder,
+:root[data-theme="dark"] textarea::placeholder {
+  color: var(--muted-3);
+}
+
+:root[data-theme="dark"] .btn--secondary {
+  --btn-bg: rgba(15, 23, 42, 0.5);
+  --btn-fg: var(--ink);
+  --btn-border: var(--line-strong);
+}
+
+:root[data-theme="dark"] .btn--primary {
+  --btn-bg: #a78bfa;
+  --btn-fg: #0a0a0a;
+  --btn-border: #a78bfa;
+}
+
+:root[data-theme="dark"] .btn--accent:hover,
+:root[data-theme="dark"] .btn--primary:hover {
+  box-shadow: 0 10px 24px rgba(79, 70, 229, 0.3);
+}
+
+/* Preserve the interview camera surface as a fixed media colour. */
+:root[data-theme="dark"] .iv__video,
+:root[data-theme="dark"] .iv__camera,
+:root[data-theme="dark"] video {
+  background: #0a0a0a;
 }
