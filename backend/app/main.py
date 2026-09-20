@@ -2,6 +2,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from .core.config import get_settings
 from .api.v1.router import api_router
+from .api.v1.endpoints.notion import router as notion_router
 
 app = FastAPI(
     title="INAURA API",
@@ -32,6 +33,7 @@ app.add_middleware(
 
 # Routers
 app.include_router(api_router)
+app.include_router(notion_router, prefix="/api/integrations/notion")
 
 
 @app.get("/api/v1/health")

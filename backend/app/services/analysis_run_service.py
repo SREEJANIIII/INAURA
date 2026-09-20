@@ -313,6 +313,21 @@ def build_evidence_sources(signals: List[dict]) -> List[dict]:
             details = {"completion_year": meta.get("completion_year"), "issuing_org": meta.get("issuing_org")}
             if source_url:
                 details["source_url"] = source_url
+        elif src_type == "notion":
+            page_title = meta.get("sourcePageTitle") or meta.get("page_title") or meta.get("title") or "Notion Notes"
+            label = f"Notion · {page_title}"
+            evidence_type_str = meta.get("evidenceType") or meta.get("evidence_type") or "studied"
+            details = {
+                "sourcePageId": meta.get("sourcePageId") or meta.get("page_id"),
+                "sourcePageTitle": page_title,
+                "sourceUrl": meta.get("sourceUrl") or meta.get("url") or source_url,
+                "evidenceType": evidence_type_str,
+                "topics": meta.get("topics") or [],
+                "confidence": meta.get("confidence"),
+                "page_title": page_title,
+            }
+            if source_url:
+                details["source_url"] = source_url
         elif src_type in ("resume", "linkedin", "self_declared", "syllabus", "coursework"):
             label = src_type.capitalize() if src_type != "self_declared" else "Self-declared"
             details = dict(meta)

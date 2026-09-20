@@ -24,6 +24,7 @@ const items: NavItem[] = [
     icon: <Icon><path d="M7 3.5h7l4 4v13H7z" /><path d="M14 3.5v4h4" /><path d="M10 12.5h5M10 16h5" /></Icon>,
     children: [
       { label: "Profile URLs", to: "/analysis#profile-urls" },
+      { label: "Notion", to: "/analysis#notion" },
       { label: "File Evidence", to: "/analysis#file-evidence" },
       { label: "Projects", to: "/analysis#projects" },
       { label: "Certificates", to: "/analysis#certifications" },

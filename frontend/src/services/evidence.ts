@@ -6,6 +6,7 @@ export type EvidenceType =
   | "codeforces"
   | "kaggle"
   | "linkedin"
+  | "notion"
   | "resume"
   | "syllabus"
   | "certification_file"

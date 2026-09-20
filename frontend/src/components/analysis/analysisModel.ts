@@ -97,6 +97,7 @@ export const EVIDENCE_KINDS: EvidenceKind[] = [
   { key: "coding", label: "Coding platforms", phrase: "coding platforms" },
   { key: "coursework", label: "Coursework", phrase: "coursework" },
   { key: "certifications", label: "Certifications", phrase: "certifications" },
+  { key: "notion", label: "Notion", phrase: "Notion notes" },
   { key: "resume", label: "Resume or LinkedIn", phrase: "resume or LinkedIn" },
   { key: "assessment", label: "INAURA assessment", phrase: "an INAURA assessment" },
 ];
@@ -110,6 +111,7 @@ export function kindOfSource(sourceType: string | undefined | null): string | nu
   if (s.includes("leetcode") || s.includes("codeforces") || s.includes("kaggle")) return "coding";
   if (s.includes("syllabus") || s.includes("coursework")) return "coursework";
   if (s.includes("cert")) return "certifications";
+  if (s.includes("notion")) return "notion";
   if (s.includes("resume") || s.includes("linkedin") || s.includes("self")) return "resume";
   return null;
 }
@@ -159,6 +161,7 @@ const EVIDENCE_TYPE_LABEL: Record<string, string> = {
   codeforces: "Codeforces",
   kaggle: "Kaggle",
   linkedin: "LinkedIn",
+  notion: "Notion",
   resume: "Resume",
   syllabus: "Coursework",
   certification_file: "Certificate",

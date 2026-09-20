@@ -5,6 +5,7 @@ import { updateProfile, type Profile as ProfileData, type ProfilePayload } from 
 import { evidencePageData, profileData, refreshPageData } from "../lib/pageData";
 import { branches, degrees, interestOptions, years } from "../lib/profileOptions";
 import Button from "../components/ui/app-button";
+import NotionIntegrationCard from "../components/integrations/NotionIntegrationCard";
 import "./Profile.css";
 
 type Status = "loading" | "ready" | "missing" | "error";
@@ -379,7 +380,8 @@ export default function Profile() {
             </div>
           </div>
         ) : (
-          <div className="prof__grid">
+          <>
+            <div className="prof__grid">
             <section className="prof__card">
               <h2 className="prof__card-title">Academics</h2>
               <dl className="prof__list">
@@ -422,6 +424,22 @@ export default function Profile() {
               </div>
             </section>
           </div>
+
+            <section className="prof__card prof__card--full" style={{ padding: "20px 24px" }}>
+              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "14px", flexWrap: "wrap", gap: "8px" }}>
+                <div>
+                  <h2 className="prof__card-title" style={{ margin: 0 }}>Connected Integrations</h2>
+                  <p className="prof__muted" style={{ margin: "4px 0 0", fontSize: "0.85rem" }}>
+                    Connect external workspaces to provide additional evidence of your learning and skills.
+                  </p>
+                </div>
+                <Link to="/analysis#notion" style={{ fontSize: "0.82rem", color: "var(--accent)", textDecoration: "none", fontWeight: 600 }}>
+                  Open in Evidence view →
+                </Link>
+              </div>
+              <NotionIntegrationCard />
+            </section>
+          </>
         )}
       </main>
     </div>

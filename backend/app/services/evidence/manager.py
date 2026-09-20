@@ -8,6 +8,7 @@ from .leetcode import LeetCodeProvider
 from .codeforces import CodeforcesProvider
 from .kaggle import KaggleProvider
 from .linkedin import LinkedInProvider
+from .notion import NotionProvider
 from .url_utils import (
     validate_platform_url,
     extract_username_from_path,
@@ -41,6 +42,15 @@ def get_evidence_dedup_key(ev: dict) -> str:
     """
     etype = (ev.get("evidence_type") or "").lower()
     url = (ev.get("source_url") or "").strip()
+    meta = ev.get("metadata") or {}
+
+    if etype == "notion":
+        page_id = meta.get("sourcePageId") or meta.get("page_id")
+        if page_id:
+            return f"notion:{str(page_id).lower()}"
+        if url:
+            return f"notion:{url.lower()}"
+        return f"notion:{ev.get('id') or 'unknown'}"
 
     if etype == "github" or "github.com" in url.lower():
         owner, repo, is_prof = parse_github_url(url)
@@ -82,6 +92,7 @@ class EvidenceManager:
             CodeforcesProvider(),
             KaggleProvider(),
             LinkedInProvider(),
+            NotionProvider(),
         ]
 
     def get_provider(self, evidence: dict) -> Optional[EvidenceProvider]:

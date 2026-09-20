@@ -22,6 +22,7 @@ import Button from "../components/ui/app-button";
 import { evidencePageData, refreshPageData } from "../lib/pageData";
 
 type EvidencePageData = NonNullable<ReturnType<typeof evidencePageData.peek>>;
+import NotionIntegrationCard from "../components/integrations/NotionIntegrationCard";
 import "./Analysis.css";
 
 type UrlSource = "github" | "leetcode" | "codeforces" | "kaggle" | "linkedin";
@@ -321,7 +322,7 @@ export default function Analysis() {
     if (certs.length > 0 && !present.has("certification_file")) {
       if (!present.has("certification_file")) count += 1;
     }
-    count = Math.min(count, 9);
+    count = Math.min(count, 10);
     return { count, present };
   })();
 
@@ -550,6 +551,12 @@ export default function Analysis() {
                     empty: "GitHub, LeetCode, Codeforces, Kaggle or LinkedIn",
                   },
                   {
+                    id: "notion",
+                    label: "Notion Integration",
+                    added: findEvidence("notion") ? ["Notion connected & synced"] : [],
+                    empty: "Workspace notes & documentation",
+                  },
+                  {
                     id: "file-evidence",
                     label: "File Evidence",
                     added: fileSources.filter((f) => findEvidence(f.type)).map((f) => (f.type === "resume" ? "Resume" : "Syllabus")),
@@ -594,6 +601,16 @@ export default function Analysis() {
               </Button>
             </div>
           </>
+        )}
+
+        {/* Notion Integration */}
+        {section === "notion" && (
+          <section className="analysis__section" id="notion">
+            <NotionIntegrationCard
+              onSyncComplete={() => loadAll(true)}
+              onDisconnectComplete={() => loadAll(true)}
+            />
+          </section>
         )}
 
         {/* URL Sources */}
@@ -964,6 +981,7 @@ export default function Analysis() {
                 { key: "codeforces", label: "Codeforces" },
                 { key: "kaggle", label: "Kaggle" },
                 { key: "linkedin", label: "LinkedIn" },
+                { key: "notion", label: "Notion" },
                 { key: "resume", label: "Resume" },
                 { key: "syllabus", label: "Syllabus" },
                 { key: "projects", label: "Projects" },
@@ -985,7 +1003,7 @@ export default function Analysis() {
                 );
               })}
             </div>
-            <div className="analysis__coverage">Evidence coverage: {summary.count} of 9 sources</div>
+            <div className="analysis__coverage">Evidence coverage: {summary.count} of 10 sources</div>
             <p className="analysis__coverage-hint">This is only a count — not a readiness percentage.</p>
           </section>
         )}

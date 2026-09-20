@@ -81,6 +81,7 @@ SOURCE_RELIABILITY: Dict[str, float] = {
     "certification": 0.55,
     "certification_file": 0.55,
     "project_doc": 0.55,
+    "notion": 0.55,
     # SUPPORTING — artifact evidence: shows exposure, not demonstrated ability.
     # Fixed at 0.40; never raised by a completed assessment.
     "project": 0.40,
@@ -99,7 +100,7 @@ DEFAULT_RELIABILITY = 0.50
 RELIABILITY_TIERS: Dict[str, List[str]] = {
     "very_high": ["assessment"],
     "high": ["interview", "leetcode", "codeforces", "kaggle", "syllabus", "coursework"],
-    "medium": ["certification", "certification_file", "project_doc"],
+    "medium": ["certification", "certification_file", "project_doc", "notion"],
     "supporting": ["project", "github"],
     "low": ["resume", "linkedin", "self_declared"],
 }
@@ -125,6 +126,7 @@ SOURCE_DIRECTNESS: Dict[str, float] = {
     "project": 0.45,
     "github": 0.40,
     "project_doc": 0.35,
+    "notion": 0.35,
     "certification": 0.35,
     # Self-reported
     "resume": 0.15,
