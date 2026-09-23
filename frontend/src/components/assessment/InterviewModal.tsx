@@ -41,7 +41,7 @@ type Question = {
 };
 
 /** What the AI interviewer calls itself, on screen and out loud. */
-const INTERVIEWER_NAME = "Donald Duck";
+const INTERVIEWER_NAME = "Alex";
 
 const SILENCE_TIMEOUT_MS = 2800;
 /** Watchdogs so no phase can wedge forever (backend budgets are shorter). */
@@ -421,7 +421,7 @@ export default function InterviewModal({ skill, onClose, onCompleted }: Props) {
 
       const greeting = resuming
         ? firstQ.prompt
-        : `Hi! I'm ${INTERVIEWER_NAME}, your technical interviewer. We'll focus on ${skill} today, starting with your own work. Let's begin. ${firstQ.prompt}`;
+        : `Hi! I'm ${INTERVIEWER_NAME}, your INAURA technical interviewer. We'll focus on ${skill} today. Let's begin: ${firstQ.prompt}`;
       await speakThenListen(greeting);
     } catch (e) {
       if (!interviewActiveRef.current) return;
@@ -546,14 +546,24 @@ export default function InterviewModal({ skill, onClose, onCompleted }: Props) {
             <p className="iv__intro-req">
               Camera + microphone will be requested when you begin.
             </p>
-            <Button
-              onClick={() => void beginInterview()}
-              variant="primary"
-              size="lg"
-              disabled={loading}
-            >
-              {loading ? "Starting..." : "Let's Begin"}
-            </Button>
+            <div style={{ display: "flex", gap: "0.75rem", justifyContent: "center", marginTop: "1rem" }}>
+              <Button
+                onClick={() => void beginInterview()}
+                variant="primary"
+                size="lg"
+                disabled={loading}
+              >
+                {loading ? "Starting..." : "Let's Begin"}
+              </Button>
+              <Button
+                onClick={onClose}
+                variant="ghost"
+                size="lg"
+                disabled={loading}
+              >
+                Cancel
+              </Button>
+            </div>
             {error && (
               <div className="iv__intro-error" role="alert">{error}</div>
             )}
@@ -643,14 +653,18 @@ export default function InterviewModal({ skill, onClose, onCompleted }: Props) {
             <div className="iv__call-panel iv__call-panel--ai">
               <div className="iv__call-avatar">
                 <div className={`iv__avatar-ring ${phase === "ai_speaking" ? "iv__avatar-ring--active" : ""}`}>
-                  <span className="iv__avatar-icon" role="img" aria-label="Funny duck interviewer">🦆</span>
+                  <span className="iv__avatar-icon" role="img" aria-label="AI Interviewer">🤖</span>
                 </div>
               </div>
-              <div className="iv__call-panel-label">{INTERVIEWER_NAME}</div>
-              {/* The question stays visible while listening when voice failed,
-                  so it can still be read and answered. Cleared on success. */}
-              {(phase === "ai_speaking" || phase === "listening") && aiText && (
-                <div className="iv__call-bubble iv__call-bubble--ai" aria-live="polite">{aiText}</div>
+              <div className="iv__call-panel-label">{INTERVIEWER_NAME} · AI Interviewer</div>
+              {/* Question bubble stays clearly readable while listening or speaking */}
+              {(phase === "ai_speaking" || phase === "listening" || phase === "processing") && (aiText || currentQuestion?.prompt) && (
+                <div className="iv__call-bubble iv__call-bubble--ai" aria-live="polite">
+                  <div className="iv__call-bubble-eyebrow">
+                    Question {answeredCount + 1} {currentQuestion?.competency ? `· ${currentQuestion.competency.replace(/_/g, " ")}` : ""}
+                  </div>
+                  <div className="iv__call-bubble-text">{aiText || currentQuestion?.prompt}</div>
+                </div>
               )}
               {phase === "processing" && (
                 <div className="iv__call-bubble iv__call-bubble--ai iv__call-bubble--muted">

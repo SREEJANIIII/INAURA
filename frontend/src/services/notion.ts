@@ -26,6 +26,7 @@ export interface NotionSyncedPage {
   code_languages: string[];
   word_count: number;
   extracted_evidence: NotionEvidenceItem[];
+  is_excluded?: boolean;
 }
 
 export interface NotionStatus {
@@ -64,6 +65,7 @@ export interface NotionSyncResult {
     word_count?: number;
     evidence_count: number;
     extracted_evidence?: NotionEvidenceItem[];
+    is_excluded?: boolean;
   }>;
   synced_pages?: NotionSyncedPage[];
 }
@@ -96,4 +98,17 @@ export async function disconnectNotion(): Promise<NotionDisconnectResponse> {
   return apiFetch<NotionDisconnectResponse>("/integrations/notion/disconnect", {
     method: "DELETE",
   });
+}
+
+export async function setNotionPageExcluded(
+  page_id: string,
+  is_excluded: boolean
+): Promise<NotionSyncedPage> {
+  return apiFetch<NotionSyncedPage>(
+    `/integrations/notion/pages/${encodeURIComponent(page_id)}/exclusion`,
+    {
+      method: "PATCH",
+      body: JSON.stringify({ is_excluded }),
+    }
+  );
 }

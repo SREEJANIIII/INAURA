@@ -315,9 +315,27 @@ def test_mock_interview_routes_registered():
     from app.api.v1.endpoints.mock_interview import router
     paths = sorted({r.path for r in router.routes})
     assert "/interview/start" in paths
+    assert "/interview/history" in paths
     assert "/interview/{session_id}/answer" in paths
     assert "/interview/{session_id}/complete" in paths
     assert "/interview/{session_id}/report" in paths
+
+
+def test_classify_conversation_intent_entire_skill_vs_subtopic():
+    from app.services.assessment.interview import classify_conversation_intent
+    # If candidate states they don't know the core skill being interviewed:
+    intent1 = classify_conversation_intent("I dont know anything about python", "Python")
+    assert intent1 == "entire_skill_unknown"
+    intent2 = classify_conversation_intent("i have never learned python or used it", "Python")
+    assert intent2 == "entire_skill_unknown"
+    # But if they don't know a sub-topic/library within that skill:
+    intent3 = classify_conversation_intent("I dont know about pandas library in python", "Python")
+    assert intent3 == "technical_answer"
+    intent4 = classify_conversation_intent("I'm not familiar with the asyncio module in python", "Python")
+    assert intent4 == "technical_answer"
+    # Clarifications:
+    intent5 = classify_conversation_intent("Could you clarify the question?", "Python")
+    assert intent5 == "interviewer_clarification"
 
 
 def test_start_requires_supabase_or_role_resolution():

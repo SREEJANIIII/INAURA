@@ -132,3 +132,37 @@ class MockInterviewReport(BaseModel):
     overall_interview_confidence: float = 0.0
     ai_available: bool = True
     note: Optional[str] = None
+
+
+class InterviewHistoryTurn(BaseModel):
+    question_id: str = ""
+    question: str = ""
+    answer: str = ""
+    competency: Optional[str] = None
+    technical_correctness: Optional[float] = None
+    depth: Optional[float] = None
+    reasoning: Optional[float] = None
+    explanation: Optional[str] = None
+    demonstrated: List[str] = Field(default_factory=list)
+    missing: List[str] = Field(default_factory=list)
+    misconceptions: List[str] = Field(default_factory=list)
+    suggested_follow_up: Optional[str] = None
+
+
+class InterviewHistorySession(BaseModel):
+    session_id: str
+    interview_type: str = "mock"  # "mock" or "skill"
+    title: str = ""
+    target: str = ""
+    status: str = "completed"
+    started_at: Optional[str] = None
+    completed_at: Optional[str] = None
+    questions_count: int = 0
+    overall_score: Optional[float] = None
+    strengths: List[str] = Field(default_factory=list)
+    areas_to_improve: List[str] = Field(default_factory=list)
+    turns: List[InterviewHistoryTurn] = Field(default_factory=list)
+
+
+class InterviewHistoryResponse(BaseModel):
+    sessions: List[InterviewHistorySession] = Field(default_factory=list)

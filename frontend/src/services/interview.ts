@@ -135,3 +135,41 @@ export function completeMockInterview(session_id: string) {
 export function getMockReport(session_id: string) {
   return apiFetch<InterviewReport>(`/interview/${encodeURIComponent(session_id)}/report`);
 }
+
+export type InterviewHistoryTurn = {
+  question_id: string;
+  question: string;
+  answer: string;
+  competency?: string | null;
+  technical_correctness?: number | null;
+  depth?: number | null;
+  reasoning?: number | null;
+  explanation?: string | null;
+  demonstrated: string[];
+  missing: string[];
+  misconceptions: string[];
+  suggested_follow_up?: string | null;
+};
+
+export type InterviewHistorySession = {
+  session_id: string;
+  interview_type: "mock" | "skill" | string;
+  title: string;
+  target: string;
+  status: string;
+  started_at?: string | null;
+  completed_at?: string | null;
+  questions_count: number;
+  overall_score?: number | null;
+  strengths: string[];
+  areas_to_improve: string[];
+  turns: InterviewHistoryTurn[];
+};
+
+export type InterviewHistoryResponse = {
+  sessions: InterviewHistorySession[];
+};
+
+export function getInterviewHistory() {
+  return apiFetch<InterviewHistoryResponse>("/interview/history");
+}

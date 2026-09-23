@@ -6,6 +6,7 @@ import {
   getNotionConnectUrl,
   syncNotion,
   disconnectNotion,
+  setNotionPageExcluded,
   type NotionStatus,
   type NotionSyncResult,
   type NotionSyncedPage,
@@ -77,6 +78,7 @@ export default function NotionIntegrationCard({
   const [skillFilter, setSkillFilter] = useState("all");
   const [depthFilter, setDepthFilter] = useState("all");
   const [expandedPageIds, setExpandedPageIds] = useState<Set<string>>(new Set());
+  const [togglingPageIds, setTogglingPageIds] = useState<Set<string>>(new Set());
 
   const location = useLocation();
   const navigate = useNavigate();
@@ -201,22 +203,56 @@ export default function NotionIntegrationCard({
   const isConnected = status?.connected === true && status.status === "connected";
   const needsReconnect = status?.status === "reconnect_required" || status?.status === "revoked";
 
-  // Synced pages and aggregated evidence items
+  // Synced pages and aggregated evidence items.
+  // Excluded pages stay visible as study links but never contribute to scoring.
   const syncedPages: NotionSyncedPage[] = useMemo(() => {
     return status?.synced_pages || syncResult?.synced_pages || [];
   }, [status, syncResult]);
 
+  const includedPages = useMemo(() => {
+    return syncedPages.filter((p) => !p.is_excluded);
+  }, [syncedPages]);
+
+  const excludedCount = syncedPages.length - includedPages.length;
+
+  const handleTogglePageExclusion = async (page: NotionSyncedPage) => {
+    const next = !page.is_excluded;
+    setTogglingPageIds((prev) => new Set(prev).add(page.page_id));
+    try {
+      await setNotionPageExcluded(page.page_id, next);
+      await loadStatus();
+      refreshPageData();
+      setBanner({
+        type: "info",
+        message: next
+          ? `"${page.page_title}" excluded from scoring — kept below as a study link.`
+          : `"${page.page_title}" included in scoring again.`,
+      });
+    } catch (err: any) {
+      setBanner({
+        type: "error",
+        message: err?.message || "Failed to update page scoring preference.",
+      });
+    } finally {
+      setTogglingPageIds((prev) => {
+        const nextSet = new Set(prev);
+        nextSet.delete(page.page_id);
+        return nextSet;
+      });
+    }
+  };
+
   const allSkills = useMemo(() => {
     const s = new Set<string>();
-    syncedPages.forEach((p) => {
+    includedPages.forEach((p) => {
       (p.skills || []).forEach((sk) => s.add(sk));
     });
     return Array.from(s).sort();
-  }, [syncedPages]);
+  }, [includedPages]);
 
   const allEvidenceItems = useMemo(() => {
     const items: NotionEvidenceItem[] = [];
-    syncedPages.forEach((p) => {
+    includedPages.forEach((p) => {
       (p.extracted_evidence || []).forEach((e) => {
         items.push({
           ...e,
@@ -226,7 +262,7 @@ export default function NotionIntegrationCard({
       });
     });
     return items;
-  }, [syncedPages]);
+  }, [includedPages]);
 
   // Filtered pages
   const filteredPages = useMemo(() => {
@@ -368,6 +404,12 @@ export default function NotionIntegrationCard({
               <span className="notion-card__meta-label">Evidence Signals</span>
               <span className="notion-card__meta-val">{allEvidenceItems.length}</span>
             </div>
+            {excludedCount > 0 && (
+              <div className="notion-card__meta-item">
+                <span className="notion-card__meta-label">Excluded from scoring</span>
+                <span className="notion-card__meta-val">{excludedCount} page{excludedCount === 1 ? "" : "s"}</span>
+              </div>
+            )}
           </div>
 
           {/* Sync in Progress Indicator */}
@@ -389,6 +431,9 @@ export default function NotionIntegrationCard({
                 {allSkills.slice(0, 5).join(", ")}
                 {allSkills.length > 5 ? "…" : ""}). These signals feed directly into your INAURA
                 Skill Assessment, increasing confidence ratings and personalizing your roadmap.
+                {excludedCount > 0 && (
+                  <> Excluded pages ({excludedCount}) stay as study links and don't affect scoring.</>
+                )}
               </div>
             </div>
           )}
@@ -493,9 +538,15 @@ export default function NotionIntegrationCard({
                     filteredPages.map((page) => {
                       const isExpanded = expandedPageIds.has(page.page_id);
                       const pageEv = page.extracted_evidence || [];
+                      const isExcluded = !!page.is_excluded;
+                      const isToggling = togglingPageIds.has(page.page_id);
 
                       return (
-                        <div key={page.page_id} className="notion-page-card">
+                        <div
+                          key={page.page_id}
+                          className="notion-page-card"
+                          style={isExcluded ? { opacity: 0.72, borderStyle: "dashed" } : undefined}
+                        >
                           <div className="notion-page-card__head">
                             <div className="notion-page-card__info">
                               <span className="notion-page-card__icon" aria-hidden="true">
@@ -504,6 +555,14 @@ export default function NotionIntegrationCard({
                               <div>
                                 <h4 className="notion-page-card__title">
                                   <span>{page.page_title}</span>
+                                  {isExcluded && (
+                                    <span
+                                      className="notion-pill"
+                                      title="Excluded from career-readiness scoring; kept as a study link"
+                                    >
+                                      🚫 Excluded from scoring
+                                    </span>
+                                  )}
                                   {page.page_url && (
                                     <a
                                       href={page.page_url}
@@ -538,6 +597,44 @@ export default function NotionIntegrationCard({
                                     </span>
                                   ))}
                                 </div>
+
+                                <div
+                                  style={{ display: "flex", flexWrap: "wrap", gap: "8px", marginTop: "8px" }}
+                                >
+                                  {page.page_url && (
+                                    <a
+                                      href={page.page_url}
+                                      target="_blank"
+                                      rel="noopener noreferrer"
+                                      className="notion-page-card__link"
+                                      style={{ fontWeight: 700 }}
+                                    >
+                                      📖 Study this page in Notion ↗
+                                    </a>
+                                  )}
+                                  <button
+                                    type="button"
+                                    className="notion-page-card__toggle"
+                                    onClick={() => handleTogglePageExclusion(page)}
+                                    disabled={isToggling}
+                                    title={
+                                      isExcluded
+                                        ? "Include this page in career-readiness scoring"
+                                        : "Exclude this page from scoring (e.g. copied notes for future learning)"
+                                    }
+                                  >
+                                    {isToggling
+                                      ? "Updating..."
+                                      : isExcluded
+                                        ? "✓ Include in scoring"
+                                        : "🚫 Exclude from scoring"}
+                                  </button>
+                                </div>
+                                {isExcluded && (
+                                  <div style={{ fontSize: "0.78rem", color: "var(--muted-foreground)", marginTop: "6px" }}>
+                                    Kept as a study link — its signals don't count toward readiness.
+                                  </div>
+                                )}
                               </div>
                             </div>
 

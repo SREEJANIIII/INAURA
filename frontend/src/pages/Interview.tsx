@@ -6,8 +6,10 @@ import { mergeFinalTranscript, normalizeTechnicalTerms, splitRecognitionResults 
 import {
   answerMockQuestion,
   completeMockInterview,
+  getInterviewHistory,
   startMockInterview,
   type AnswerResponse,
+  type InterviewHistorySession,
   type InterviewReport,
   type MockQuestion,
   type StartInterviewResponse,
@@ -41,7 +43,9 @@ type DictationInstance = {
 };
 
 function pct(v: number | null | undefined): string {
-  return typeof v === "number" && Number.isFinite(v) ? `${Math.round(v * 100)}%` : "—";
+  if (typeof v !== "number" || !Number.isFinite(v)) return "—";
+  const val = v <= 1.0 && v > 0.0 ? v * 100 : v;
+  return `${Math.round(val)}%`;
 }
 
 export default function Interview() {
@@ -58,6 +62,28 @@ export default function Interview() {
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [liveInterviewSkill, setLiveInterviewSkill] = useState<string | null>(null);
+
+  // Past interview history & review
+  const [activeTab, setActiveTab] = useState<"interview" | "history">("interview");
+  const [historySessions, setHistorySessions] = useState<InterviewHistorySession[]>([]);
+  const [loadingHistory, setLoadingHistory] = useState(false);
+  const [expandedSessionId, setExpandedSessionId] = useState<string | null>(null);
+
+  const fetchHistory = useCallback(async () => {
+    setLoadingHistory(true);
+    try {
+      const res = await getInterviewHistory();
+      setHistorySessions(res.sessions || []);
+    } catch {
+      // Non-blocking
+    } finally {
+      setLoadingHistory(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    void fetchHistory();
+  }, [fetchHistory]);
 
   // Camera / mic
   const [camState, setCamState] = useState<CamState>("idle");
@@ -242,6 +268,7 @@ export default function Interview() {
       setReport(rep);
       setStage("report");
       stopTracks();
+      void fetchHistory();
     } catch (e) {
       setError(e instanceof Error ? e.message : "Could not complete the interview");
       setStage("feedback");
@@ -310,68 +337,254 @@ export default function Interview() {
       </header>
 
       <main className="container iv__main">
+        <div className="iv__tabs">
+          <button
+            type="button"
+            className={`iv__tab ${activeTab === "interview" ? "iv__tab--active" : ""}`}
+            onClick={() => setActiveTab("interview")}
+          >
+            🎙 Interview
+          </button>
+          <button
+            type="button"
+            className={`iv__tab ${activeTab === "history" ? "iv__tab--active" : ""}`}
+            onClick={() => {
+              setActiveTab("history");
+              void fetchHistory();
+            }}
+          >
+            📚 Past Interviews & Review {historySessions.length > 0 ? `(${historySessions.length})` : ""}
+          </button>
+        </div>
+
         {error && (
           <div className="iv__error" role="alert">
             {error}
           </div>
         )}
 
-        {stage === "setup" && (
+        {activeTab === "history" ? (
           <section className="iv__card">
-            <div className="iv__eyebrow">Pre-interview setup</div>
-            <h1 className="iv__title">Personalized mock interview</h1>
+            <div className="iv__eyebrow">Past Performance & Mistake Analysis</div>
+            <h1 className="iv__title">Past Interviews & Review</h1>
             <p className="iv__sub">
-              Questions are generated from your actual evidence — GitHub projects, coding profiles,
-              assessments, and gaps against your target role — not a fixed script. Your answers become{" "}
-              <strong>additional skill evidence</strong> that corroborates or challenges what INAURA already knows.
+              Review your past interview questions, your answers, technical scores, and AI evaluations. Identify misconceptions and missing concepts so you can study and improve.
             </p>
-            <label className="iv__label">
-              Target role
-              <input
-                className="iv__input"
-                value={targetRole}
-                onChange={(e) => setTargetRole(e.target.value)}
-                placeholder="e.g. Backend Developer (defaults to your analysis role)"
-              />
-            </label>
-            <div className="iv__label">
-              3 adaptive questions — an opening, a counter-question on your answer, then a deep-dive.
-            </div>
-            <div className="iv__row">
-              <Button variant="primary" size="lg" onClick={handleStart} disabled={busy}>
-                {busy ? "Preparing your interview…" : "Prepare my interview"}
-              </Button>
-            </div>
 
-            <div style={{ marginTop: 28, padding: "20px", background: "rgba(79, 70, 229, 0.08)", borderRadius: 12, border: "1px solid rgba(79, 70, 229, 0.2)" }}>
-              <div style={{ fontWeight: 700, color: "#4f46e5", fontSize: "1.05rem", marginBottom: 6 }}>
-                🎙 Live Video AI Interview (Zoom / Google Meet Style)
-              </div>
-              <p style={{ fontSize: "0.88rem", color: "#475569", margin: "0 0 14px 0", lineHeight: 1.5 }}>
-                Have a natural verbal video interview with the INAURA AI interviewer. The AI interviewer speaks directly to you, listens via speech recognition, and adapts dynamically.
-              </p>
-              <div style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center" }}>
-                <span style={{ fontSize: "0.85rem", fontWeight: 600, color: "#334155" }}>Start with Skill:</span>
-                {["Python", "DSA", "SQL", "React", "Java", "JavaScript"].map((s) => (
-                  <Button
-                    key={s}
-                    variant="secondary"
-                    size="sm"
-                    onClick={() => setLiveInterviewSkill(s)}
-                  >
-                    {s}
-                  </Button>
-                ))}
-                <Button
-                  variant="primary"
-                  size="sm"
-                  onClick={() => setLiveInterviewSkill("Python")}
-                  style={{ marginLeft: "auto" }}
-                >
-                  Let&apos;s Begin Live Call
+            {loadingHistory && <p className="iv__fine">Loading your interview history…</p>}
+
+            {!loadingHistory && historySessions.length === 0 && (
+              <div className="iv__empty-history">
+                <p style={{ fontWeight: 600, fontSize: "1.05rem", marginBottom: "0.5rem" }}>No past interviews recorded yet.</p>
+                <p className="iv__fine" style={{ marginBottom: "1rem" }}>
+                  Take a mock interview or live video call interview to see your detailed answers, scores, and mistakes here.
+                </p>
+                <Button variant="primary" size="md" onClick={() => setActiveTab("interview")}>
+                  Start an Interview
                 </Button>
               </div>
+            )}
+
+            <div className="iv__history-list">
+              {historySessions.map((s) => {
+                const isExpanded = expandedSessionId === s.session_id;
+                return (
+                  <div key={s.session_id} className="iv__history-card">
+                    <div className="iv__history-header">
+                      <div>
+                        <h2 className="iv__history-title">{s.title || `${s.target} Interview`}</h2>
+                        <div className="iv__history-meta">
+                          <span>Target: <strong>{s.target}</strong></span>
+                          <span>•</span>
+                          <span>{s.questions_count} question{s.questions_count !== 1 ? "s" : ""}</span>
+                          {s.started_at && (
+                            <>
+                              <span>•</span>
+                              <span>
+                                {new Date(s.started_at).toLocaleDateString(undefined, {
+                                  month: "short",
+                                  day: "numeric",
+                                  hour: "2-digit",
+                                  minute: "2-digit",
+                                })}
+                              </span>
+                            </>
+                          )}
+                          <span>•</span>
+                          <span className="iv__chip">{s.status}</span>
+                        </div>
+                      </div>
+                      {s.overall_score !== null && s.overall_score !== undefined && (
+                        <div className="iv__history-score">
+                          Score: {pct(s.overall_score)}
+                        </div>
+                      )}
+                    </div>
+
+                    {(s.strengths?.length > 0 || s.areas_to_improve?.length > 0) && (
+                      <div className="iv__history-tags-group">
+                        {s.strengths?.length > 0 && (
+                          <div className="iv__tags-row">
+                            <span className="iv__tags-label">Demonstrated:</span>
+                            {s.strengths.map((st, i) => (
+                              <span key={i} className="iv__tag iv__tag--strength">✓ {st}</span>
+                            ))}
+                          </div>
+                        )}
+                        {s.areas_to_improve?.length > 0 && (
+                          <div className="iv__tags-row">
+                            <span className="iv__tags-label">Areas to Improve:</span>
+                            {s.areas_to_improve.map((ar, i) => (
+                              <span key={i} className="iv__tag iv__tag--missing">⚠ {ar}</span>
+                            ))}
+                          </div>
+                        )}
+                      </div>
+                    )}
+
+                    <div style={{ marginTop: "1rem" }}>
+                      <Button
+                        variant="secondary"
+                        size="sm"
+                        onClick={() => setExpandedSessionId(isExpanded ? null : s.session_id)}
+                      >
+                        {isExpanded ? "Hide Q&A Transcript" : `Review Q&A Transcript & Mistakes (${s.turns?.length || 0})`}
+                      </Button>
+                    </div>
+
+                    {isExpanded && (
+                      <div className="iv__turns-container">
+                        {(!s.turns || s.turns.length === 0) ? (
+                          <p className="iv__fine">No turn-by-turn transcripts recorded for this session.</p>
+                        ) : (
+                          s.turns.map((turn, tIdx) => (
+                            <div key={turn.question_id || tIdx} className="iv__turn-item">
+                              <div className="iv__turn-q">
+                                Q{tIdx + 1}: {turn.question}
+                              </div>
+                              <div className="iv__turn-a">
+                                <strong>Your Answer:</strong><br />
+                                {turn.answer ? turn.answer : <em style={{ opacity: 0.7 }}>(No answer recorded)</em>}
+                              </div>
+
+                              <div className="iv__turn-feedback">
+                                <div className="iv__turn-scores">
+                                  {turn.technical_correctness !== null && turn.technical_correctness !== undefined && (
+                                    <span>Correctness: <strong>{pct(turn.technical_correctness)}</strong></span>
+                                  )}
+                                  {turn.depth !== null && turn.depth !== undefined && (
+                                    <span>Depth: <strong>{pct(turn.depth)}</strong></span>
+                                  )}
+                                  {turn.reasoning !== null && turn.reasoning !== undefined && (
+                                    <span>Reasoning: <strong>{pct(turn.reasoning)}</strong></span>
+                                  )}
+                                </div>
+
+                                {turn.explanation && (
+                                  <p style={{ margin: "0.4rem 0" }}>{turn.explanation}</p>
+                                )}
+
+                                {turn.misconceptions && turn.misconceptions.length > 0 && (
+                                  <div className="iv__tags-row" style={{ marginTop: "0.5rem" }}>
+                                    <span className="iv__tags-label" style={{ color: "#dc2626" }}>Misconceptions / Mistakes:</span>
+                                    {turn.misconceptions.map((m, mIdx) => (
+                                      <span key={mIdx} className="iv__tag iv__tag--mistake">✗ {m}</span>
+                                    ))}
+                                  </div>
+                                )}
+
+                                {turn.missing && turn.missing.length > 0 && (
+                                  <div className="iv__tags-row" style={{ marginTop: "0.4rem" }}>
+                                    <span className="iv__tags-label" style={{ color: "#d97706" }}>Missing Concepts:</span>
+                                    {turn.missing.map((ms, msIdx) => (
+                                      <span key={msIdx} className="iv__tag iv__tag--missing">! {ms}</span>
+                                    ))}
+                                  </div>
+                                )}
+
+                                {turn.demonstrated && turn.demonstrated.length > 0 && (
+                                  <div className="iv__tags-row" style={{ marginTop: "0.4rem" }}>
+                                    <span className="iv__tags-label" style={{ color: "#16a34a" }}>Demonstrated:</span>
+                                    {turn.demonstrated.map((dm, dmIdx) => (
+                                      <span key={dmIdx} className="iv__tag iv__tag--strength">✓ {dm}</span>
+                                    ))}
+                                  </div>
+                                )}
+
+                                {turn.suggested_follow_up && (
+                                  <p className="iv__fine" style={{ marginTop: "0.5rem", fontStyle: "italic" }}>
+                                    Suggested follow-up to practice: {turn.suggested_follow_up}
+                                  </p>
+                                )}
+                              </div>
+                            </div>
+                          ))
+                        )}
+                      </div>
+                    )}
+                  </div>
+                );
+              })}
             </div>
+          </section>
+        ) : (
+          <>
+            {stage === "setup" && (
+              <section className="iv__card">
+                <div className="iv__eyebrow">Pre-interview setup</div>
+                <h1 className="iv__title">Personalized mock interview</h1>
+                <p className="iv__sub">
+                  Questions are generated from your actual evidence — GitHub projects, coding profiles,
+                  assessments, and gaps against your target role — not a fixed script. Your answers become{" "}
+                  <strong>additional skill evidence</strong> that corroborates or challenges what INAURA already knows.
+                </p>
+                <label className="iv__label">
+                  Target role
+                  <input
+                    className="iv__input"
+                    value={targetRole}
+                    onChange={(e) => setTargetRole(e.target.value)}
+                    placeholder="e.g. Backend Developer (defaults to your analysis role)"
+                  />
+                </label>
+                <div className="iv__label">
+                  3 adaptive questions — an opening, a counter-question on your answer, then a deep-dive.
+                </div>
+                <div className="iv__row">
+                  <Button variant="primary" size="lg" onClick={handleStart} disabled={busy}>
+                    {busy ? "Preparing your interview…" : "Prepare my interview"}
+                  </Button>
+                </div>
+
+                <div className="iv__live-box">
+                  <div className="iv__live-box-title">
+                    🎙 Live Video AI Interview (Interactive Voice & Adaptive AI)
+                  </div>
+                  <p className="iv__live-box-desc">
+                    Have a natural verbal video interview with Alex, the INAURA AI interviewer. The interviewer speaks directly to you, listens via speech recognition, and adapts questions dynamically based on your answers.
+                  </p>
+                  <div className="iv__live-box-row">
+                    <span className="iv__live-box-label">Start with Skill:</span>
+                    {["Python", "DSA", "SQL", "React", "Java", "JavaScript"].map((s) => (
+                      <Button
+                        key={s}
+                        variant="secondary"
+                        size="sm"
+                        onClick={() => setLiveInterviewSkill(s)}
+                      >
+                        {s}
+                      </Button>
+                    ))}
+                    <Button
+                      variant="primary"
+                      size="sm"
+                      onClick={() => setLiveInterviewSkill("Python")}
+                      style={{ marginLeft: "auto" }}
+                    >
+                      Let&apos;s Begin Live Call
+                    </Button>
+                  </div>
+                </div>
 
             <p className="iv__fine">
               Camera stays on this device for presence. No video is uploaded or stored. Gemini grading
@@ -645,12 +858,17 @@ export default function Interview() {
             </div>
           </section>
         )}
+        </>
+      )}
       </main>
 
       {liveInterviewSkill && (
         <InterviewModal
           skill={liveInterviewSkill}
-          onClose={() => setLiveInterviewSkill(null)}
+          onClose={() => {
+            setLiveInterviewSkill(null);
+            void fetchHistory();
+          }}
         />
       )}
     </div>

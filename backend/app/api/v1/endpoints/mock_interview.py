@@ -4,6 +4,7 @@ from fastapi import APIRouter, Depends
 
 from ....core.security import get_current_user, CurrentUser
 from ....schemas.mock_interview import (
+    InterviewHistoryResponse,
     MockInterviewReport,
     MockInterviewSessionOut,
     StartMockInterviewRequest,
@@ -14,6 +15,12 @@ from ....schemas.mock_interview import (
 from ....services import mock_interview_service as svc
 
 router = APIRouter(prefix="/interview", tags=["mock-interview"])
+
+
+@router.get("/history", response_model=InterviewHistoryResponse)
+def get_interview_history(current_user: CurrentUser = Depends(get_current_user)):
+    """Retrieve full history of past mock and skill interviews."""
+    return svc.get_interview_history(user_id=current_user.id)
 
 
 @router.post("/start", response_model=StartMockInterviewResponse)

@@ -19,6 +19,7 @@ class SyncedPageResponse(BaseModel):
     code_languages: List[str] = []
     word_count: int = 0
     extracted_evidence: List[Dict[str, Any]] = []
+    is_excluded: bool = False
 
 
 class NotionStatusResponse(BaseModel):
@@ -51,3 +52,8 @@ class NotionDisconnectResponse(BaseModel):
     model_config = ConfigDict(from_attributes=True)
     status: str = "disconnected"
     message: str
+
+
+class NotionPageExclusionRequest(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+    is_excluded: bool

@@ -2162,9 +2162,7 @@ async def complete_session(user_id: str, session_id: str) -> dict:
 
 def build_report(user_id: str, session_id: str) -> dict:
     from ..core.config import get_settings
-    c = _client() if get_supabase_client() is not None else None
-    if c is None:
-        raise HTTPException(status_code=503, detail="Supabase not configured")
+    c = _client()
     s = _load_session(c, user_id, session_id)
     questions = _load_questions(c, session_id)
     responses = _load_responses(c, session_id)
@@ -2313,3 +2311,202 @@ def load_mock_interview_signals(user_id: str) -> List[dict]:
     except Exception as e:
         logger.debug("Mock interview signals unavailable for %s: %s", user_id, e)
         return []
+
+
+def get_interview_history(user_id: str) -> dict:
+    """Retrieve history of past mock and skill interviews with questions, answers, and critique."""
+    c = get_supabase_client()
+    if c is None:
+        return {"sessions": []}
+
+    sessions_out = []
+
+    # 1. Fetch skill assessment interview sessions
+    try:
+        r_skill = (
+            c.table("assessment_interview_sessions")
+            .select("*")
+            .eq("user_id", user_id)
+            .order("started_at", desc=True)
+            .limit(30)
+            .execute()
+        )
+        for s in (r_skill.data or []):
+            transcript_raw = s.get("transcript") or []
+            evals_raw = s.get("evaluation_results") or []
+            eval_by_q = {}
+            for e in evals_raw:
+                if isinstance(e, dict) and e.get("question_id"):
+                    eval_by_q[str(e["question_id"])] = e.get("evaluation") or {}
+
+            turns = []
+            all_demonstrated = []
+            all_missing = []
+            all_misconceptions = []
+            scores = []
+
+            for t in transcript_raw:
+                if not isinstance(t, dict):
+                    continue
+                qid = str(t.get("question_id") or "")
+                ev = eval_by_q.get(qid, {})
+                tc = ev.get("technical_correctness")
+                if tc is not None:
+                    try:
+                        scores.append(float(tc))
+                    except (TypeError, ValueError):
+                        pass
+
+                demo = ev.get("demonstrated") or []
+                miss = ev.get("missing") or []
+                misc = ev.get("misconceptions") or []
+                all_demonstrated.extend(demo)
+                all_missing.extend(miss)
+                all_misconceptions.extend(misc)
+
+                turns.append({
+                    "question_id": qid,
+                    "question": str(t.get("prompt") or ""),
+                    "answer": str(t.get("answer") or ""),
+                    "competency": str(t.get("competency") or ""),
+                    "technical_correctness": tc,
+                    "depth": ev.get("depth"),
+                    "reasoning": ev.get("reasoning"),
+                    "explanation": ev.get("brief_explanation") or ev.get("explanation"),
+                    "demonstrated": demo,
+                    "missing": miss,
+                    "misconceptions": misc,
+                    "suggested_follow_up": ev.get("suggested_follow_up"),
+                })
+
+            if len(turns) == 0:
+                continue
+
+            tech_scores = s.get("technical_scores") or {}
+            overall_score = None
+            if isinstance(tech_scores, dict) and tech_scores.get("overall") is not None:
+                try:
+                    val = float(tech_scores["overall"])
+                    overall_score = round(val / 100 if val > 1.0 else val, 3)
+                except (TypeError, ValueError):
+                    pass
+            elif scores:
+                overall_score = round(sum(scores) / len(scores), 3)
+
+            skill_name = str(s.get("skill_name") or "Skill")
+            sessions_out.append({
+                "session_id": str(s.get("id")),
+                "interview_type": "skill",
+                "title": f"{skill_name} Skill Interview",
+                "target": skill_name,
+                "status": str(s.get("status") or "completed"),
+                "started_at": s.get("started_at"),
+                "completed_at": s.get("completed_at"),
+                "questions_count": len(turns),
+                "overall_score": overall_score,
+                "strengths": list(dict.fromkeys(all_demonstrated))[:8],
+                "areas_to_improve": list(dict.fromkeys(all_missing + all_misconceptions))[:8],
+                "turns": turns,
+            })
+    except Exception as exc:
+        logger.debug("History from assessment_interview_sessions unavailable: %s", exc)
+
+    # 2. Fetch mock interview sessions
+    try:
+        r_mock = (
+            c.table(SESSIONS_TABLE)
+            .select("*")
+            .eq("user_id", user_id)
+            .order("created_at", desc=True)
+            .limit(30)
+            .execute()
+        )
+        for s in (r_mock.data or []):
+            sid = str(s.get("id"))
+            qs = _load_questions(c, sid)
+            resps = _load_responses(c, sid)
+            rep = s.get("report") or {}
+
+            resp_by_qid = {}
+            for r in resps:
+                if isinstance(r, dict):
+                    qid = str(r.get("question_id") or r.get("question_key") or "")
+                    resp_by_qid[qid] = r
+
+            turns = []
+            scores = []
+            all_demo = []
+            all_miss = []
+            all_misc = []
+
+            for q in qs:
+                qid = str(q.get("id") or q.get("question_key") or "")
+                r = resp_by_qid.get(qid) or {}
+                ans = str(r.get("transcript") or "")
+                ev = r.get("evaluation") or {}
+                if not ans and not ev:
+                    continue
+                tc = ev.get("technical_correctness")
+                if tc is not None:
+                    try:
+                        scores.append(float(tc))
+                    except (TypeError, ValueError):
+                        pass
+                demo = ev.get("demonstrated") or []
+                miss = ev.get("missing") or []
+                misc = ev.get("misconceptions") or []
+                all_demo.extend(demo)
+                all_miss.extend(miss)
+                all_misc.extend(misc)
+
+                turns.append({
+                    "question_id": qid,
+                    "question": str(q.get("question") or ""),
+                    "answer": ans,
+                    "competency": str(q.get("target_skill") or ""),
+                    "technical_correctness": tc,
+                    "depth": ev.get("depth"),
+                    "reasoning": ev.get("reasoning"),
+                    "explanation": ev.get("explanation"),
+                    "demonstrated": demo,
+                    "missing": miss,
+                    "misconceptions": misc,
+                    "suggested_follow_up": ev.get("suggested_follow_up"),
+                })
+
+            if len(turns) == 0:
+                continue
+
+            overall_score = None
+            if scores:
+                overall_score = round(sum(scores) / len(scores), 3)
+            elif rep.get("overall_interview_confidence") is not None:
+                try:
+                    val = float(rep["overall_interview_confidence"])
+                    overall_score = round(val / 100 if val > 1.0 else val, 3)
+                except (TypeError, ValueError):
+                    pass
+
+            role_name = str(s.get("target_role") or "Target Role")
+            strengths = rep.get("strengths") or list(dict.fromkeys(all_demo))[:8]
+            weaknesses = (rep.get("weak_evidence") or []) + (rep.get("needs_validation") or []) or list(dict.fromkeys(all_miss + all_misc))[:8]
+
+            sessions_out.append({
+                "session_id": sid,
+                "interview_type": "mock",
+                "title": f"{role_name} Mock Interview",
+                "target": role_name,
+                "status": str(s.get("status") or "completed"),
+                "started_at": s.get("started_at") or s.get("created_at"),
+                "completed_at": s.get("completed_at"),
+                "questions_count": len(turns),
+                "overall_score": overall_score,
+                "strengths": list(dict.fromkeys(strengths))[:8],
+                "areas_to_improve": list(dict.fromkeys(weaknesses))[:8],
+                "turns": turns,
+            })
+    except Exception as exc:
+        logger.debug("History from mock_interview_sessions unavailable: %s", exc)
+
+    sessions_out.sort(key=lambda x: str(x.get("started_at") or ""), reverse=True)
+    return {"sessions": sessions_out}

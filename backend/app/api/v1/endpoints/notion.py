@@ -10,6 +10,7 @@ from ....schemas.notion import (
     NotionStatusResponse,
     NotionSyncResponse,
     NotionDisconnectResponse,
+    NotionPageExclusionRequest,
     SyncedPageResponse,
 )
 from ....services import notion_service
@@ -128,6 +129,31 @@ async def sync_notion(current_user: CurrentUser = Depends(get_current_user)):
     """
     result = await notion_service.sync_notion_content(current_user.id)
     return NotionSyncResponse(**result)
+
+
+@router.patch("/pages/{page_id}/exclusion", response_model=SyncedPageResponse)
+def set_notion_page_exclusion(
+    page_id: str,
+    payload: NotionPageExclusionRequest,
+    current_user: CurrentUser = Depends(get_current_user),
+):
+    """
+    Include/exclude a single Notion page from career-readiness scoring.
+    Excluded pages stay visible as study links; their signals stop contributing
+    to analysis. Raw page data is preserved.
+    """
+    updated = notion_service.set_page_excluded(current_user.id, page_id, payload.is_excluded)
+    # Re-run analysis so readiness reflects the change immediately
+    try:
+        from ....services import analysis_service as _as
+        from ....services.analysis_run_service import run_analysis
+        state = _as.get_state(current_user.id)
+        if state and state.get("target_role"):
+            import asyncio
+            asyncio.create_task(run_analysis(current_user.id, state["target_role"]))
+    except Exception:
+        pass
+    return SyncedPageResponse(**updated)
 
 
 @router.delete("/disconnect", response_model=NotionDisconnectResponse)

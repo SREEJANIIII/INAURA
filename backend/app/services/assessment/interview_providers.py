@@ -535,7 +535,11 @@ def make_gemini_invoker(settings: Any) -> Tuple[str, InvokeFn]:
         raise HTTPException(status_code=503, detail=f"Gemini provider not installed: {e}")
 
     api_key = _require_key(getattr(settings, "google_api_key", None), "GOOGLE_API_KEY", PROVIDER_GEMINI)
-    model = (getattr(settings, "gemini_model", None) or "gemini-2.5-flash").strip()
+    raw_model = (getattr(settings, "gemini_model", None) or "gemini-2.5-flash").strip()
+    if raw_model in ("gemini-2.0-flash", "gemini-1.5-flash", "gemini-1.5-pro", "gemini-1.0-pro"):
+        model = "gemini-2.5-flash"
+    else:
+        model = raw_model
 
     async def invoke(messages: List[Dict[str, str]]) -> str:
         llm = ChatGoogleGenerativeAI(model=model, google_api_key=api_key, temperature=0.2, max_retries=0)

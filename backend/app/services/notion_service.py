@@ -339,8 +339,131 @@ def get_synced_pages(user_id: str) -> List[dict]:
             "code_languages": code_langs,
             "word_count": word_count,
             "extracted_evidence": ev_items,
+            "is_excluded": bool(p.get("is_excluded", False)),
         })
     return formatted
+
+
+def set_page_excluded(user_id: str, page_id: str, is_excluded: bool) -> dict:
+    """
+    Include/exclude a single Notion page from career-readiness scoring.
+    - Preserves the raw synced page; flips notion_synced_pages.is_excluded.
+    - Flips is_excluded on the matching canonical evidence row(s) (matched by
+      metadata.sourcePageId, falling back to source_url), which signal_extractor
+      already skips — so readiness updates on next analysis run.
+    Returns the updated synced-page dict.
+    """
+    flag = bool(is_excluded)
+    c = _client()
+    now_iso = datetime.now(timezone.utc).isoformat()
+    target_page: Optional[dict] = None
+
+    if c is not None:
+        try:
+            r = (
+                c.table(NOTION_SYNCED_PAGES_TABLE)
+                .select("*")
+                .eq("user_id", user_id)
+                .eq("page_id", page_id)
+                .limit(1)
+                .execute()
+            )
+            rows = r.data or []
+            if not rows:
+                raise HTTPException(status_code=404, detail="Notion page not found for this user.")
+            target_page = rows[0]
+        except HTTPException:
+            raise
+        except Exception as e:
+            logger.warning(f"Error reading notion page {page_id}: {e}")
+
+    if target_page is None:
+        mem_pages = _memory_synced_pages.get(user_id, [])
+        match = next((p for p in mem_pages if p.get("page_id") == page_id), None)
+        if match is None:
+            raise HTTPException(status_code=404, detail="Notion page not found for this user.")
+        target_page = match
+
+    page_url = target_page.get("page_url") or ""
+
+    if c is not None:
+        try:
+            c.table(NOTION_SYNCED_PAGES_TABLE).update(
+                {"is_excluded": flag, "updated_at": now_iso}
+            ).eq("user_id", user_id).eq("page_id", page_id).execute()
+        except Exception as e:
+            # Column missing when 025 not applied yet — surface clearly.
+            logger.warning(f"Could not update notion page exclusion for {page_id}: {e}")
+
+        # Flip the canonical evidence row(s) for this page so scoring ignores them.
+        try:
+            r_ev = (
+                c.table(EVIDENCE_TABLE)
+                .select("id,metadata,source_url")
+                .eq("user_id", user_id)
+                .eq("evidence_type", "notion")
+                .execute()
+            )
+            for ev in r_ev.data or []:
+                meta = ev.get("metadata") or {}
+                if meta.get("sourcePageId") == page_id or (page_url and ev.get("source_url") == page_url):
+                    try:
+                        c.table(EVIDENCE_TABLE).update(
+                            {
+                                "is_excluded": flag,
+                                "metadata": {**meta, "is_excluded": flag},
+                                "updated_at": now_iso,
+                            }
+                        ).eq("id", ev["id"]).execute()
+                    except Exception as inner:
+                        msg = str(inner).lower()
+                        if "column" in msg and "is_excluded" in msg:
+                            c.table(EVIDENCE_TABLE).update(
+                                {"metadata": {**meta, "is_excluded": flag}, "updated_at": now_iso}
+                            ).eq("id", ev["id"]).execute()
+                        else:
+                            raise
+        except Exception as e:
+            logger.warning(f"Could not update notion evidence exclusion for {page_id}: {e}")
+
+    # In-memory fallback mirrors (keeps local-dev / pre-migration UX working)
+    mem_pages = _memory_synced_pages.get(user_id, [])
+    updated_mem = None
+    for p in mem_pages:
+        if p.get("page_id") == page_id:
+            p["is_excluded"] = flag
+            p["updated_at"] = now_iso
+            updated_mem = p
+    _memory_synced_pages[user_id] = mem_pages
+    mem_ev = _memory_evidence.get(user_id, [])
+    for e in mem_ev:
+        meta = e.get("metadata") or {}
+        if meta.get("sourcePageId") == page_id or (page_url and e.get("source_url") == page_url):
+            e["is_excluded"] = flag
+            e["metadata"] = {**meta, "is_excluded": flag}
+    _memory_evidence[user_id] = mem_ev
+
+    pages = get_synced_pages(user_id)
+    updated = next((p for p in pages if p.get("page_id") == page_id), None)
+    if updated is None and updated_mem is not None:
+        ev_items = updated_mem.get("extracted_evidence") or []
+        skills = list(dict.fromkeys(i.get("skill") for i in ev_items if isinstance(i, dict) and i.get("skill")))
+        updated = {
+            "page_id": updated_mem.get("page_id", ""),
+            "page_title": updated_mem.get("page_title", "Untitled Notion Page"),
+            "page_url": updated_mem.get("page_url", ""),
+            "last_edited_time": updated_mem.get("last_edited_time"),
+            "content_summary": updated_mem.get("content_summary"),
+            "skills": skills,
+            "headings": updated_mem.get("headings") or [],
+            "code_languages": updated_mem.get("code_languages") or [],
+            "word_count": updated_mem.get("word_count") or 0,
+            "extracted_evidence": ev_items,
+            "is_excluded": flag,
+        }
+    if updated is None:
+        raise HTTPException(status_code=404, detail="Notion page not found for this user.")
+    return updated
 
 
 def get_status(user_id: str) -> dict:
@@ -519,6 +642,9 @@ def extract_page_title(page: dict) -> str:
 async def fetch_page_blocks(access_token: str, page_id: str, max_depth: int = 2) -> List[dict]:
     """
     Fetch block children of a Notion page, handling pagination and nested blocks.
+    Recursively resolves blocks with has_children (toggles, column lists, synced
+    blocks, child pages) up to max_depth so toggle-heavy / nested notes are not
+    silently treated as empty.
     """
     headers = {
         "Authorization": f"Bearer {access_token}",
@@ -546,6 +672,9 @@ async def fetch_page_blocks(access_token: str, page_id: str, max_depth: int = 2)
                 break
 
             if resp.status_code != 200:
+                logger.warning(
+                    f"Notion blocks API returned {resp.status_code} for page {page_id}: {resp.text[:200]}"
+                )
                 break
 
             data = resp.json()
@@ -557,12 +686,122 @@ async def fetch_page_blocks(access_token: str, page_id: str, max_depth: int = 2)
             if not start_cursor:
                 break
 
-    return blocks
+    if max_depth <= 0:
+        return blocks
+
+    # Resolve one level of nested children (toggles, columns, child pages, ...).
+    # Done with the same client pattern but bounded to avoid API storms.
+    nested: List[dict] = []
+    child_ids: List[str] = []
+    for b in blocks:
+        if isinstance(b, dict) and b.get("has_children") and b.get("id"):
+            child_ids.append(b["id"])
+            if len(child_ids) >= 20:
+                break
+
+    for child_id in child_ids:
+        try:
+            child_blocks = await fetch_page_blocks(access_token, child_id, max_depth=max_depth - 1)
+            nested.extend(child_blocks)
+            if len(blocks) + len(nested) >= 300:
+                break
+        except Exception as e:
+            logger.debug(f"Skipping nested blocks for {child_id}: {e}")
+            continue
+
+    return blocks + nested
+
+
+async def query_database_rows(access_token: str, database_id: str, max_rows: int = 25) -> List[dict]:
+    """
+    Query rows of a Notion database shared with the integration.
+    Search results often include databases (object == 'database'); their content
+    lives in rows, not block children, so without this every database is skipped
+    as empty.
+    """
+    headers = {
+        "Authorization": f"Bearer {access_token}",
+        "Notion-Version": NOTION_API_VERSION,
+        "Content-Type": "application/json",
+    }
+    rows: List[dict] = []
+    has_more = True
+    start_cursor = None
+
+    async with httpx.AsyncClient(timeout=15.0) as client:
+        while has_more and len(rows) < max_rows:
+            body: Dict[str, Any] = {"page_size": min(100, max_rows - len(rows))}
+            if start_cursor:
+                body["start_cursor"] = start_cursor
+            try:
+                resp = await client.post(
+                    f"{NOTION_API_BASE_URL}/databases/{database_id}/query",
+                    json=body,
+                    headers=headers,
+                )
+            except Exception as e:
+                logger.warning(f"Error querying Notion database {database_id}: {e}")
+                break
+            if resp.status_code != 200:
+                logger.warning(
+                    f"Notion database query returned {resp.status_code} for {database_id}: {resp.text[:200]}"
+                )
+                break
+            data = resp.json()
+            rows.extend(data.get("results") or [])
+            has_more = bool(data.get("has_more", False))
+            start_cursor = data.get("next_cursor")
+            if not start_cursor:
+                break
+
+    return rows
+
+
+def database_row_to_text(row: dict) -> str:
+    """Flatten a Notion database row's properties into searchable text."""
+    props = row.get("properties") or {}
+    chunks: List[str] = []
+    for _name, val in props.items():
+        if not isinstance(val, dict):
+            continue
+        v_type = val.get("type", "")
+        try:
+            if v_type == "title":
+                chunks.append("".join(t.get("plain_text", "") for t in (val.get("title") or []) if isinstance(t, dict)))
+            elif v_type == "rich_text":
+                chunks.append("".join(t.get("plain_text", "") for t in (val.get("rich_text") or []) if isinstance(t, dict)))
+            elif v_type == "select":
+                sel = val.get("select") or {}
+                if sel.get("name"):
+                    chunks.append(str(sel["name"]))
+            elif v_type == "multi_select":
+                chunks.extend([o.get("name", "") for o in (val.get("multi_select") or []) if isinstance(o, dict)])
+            elif v_type in ("number", "checkbox", "status", "created_time", "last_edited_time"):
+                plain_val = val.get(v_type)
+                if plain_val is not None and not isinstance(plain_val, dict):
+                    chunks.append(str(plain_val))
+                elif isinstance(plain_val, dict) and plain_val.get("name"):
+                    chunks.append(str(plain_val["name"]))
+        except Exception:
+            continue
+    return " ".join(t.strip() for t in chunks if t and t.strip())
+
+
+def _rich_text_to_plain(b_data: dict) -> str:
+    """Safely flatten a Notion rich_text array to plain text."""
+    if not isinstance(b_data, dict):
+        return ""
+    rich_texts = b_data.get("rich_text") or []
+    return "".join(r.get("plain_text", "") for r in rich_texts if isinstance(r, dict)).strip()
 
 
 def parse_block_content(blocks: List[dict]) -> Tuple[str, List[dict], List[dict], List[str]]:
     """
     Parse text, code snippets, completed tasks, and headings from Notion blocks.
+    Handles headings, code, to_do, list items, toggle, quote, callout, as well as
+    structural blocks that carry no rich_text (child_page, child_database,
+    link_to_page, table rows) so pages composed of nested/database content are
+    not silently treated as empty.
     Returns: (full_text, code_blocks, tasks, headings)
     """
     text_chunks: List[str] = []
@@ -578,8 +817,7 @@ def parse_block_content(blocks: List[dict]) -> Tuple[str, List[dict], List[dict]
         if not isinstance(b_data, dict):
             continue
 
-        rich_texts = b_data.get("rich_text") or []
-        plain = "".join(r.get("plain_text", "") for r in rich_texts if isinstance(r, dict)).strip()
+        plain = _rich_text_to_plain(b_data)
 
         if b_type.startswith("heading_"):
             if plain:
@@ -589,12 +827,46 @@ def parse_block_content(blocks: List[dict]) -> Tuple[str, List[dict], List[dict]
             lang = b_data.get("language", "text")
             code_text = plain
             code_blocks.append({"language": lang, "code": code_text})
-            text_chunks.append(code_text)
+            if code_text:
+                text_chunks.append(code_text)
         elif b_type == "to_do":
             checked = bool(b_data.get("checked", False))
             tasks.append({"task": plain, "completed": checked})
             if plain:
                 text_chunks.append(plain)
+        elif b_type == "child_page":
+            title = str(b_data.get("title") or "").strip()
+            if title:
+                headings.append(title)
+                text_chunks.append(title)
+        elif b_type == "child_database":
+            title = str(b_data.get("title") or "").strip()
+            if title:
+                headings.append(title)
+                text_chunks.append(title)
+        elif b_type == "link_to_page":
+            # link_to_page nests the target id; the block itself has no text,
+            # but record its presence so nested fetch can resolve it.
+            target = b_data.get("page_id") or b_data.get("database_id") or ""
+            if target:
+                text_chunks.append(f"Linked Notion page {target}")
+        elif b_type == "table_row":
+            cells = b_data.get("cells") or []
+            cell_texts: List[str] = []
+            for cell in cells:
+                if isinstance(cell, list):
+                    cell_texts.append("".join(r.get("plain_text", "") for r in cell if isinstance(r, dict)).strip())
+            row_text = " ".join(t for t in cell_texts if t).strip()
+            if row_text:
+                text_chunks.append(row_text)
+        elif b_type in ("column_list", "column", "synced_block", "template", "table", "link_preview", "embed", "divider"):
+            # Structural containers/embeds: text (if any) lives in children
+            # fetched recursively by fetch_page_blocks; still keep any caption.
+            caption = ""
+            if isinstance(b_data.get("caption"), list):
+                caption = "".join(r.get("plain_text", "") for r in b_data["caption"] if isinstance(r, dict)).strip()
+            if caption:
+                text_chunks.append(caption)
         elif plain:
             text_chunks.append(plain)
 
@@ -891,6 +1163,27 @@ async def sync_notion_content(user_id: str) -> dict:
     pages_with_evidence = 0
     all_detected_skills: set[str] = set()
     sync_details: List[dict] = []
+    skipped_pages: List[dict] = []
+
+    # Preserve per-page exclusion across re-syncs (025). Excluded pages keep
+    # their raw data but never re-enter scoring.
+    excluded_map: Dict[str, bool] = {}
+    if c is not None:
+        try:
+            r_ex = (
+                c.table(NOTION_SYNCED_PAGES_TABLE)
+                .select("page_id,is_excluded")
+                .eq("user_id", user_id)
+                .execute()
+            )
+            for row in r_ex.data or []:
+                if row.get("page_id"):
+                    excluded_map[row["page_id"]] = bool(row.get("is_excluded", False))
+        except Exception:
+            pass
+    for p in _memory_synced_pages.get(user_id, []):
+        if p.get("page_id") and p.get("is_excluded"):
+            excluded_map[p["page_id"]] = True
 
     for page in pages:
         p_id = page.get("id")
@@ -899,9 +1192,35 @@ async def sync_notion_content(user_id: str) -> dict:
         p_title = extract_page_title(page)
         p_url = page.get("url") or f"https://www.notion.so/{p_id.replace('-', '')}"
         last_edited = page.get("last_edited_time") or now_iso
+        is_database = page.get("object") == "database"
 
-        # Fetch child blocks for text & code
+        # Fetch child blocks for text & code. Databases expose content via
+        # rows (/databases/{id}/query), not block children, so query both.
         blocks = await fetch_page_blocks(access_token, p_id)
+        if is_database:
+            try:
+                rows = await query_database_rows(access_token, p_id)
+                for row in rows:
+                    row_text = database_row_to_text(row)
+                    if row_text:
+                        blocks.append(
+                            {
+                                "type": "paragraph",
+                                "paragraph": {
+                                    "rich_text": [{"plain_text": row_text}]
+                                },
+                            }
+                        )
+                    # Each database row is itself a page with its own blocks.
+                    row_id = row.get("id")
+                    if row_id:
+                        try:
+                            row_blocks = await fetch_page_blocks(access_token, row_id, max_depth=1)
+                            blocks.extend(row_blocks)
+                        except Exception:
+                            continue
+            except Exception as e:
+                logger.warning(f"Could not expand Notion database {p_id}: {e}")
         evidence_items = extract_learning_evidence_from_page(
             page_id=p_id,
             page_title=p_title,
@@ -912,6 +1231,21 @@ async def sync_notion_content(user_id: str) -> dict:
         )
 
         if not evidence_items:
+            full_text_dbg, _, _, _ = parse_block_content(blocks)
+            skipped_pages.append(
+                {
+                    "page_id": p_id,
+                    "page_title": p_title,
+                    "page_url": p_url,
+                    "reason": (
+                        "no_skill_evidence_extracted"
+                        if full_text_dbg.strip()
+                        else "empty_or_unshared_content"
+                    ),
+                    "word_count": len(full_text_dbg.split()),
+                    "is_database": is_database,
+                }
+            )
             continue
 
         pages_with_evidence += 1
@@ -929,6 +1263,7 @@ async def sync_notion_content(user_id: str) -> dict:
         )
 
         # 1. Save to notion_synced_pages
+        page_excluded = bool(excluded_map.get(p_id, False))
         synced_page_record = {
             "user_id": user_id,
             "page_id": p_id,
@@ -941,18 +1276,49 @@ async def sync_notion_content(user_id: str) -> dict:
             "code_languages": page_code_langs,
             "word_count": word_count,
             "skills": page_skills,
+            "is_excluded": page_excluded,
             "updated_at": now_iso,
         }
 
         if c is not None:
             try:
-                # Upsert into notion_synced_pages
+                # Upsert into notion_synced_pages (requires migration 024 columns:
+                # skills, headings, code_languages, word_count; and 025 is_excluded).
                 c.table(NOTION_SYNCED_PAGES_TABLE).upsert(
                     {**synced_page_record, "created_at": now_iso},
                     on_conflict="user_id,page_id",
                 ).execute()
             except Exception as e:
-                logger.debug(f"Could not persist to notion_synced_pages: {e}")
+                msg = str(e).lower()
+                if "column" in msg or "pgrst204" in msg or "schema cache" in msg:
+                    # Fallback for workspaces where 024/025 haven't been applied yet:
+                    # persist the 023-era core columns so pages are at least saved.
+                    try:
+                        fallback_record = {
+                            "user_id": user_id,
+                            "page_id": p_id,
+                            "page_title": p_title,
+                            "page_url": p_url,
+                            "last_edited_time": last_edited,
+                            "content_summary": content_summary,
+                            "extracted_evidence": evidence_items,
+                            "updated_at": now_iso,
+                            "created_at": now_iso,
+                        }
+                        c.table(NOTION_SYNCED_PAGES_TABLE).upsert(
+                            fallback_record,
+                            on_conflict="user_id,page_id",
+                        ).execute()
+                        logger.warning(
+                            f"Persisted page {p_id} without extended columns (apply 024/025 for full metadata): {e}"
+                        )
+                    except Exception as e2:
+                        logger.warning(f"Could not persist to notion_synced_pages for page {p_id}: {e2}")
+                else:
+                    logger.warning(
+                        f"Could not persist to notion_synced_pages for page {p_id}: {e}. "
+                        "If the error mentions a missing column, apply supabase/024_notion_synced_pages_columns.sql and 025_notion_page_exclusion.sql"
+                    )
 
         # In-memory fallback
         user_pages = _memory_synced_pages.setdefault(user_id, [])
@@ -993,6 +1359,7 @@ async def sync_notion_content(user_id: str) -> dict:
             "verification_status": VerificationStatus.VERIFIED,
             "provider": "notion",
             "verified_at": now_iso,
+            "is_excluded": page_excluded,
             "metadata": {
                 "source": "notion",
                 "sourcePageId": p_id,
@@ -1000,6 +1367,7 @@ async def sync_notion_content(user_id: str) -> dict:
                 "sourceUrl": p_url,
                 "last_edited_time": last_edited,
                 "evidence_pipeline_version": EVIDENCE_PIPELINE_VERSION,
+                "is_excluded": page_excluded,
                 "verified_signals": verified_signals,
                 "extracted_items": evidence_items,
                 "facts": [
@@ -1024,10 +1392,24 @@ async def sync_notion_content(user_id: str) -> dict:
                 )
                 if r_existing.data and len(r_existing.data) > 0:
                     ev_id = r_existing.data[0]["id"]
-                    c.table(EVIDENCE_TABLE).update(evidence_payload).eq("id", ev_id).execute()
+                    try:
+                        c.table(EVIDENCE_TABLE).update(evidence_payload).eq("id", ev_id).execute()
+                    except Exception as inner:
+                        if "column" in str(inner).lower() and "is_excluded" in str(inner).lower():
+                            slim = {k: v for k, v in evidence_payload.items() if k != "is_excluded"}
+                            c.table(EVIDENCE_TABLE).update(slim).eq("id", ev_id).execute()
+                        else:
+                            raise
                 else:
                     evidence_payload["created_at"] = now_iso
-                    c.table(EVIDENCE_TABLE).insert(evidence_payload).execute()
+                    try:
+                        c.table(EVIDENCE_TABLE).insert(evidence_payload).execute()
+                    except Exception as inner:
+                        if "column" in str(inner).lower() and "is_excluded" in str(inner).lower():
+                            slim = {k: v for k, v in evidence_payload.items() if k != "is_excluded"}
+                            c.table(EVIDENCE_TABLE).insert(slim).execute()
+                        else:
+                            raise
             except Exception as e:
                 logger.warning(f"Could not persist Notion evidence to canonical evidence table: {e}")
 
@@ -1050,6 +1432,7 @@ async def sync_notion_content(user_id: str) -> dict:
             "word_count": word_count,
             "evidence_count": len(evidence_items),
             "extracted_evidence": evidence_items,
+            "is_excluded": page_excluded,
         })
 
     # Update last_synced_at on user_integrations
@@ -1070,6 +1453,12 @@ async def sync_notion_content(user_id: str) -> dict:
             await run_analysis(user_id, state["target_role"])
     except Exception as e:
         logger.debug(f"Optional re-analysis after sync skipped: {e}")
+
+    if skipped_pages:
+        logger.warning(
+            f"Notion sync for user {user_id}: {len(skipped_pages)}/{len(pages)} pages skipped "
+            f"(no extractable skill evidence): {[(s['page_title'], s['reason']) for s in skipped_pages[:5]]}"
+        )
 
     return {
         "status": "ok",
