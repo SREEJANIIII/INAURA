@@ -561,7 +561,7 @@ export default function Interview() {
                     🎙 Live Video AI Interview (Interactive Voice & Adaptive AI)
                   </div>
                   <p className="iv__live-box-desc">
-                    Have a natural verbal video interview with Alex, the INAURA AI interviewer. The interviewer speaks directly to you, listens via speech recognition, and adapts questions dynamically based on your answers.
+                    Have a natural verbal video interview with Donald Duck 🦆, the INAURA AI interviewer. The interviewer speaks directly to you, listens via speech recognition, and adapts questions dynamically based on your answers.
                   </p>
                   <div className="iv__live-box-row">
                     <span className="iv__live-box-label">Start with Skill:</span>
