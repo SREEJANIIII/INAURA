@@ -5,7 +5,7 @@ from typing import List, Optional, Dict, Any, Tuple
 from fastapi import HTTPException
 from supabase import Client
 from ..core.supabase import get_supabase_client
-from .skill_taxonomy import normalize_skill, normalize_skill_slug
+from .skill_taxonomy import get_canonical_skill, normalize_skill, normalize_skill_slug
 from .industry_roles import canonicalize_role_name, ROLE_CATALOG, compare_roles as compare_roles_impl
 
 TABLE = "industry_requirements"
@@ -1570,8 +1570,9 @@ def _normalize_requirement_row(row: dict) -> dict:
     Also preserves source provenance. Enriches unmigrated DB rows with authentic benchmark metadata.
     """
     raw_skill = row.get("skill", "")
-    canonical_display = normalize_skill(raw_skill) or raw_skill
-    slug = normalize_skill_slug(raw_skill) or raw_skill.lower().replace(" ", "_")
+    canonical_def = get_canonical_skill(raw_skill)
+    canonical_display = canonical_def.display_name if canonical_def else (normalize_skill(raw_skill) or raw_skill)
+    slug = canonical_def.id if canonical_def else (normalize_skill_slug(raw_skill) or raw_skill.lower().replace(" ", "_"))
 
     # Find matching authentic prototype definition to enrich unmigrated DB rows
     proto_match = next(
@@ -1628,6 +1629,7 @@ def _normalize_requirement_row(row: dict) -> dict:
         version = row.get("version", INDUSTRY_PROFILE_VERSION)
 
     # Preserve O*NET/ESCO provenance fields
+    meta = row.get("metadata") if isinstance(row.get("metadata"), dict) else {}
     source_version = (proto_match.get("source_version") or "") if (proto_match and is_old_placeholder) else row.get("source_version", (proto_match.get("source_version", "") if proto_match else "") or "")
     source_reference = (proto_match.get("source_reference") or "") if (proto_match and is_old_placeholder) else row.get("source_reference", (proto_match.get("source_reference", "") if proto_match else "") or "")
     source_occupation = (proto_match.get("source_occupation") or "") if (proto_match and is_old_placeholder) else row.get("source_occupation", (proto_match.get("source_occupation", "") if proto_match else "") or "")
@@ -1635,12 +1637,24 @@ def _normalize_requirement_row(row: dict) -> dict:
     role_relevance = (proto_match.get("role_relevance") or "") if (proto_match and is_old_placeholder) else row.get("role_relevance", (proto_match.get("role_relevance", "") if proto_match else "") or "")
     retrieved_at_val = (proto_match.get("retrieved_at") or "2026-01-01T00:00:00Z") if (proto_match and is_old_placeholder) else (row.get("retrieved_at") or (proto_match.get("retrieved_at") if proto_match else None) or "2026-01-01T00:00:00Z")
 
+    # A catalog row may be backed by an authoritative source without that
+    # source literally naming the INAURA technology. Keep the distinction
+    # explicit and never invent an ESCO/O*NET claim for technology skills.
+    source_version = source_version or "INAURA industry profile 2026.1"
+    source_reference = source_reference or f"INAURA role benchmark reference: {source}"
+    mapping_version = mapping_version or "INAURA-taxonomy-v1"
+    role_relevance = role_relevance or ("CORE" if float(row.get("importance", 0.0) or 0.0) >= 0.80 else "IMPORTANT")
+    source_concept = row.get("source_concept") or meta.get("source_concept") or evidence_context
+    mapping_rationale = row.get("mapping_rationale") or meta.get("mapping_rationale") or (
+        "Direct canonical technology/profile reference" if canonical_def else "INAURA canonical taxonomy mapping"
+    )
+
     return {
         "id": str(row.get("id", f"req-{slug}")),
         "role": row.get("role", ""),
         "skill": canonical_display,
         "skill_slug": slug,
-        "skill_category": row.get("skill_category", "General"),
+        "skill_category": canonical_def.category if canonical_def else row.get("skill_category", "General"),
         "required_level": round(max(0.0, min(1.0, required_level)), 3),
         "importance": round(max(0.0, min(1.0, importance)), 3),
         "demand": round(max(0.0, min(1.0, demand)), 3),
@@ -1660,7 +1674,10 @@ def _normalize_requirement_row(row: dict) -> dict:
         "evidence_context": evidence_context,
         "published_at": published_at,
         "retrieved_at": retrieved_at_val,
-        "description": row.get("description", proto_match.get("description", "") if proto_match else ""),
+        "source_concept": source_concept,
+        "canonical_mapping": canonical_display,
+        "mapping_rationale": mapping_rationale,
+        "description": canonical_def.description if canonical_def else row.get("description", proto_match.get("description", "") if proto_match else ""),
         "version": version,
         "metadata": row.get("metadata", {}) or proto_match.get("metadata", {}) if proto_match else row.get("metadata", {}),
     }

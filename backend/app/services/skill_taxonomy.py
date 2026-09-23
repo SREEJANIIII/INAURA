@@ -736,6 +736,16 @@ def get_canonical_skill(raw: str, client: Optional[Client] = None) -> Optional[S
     if key in _BY_DISPLAY_NAME_LOWER:
         return _BY_DISPLAY_NAME_LOWER[key]
 
+    # Technology/role phrases are common in job titles and evidence text.  Strip
+    # only well-known derivational suffixes after exact alias lookup; this keeps
+    # generic phrases such as "web app development" from becoming mobile skills.
+    for suffix in (" development", " developer", " engineering", " engineer"):
+        if key.endswith(suffix):
+            base = key[: -len(suffix)].strip()
+            candidate = _ALIAS_MAP.get(base) or _ALIAS_MAP.get(_clean_compact_key(base))
+            if candidate:
+                return candidate
+
     # 3. Check DB cache if client provided
     if client is not None:
         cache = _load_db_cache(client)
@@ -836,3 +846,52 @@ def extract_known_skills_from_text(text: str, client: Optional[Client] = None) -
                 found[skill.id] = skill
 
     return list(found.values())
+
+
+def audit_taxonomy_consistency(
+    database_skills: Optional[List[dict]] = None,
+    role_requirements: Optional[List[dict]] = None,
+    referenced_skills: Optional[Dict[str, List[str]]] = None,
+) -> dict:
+    """Return a deterministic drift report for taxonomy consumers.
+
+    ``database_skills`` and consumer references are optional so this helper is
+    useful in unit tests and in CI without requiring a live Supabase project.
+    Canonical IDs remain the stable join key; aliases are checked globally for
+    collisions rather than silently allowing last-write-wins behavior.
+    """
+    canonical_ids = {skill.id for skill in RAW_TAXONOMY}
+    alias_owners: Dict[str, Set[str]] = {}
+    for skill in RAW_TAXONOMY:
+        for value in [skill.id, skill.display_name, skill.canonical_name, *skill.aliases]:
+            alias_owners.setdefault(_clean_key(value), set()).add(skill.id)
+    alias_collisions = sorted(
+        key for key, owners in alias_owners.items() if key and len(owners) > 1
+    )
+    duplicate_names = sorted(
+        name for name, count in __import__("collections").Counter(
+            skill.display_name.strip().lower() for skill in RAW_TAXONOMY
+        ).items() if count > 1
+    )
+    db_ids = {str(row.get("canonical_name", "")) for row in (database_skills or [])}
+    unknown_db = sorted(db_ids - canonical_ids) if database_skills is not None else []
+    missing_db = sorted(canonical_ids - db_ids) if database_skills is not None else []
+    invalid_refs: Dict[str, List[str]] = {}
+    for consumer, values in (referenced_skills or {}).items():
+        invalid = sorted({str(v) for v in values if normalize_skill_slug(str(v)) not in canonical_ids})
+        if invalid:
+            invalid_refs[consumer] = invalid
+    invalid_requirements = sorted({
+        str(row.get("skill", "")) for row in (role_requirements or [])
+        if normalize_skill_slug(str(row.get("skill", ""))) not in canonical_ids
+    })
+    return {
+        "canonical_count": len(canonical_ids),
+        "missing_database_skills": missing_db,
+        "unknown_database_skills": unknown_db,
+        "alias_collisions": alias_collisions,
+        "duplicate_canonical_names": duplicate_names,
+        "invalid_role_requirements": invalid_requirements,
+        "invalid_references": invalid_refs,
+        "ok": not any((missing_db, unknown_db, alias_collisions, duplicate_names, invalid_requirements, invalid_refs)),
+    }

@@ -198,6 +198,20 @@ def _skill_relevance_signal(query: str, skill: Any) -> float:
     return round(len(skill_tokens & q_tokens) / len(skill_tokens), 3)
 
 
+def _expand_role_query(role: str, query: str) -> str:
+    """Add domain intent only when the resolved role supports that intent."""
+    role_name = canonicalize_role_name(role) or role
+    q = str(query or "").strip()
+    q_low = q.lower()
+    mobile_terms = ("mobile", "app development", "app developer", "flutter", "react native", "android", "ios")
+    if role_name == "Mobile Developer" and any(term in q_low for term in mobile_terms):
+        # This is a ranking vocabulary expansion, not a claim that every mobile
+        # developer must use every framework. Role requirements still carry the
+        # benchmark importance and provenance for each technology.
+        return f"{q} mobile Android iOS Flutter React Native REST APIs Git Responsive Design"
+    return q
+
+
 def _quality_signal(item: Dict[str, Any]) -> float:
     """Source quality clamped to [0,1]; missing quality is neutral 0.5."""
     try:
@@ -553,18 +567,19 @@ async def retrieve(role: str, query: Optional[str] = None, top_k: int = 10) -> d
     """
     canonical_role = canonicalize_role_name(role) or role.strip()
     q = (query or f"skills required for {canonical_role}").strip()
+    ranking_query = _expand_role_query(canonical_role, q)
 
     # 1. Vector search path (pgvector kept; fusion + gating applied on top).
     # Source metadata gaps are filled from the canonical catalog (RPC values
     # win), so every vector-path item carries the same provenance contract.
-    vec_results = await _vector_search(canonical_role, q, top_k)
+    vec_results = await _vector_search(canonical_role, ranking_query, top_k)
     if vec_results:
         catalog_index = _catalog_index_for_role(canonical_role)
         vec_results = [_enrich_with_catalog(dict(it), catalog_index) for it in vec_results]
         for it in vec_results:
             _attach_requirement_evidence(it, canonical_role)
         similarities = {i: max(0.0, min(1.0, float(it.get("similarity", 0.8)))) for i, it in enumerate(vec_results)}
-        ranked, duplicates_removed = _rank_items(vec_results, canonical_role, q, top_k, similarities)
+        ranked, duplicates_removed = _rank_items(vec_results, canonical_role, ranking_query, top_k, similarities)
         for it in ranked:
             # Retrieval relevance: the fused multi-signal score.
             it["similarity"] = it.pop("fused_score", it.get("similarity", 0.0))
@@ -595,7 +610,7 @@ async def retrieve(role: str, query: Optional[str] = None, top_k: int = 10) -> d
                     "note": "no industry requirements found for target role",
                 }
 
-        ranked, duplicates_removed = _rank_items(items, canonical_role, q, top_k)
+        ranked, duplicates_removed = _rank_items(items, canonical_role, ranking_query, top_k)
         for it in ranked:
             _attach_requirement_evidence(it, canonical_role)
             it["similarity"] = it.pop("fused_score", it.get("similarity", 0.0))

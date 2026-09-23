@@ -16,6 +16,14 @@ class IndustryRequirementResponse(BaseModel):
     industry_confidence: float = Field(default=0.85, ge=0.0, le=1.0)
     source: str
     source_url: Optional[str] = None
+    source_version: Optional[str] = None
+    source_occupation: Optional[str] = None
+    source_reference: Optional[str] = None
+    mapping_version: Optional[str] = None
+    role_relevance: Optional[str] = None
+    source_concept: Optional[str] = None
+    canonical_mapping: Optional[str] = None
+    mapping_rationale: Optional[str] = None
     source_quality: float = Field(default=0.85, ge=0.0, le=1.0)
     evidence_context: Optional[str] = None
     description: Optional[str] = None
@@ -121,6 +129,14 @@ class RetrieveItem(BaseModel):
     industry_confidence: float = 0.85
     source: str
     source_url: Optional[str] = None
+    source_version: Optional[str] = None
+    source_occupation: Optional[str] = None
+    source_reference: Optional[str] = None
+    mapping_version: Optional[str] = None
+    role_relevance: Optional[str] = None
+    source_concept: Optional[str] = None
+    canonical_mapping: Optional[str] = None
+    mapping_rationale: Optional[str] = None
     source_quality: float = 0.85
     evidence_context: Optional[str] = None
     description: Optional[str] = None
