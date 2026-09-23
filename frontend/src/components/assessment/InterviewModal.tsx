@@ -41,7 +41,7 @@ type Question = {
 };
 
 /** What the AI interviewer calls itself, on screen and out loud. */
-const INTERVIEWER_NAME = "Alex";
+const INTERVIEWER_NAME = "Donald Duck 🦆";
 
 const SILENCE_TIMEOUT_MS = 2800;
 /** Watchdogs so no phase can wedge forever (backend budgets are shorter). */
@@ -653,7 +653,7 @@ export default function InterviewModal({ skill, onClose, onCompleted }: Props) {
             <div className="iv__call-panel iv__call-panel--ai">
               <div className="iv__call-avatar">
                 <div className={`iv__avatar-ring ${phase === "ai_speaking" ? "iv__avatar-ring--active" : ""}`}>
-                  <span className="iv__avatar-icon" role="img" aria-label="AI Interviewer">🤖</span>
+                  <span className="iv__avatar-icon" role="img" aria-label="Donald Duck">🦆</span>
                 </div>
               </div>
               <div className="iv__call-panel-label">{INTERVIEWER_NAME} · AI Interviewer</div>
