@@ -10,6 +10,7 @@ export type Profile = {
   graduation_year: number;
   career_interests: string[];
   hours_per_week: number;
+  preferred_work_location: string | null;
   profile_completed: boolean;
   created_at: string;
   updated_at: string;

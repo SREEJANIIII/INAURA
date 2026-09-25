@@ -65,7 +65,7 @@ const items: NavItem[] = [
   },
   {
     label: "Resume",
-    to: "/resume/ats-tester",
+    to: "/resume",
     icon: (
       <Icon>
         <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z" />
@@ -77,6 +77,7 @@ const items: NavItem[] = [
     ),
     children: [
       { label: "ATS Tester", to: "/resume/ats-tester" },
+      { label: "Resume Builder", to: "/resume" },
     ],
   },
   {
@@ -117,7 +118,7 @@ const matches = (to: string, pathname: string, hash: string, onScreen: string | 
   if (path === RESULTS_PATH && h && ANALYSIS_SECTION_IDS.includes(h)) return pathname === path && onScreen === h;
   // Career Track stays highlighted on its career and skill pages
   if (path === "/career-track") return pathname === path || pathname.startsWith(`${path}/`);
-  if (path === "/resume/ats-tester") return pathname === path || pathname.startsWith("/resume");
+  if (path === "/resume" || path === "/resume/ats-tester") return pathname === path || pathname.startsWith("/resume");
   return pathname === path && (!h || hash === `#${h}`);
 };
 

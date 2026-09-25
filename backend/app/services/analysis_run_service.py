@@ -91,11 +91,30 @@ def load_evidence(user_id: str) -> Tuple[List[dict], List[dict], List[dict]]:
         raise
 
 
-def load_industry_requirements(target_role: str) -> List[dict]:
-    """Load normalized industry requirements for target role."""
+def load_industry_requirements(target_role: str, location: Any = None) -> List[dict]:
+    """Load normalized industry requirements for target role.
+
+    Dynamic Intelligence overlays are additive: merged baseline+dynamic
+    requirement rows are projected into the EXISTING requirement shape, so the
+    existing gap engine consumes them with no second algorithm. `location` is
+    optional and defaults to the global view.
+    Unmapped dynamic concepts are excluded (taxonomy cannot drift).
+    Omitting location uses the global baseline plus global dynamic overlays.
+    """
     if not target_role or len(target_role.strip()) < 2:
         raise HTTPException(status_code=400, detail="Target role required")
     try:
+        try:
+            from . import industry_intelligence as _intel
+
+            view = _intel.build_role_intelligence(target_role.strip(), location=location)
+            reqs = _intel.to_gap_engine_requirements(view)
+            if reqs:
+                return reqs
+        except Exception:
+            # Preserve the established catalog fallback if the additive layer
+            # is unavailable during a partial deployment.
+            pass
         requirements = industry_service.list_by_role(target_role.strip())
         return requirements
     except HTTPException as e:
@@ -676,6 +695,8 @@ def build_requirements_map(requirements: List[dict], client: Optional[Client] = 
     """
     Build canonical lookup map of target role requirements.
     Preserves separate dimensions: required_level, importance, demand, interview_relevance, industry_confidence.
+    Dynamic Intelligence fields (trend, freshness, location, data_origin) pass
+    through additively; scoring formulas are untouched.
     """
     req_map: Dict[str, dict] = {}
     for req in requirements:
@@ -713,6 +734,13 @@ def build_requirements_map(requirements: List[dict], client: Optional[Client] = 
             "retrieved_at": req.get("retrieved_at", ""),
             "role_relevance": req.get("role_relevance", "CORE" if importance >= 0.80 else ("IMPORTANT" if importance >= 0.70 else "RELEVANT")),
             "evidence_context": req.get("evidence_context", ""),
+            "trend": str(req.get("trend") or "stable"),
+            "freshness": req.get("freshness"),
+            "data_origin": req.get("data_origin") or "source_data",
+            "location": req.get("location"),
+            "collected_at": req.get("collected_at", ""),
+            "last_updated": req.get("last_updated", ""),
+            "mapping_status": req.get("mapping_status") or "mapped",
         }
     return req_map
 
@@ -1659,7 +1687,9 @@ async def run_analysis(user_id: str, target_role: str) -> dict:
                         pass
 
     # 3. Load industry requirements
-    requirements = load_industry_requirements(target_role)
+    requirements = load_industry_requirements(
+        target_role, location=profile.get("preferred_work_location") or None
+    )
 
     # 4. Extract raw evidence signals
     raw_signals = extract_skill_signals(evidence, projects, certs)

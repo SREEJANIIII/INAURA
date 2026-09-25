@@ -3,6 +3,7 @@ import { Link, useNavigate } from "react-router-dom";
 import { animate, motion, useMotionValue, useReducedMotion, useTransform, useVelocity } from "framer-motion";
 import Button from "../ui/app-button";
 import { useAuth } from "../../context/AuthContext";
+import InauraLogo from "./InauraLogo";
 import "./Navbar.css";
 
 const navLinks = [
@@ -154,8 +155,7 @@ export default function Navbar() {
     <header className="nav" data-scrolled={scrolled || undefined}>
       <div className="nav__pill">
         <Link to="/" className="nav__brand" aria-label="INAURA — Home">
-          <img
-            src="/logo.png"
+          <InauraLogo
             alt="INAURA"
             className="nav__logo"
             width={1748}

@@ -34,6 +34,7 @@ import PriorityGaps from "../components/analysis/PriorityGaps";
 import EvidenceGaps from "../components/analysis/EvidenceGaps";
 import SkillQuadrant from "../components/analysis/SkillQuadrant";
 import SkillOverview from "../components/analysis/SkillOverview";
+import IndustryIntelligence from "../components/analysis/IndustryIntelligence";
 import EvidenceSources from "../components/analysis/EvidenceSources";
 import { CodeforcesPanel, DsaCoverage } from "../components/analysis/CodingPractice";
 import { codingPracticeData } from "../components/analysis/codingPracticeData";
@@ -49,6 +50,7 @@ const NAV = [
   { id: "evidence-gaps", label: "Evidence gaps" },
   { id: "skill-quadrants", label: "Skill quadrants" },
   { id: "skill-overview", label: "Skill overview" },
+  { id: "industry", label: "Industry intelligence" },
   { id: "evidence-sources", label: "Evidence sources" },
   { id: "next-steps", label: "Next steps" },
 ];
@@ -563,6 +565,15 @@ export default function AnalysisResults() {
             <p>What {analysis.target_role} roles require, and where you stand on each skill.</p>
           </header>
           <SkillOverview roleSkills={groups.target} secondary={groups.secondary} actions={actions} />
+        </section>
+
+        {/* ---------- Industry intelligence ---------- */}
+        <section id="industry" className="an-sec" aria-labelledby="h-industry">
+          <header className="an-sec__head">
+            <h2 id="h-industry">Industry intelligence</h2>
+            <p>What {analysis.target_role} roles require right now — required proficiency, demand, and rising skills.</p>
+          </header>
+          <IndustryIntelligence role={analysis.target_role} preferredLocation={profileData.peek()?.preferred_work_location} />
         </section>
 
         {/* ---------- Evidence sources ---------- */}

@@ -3,6 +3,7 @@ import { Link, Outlet } from "react-router-dom";
 import Sidebar from "./Sidebar";
 import AccountMenu from "./AccountMenu";
 import SearchBar from "../search/SearchBar";
+import InauraLogo from "./InauraLogo";
 import { preloadPageData } from "../../lib/pageData";
 import "./AppLayout.css";
 
@@ -34,7 +35,7 @@ export default function AppLayout() {
             <span />
           </button>
           <Link to="/career-track" className="app__brand" aria-label="INAURA home">
-            <img src="/logo.png" alt="INAURA" width={120} height={30} />
+            <InauraLogo alt="INAURA" width={120} height={30} />
           </Link>
         </div>
         {/* Search isn't built yet: the bar is fully interactive, and onSubmit is where results will plug in */}

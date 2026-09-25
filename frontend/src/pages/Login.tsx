@@ -3,6 +3,7 @@ import { Link, useNavigate } from "react-router-dom";
 import { useAuth } from "../context/AuthContext";
 import { getProfile } from "../services/profile";
 import { AuthComponent, type SignUpResult } from "@/components/ui/sign-up";
+import InauraLogo from "../components/layout/InauraLogo";
 
 function validateEmail(v: string) {
   return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(v);
@@ -62,7 +63,7 @@ export default function Login() {
     <div className="tw-scope" style={{ "--color-primary": "#8b7cf6" } as CSSProperties}>
       <AuthComponent
         mode="login"
-        logo={<img src="/logo.png" alt="INAURA" width={1748} height={899} className="h-16 w-auto sm:h-20" decoding="async" />}
+        logo={<InauraLogo alt="INAURA" width={1748} height={899} className="h-16 w-auto sm:h-20" decoding="async" />}
         brandName=""
         title="Welcome back"
         onLogIn={handleLogIn}
