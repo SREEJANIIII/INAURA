@@ -1,0 +1,50 @@
+/* The not-found page: one column of type on the paper, nothing else asking for attention */
+.nf {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  justify-content: center;
+  width: min(560px, calc(100% - 32px));
+  min-height: 70vh;
+  margin: 0 auto;
+  padding: 48px 0;
+}
+
+.nf__code {
+  margin: 0 0 10px;
+  font: 600 0.78rem/1 var(--sans);
+  letter-spacing: 0.14em;
+  color: var(--accent);
+}
+
+.nf__title {
+  margin: 0;
+  font-family: var(--serif);
+  font-size: clamp(2rem, 5vw, 2.6rem);
+  font-weight: 400;
+  letter-spacing: -0.02em;
+  line-height: 1.1;
+}
+
+.nf__text {
+  margin: 14px 0 0;
+  max-width: 44ch;
+  color: var(--muted);
+}
+
+.nf__text code {
+  padding: 1px 6px;
+  border-radius: 5px;
+  background: var(--accent-soft);
+  color: var(--ink-700);
+  font-size: 0.86em;
+  overflow-wrap: anywhere;
+}
+
+.nf__actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  margin-top: 28px;
+}

@@ -1,7 +1,8 @@
 .sidebar {
   width: 236px;
   flex-shrink: 0;
-  background: rgba(255, 255, 255, 0.42);
+  /* On a computer the sidebar is part of the page, divided off by a hairline, not a panel */
+  background: transparent;
   border-right: 1px solid var(--glass-edge);
   padding: 16px 10px;
   position: sticky;
@@ -10,8 +11,6 @@
   overflow-y: auto;
   display: none;
   flex-direction: column;
-  backdrop-filter: var(--glass-blur);
-  -webkit-backdrop-filter: var(--glass-blur);
 }
 
 .sidebar.is-open {
@@ -204,7 +203,7 @@
 }
 
 .sidebar__link--logout:hover {
-  background: #f6e5e2;
+  background: #f8e9e6;
   color: #8c3a30;
 }
 
@@ -238,4 +237,30 @@
     transform: translateX(0);
     visibility: visible;
   }
+}
+
+/* A small red mark on Analysis when its results no longer describe you — your evidence or
+   your target role changed since the run. Colour alone never carries it: the mark has a
+   label for screen readers and a tooltip for everyone else. */
+.sidebar__dot {
+  flex-shrink: 0;
+  width: 7px;
+  height: 7px;
+  margin-left: auto;
+  margin-right: 2px;
+  border-radius: 50%;
+  background: #c2453a;
+  box-shadow: 0 0 0 3px rgba(194, 69, 58, 0.16);
+}
+
+.sidebar__visually-hidden {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
 }

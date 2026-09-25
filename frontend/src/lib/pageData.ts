@@ -3,7 +3,7 @@
  * instantly while fresh data is fetched in the background.
  */
 import { getLatestAnalysis, getGaps, type SkillGap } from "../services/analysis";
-import { getAvailableAssessments } from "../services/assessment";
+import { getAvailableAssessments, getDsaChecklist, type AvailableAssessment } from "../services/assessment";
 import {
   listCerts,
   listEvidence,
@@ -19,65 +19,16 @@ import { getCapabilityMap } from "../services/capability";
 import { getProfile } from "../services/profile";
 import { getLatestRoadmap, getRoadmapWeeks } from "../services/roadmap";
 
-const store = new Map<string, unknown>();
-const inflight = new Map<string, Promise<unknown>>();
-const listeners = new Set<() => void>();
-const notify = () => listeners.forEach((l) => l());
+import { forgetAll, remember, rememberByKey, subscribeRemembered } from "./remembered";
 
 /** Lets components (e.g. the top bar name) update when remembered data changes. */
-export function subscribePageData(listener: () => void) {
-  listeners.add(listener);
-  return () => {
-    listeners.delete(listener);
-  };
-}
-
-// Shares one request between callers (e.g. background preload + page opening at the same time).
-// Pass force=true after saving something, so an older in-progress request isn't reused.
-function cached<T>(key: string, load: () => Promise<T>) {
-  const peek = () => store.get(key) as T | undefined;
-  const fetch = (force = false) => {
-    let p = force ? undefined : (inflight.get(key) as Promise<T> | undefined);
-    if (!p) {
-      const request: Promise<T> = load()
-        .then((data) => {
-          // Ignore an older request finishing after a newer one started (or after logout)
-          if (inflight.get(key) === request) {
-            store.set(key, data);
-            notify();
-          }
-          return data;
-        })
-        .finally(() => {
-          if (inflight.get(key) === request) inflight.delete(key);
-        });
-      inflight.set(key, request);
-      p = request;
-    }
-    return p;
-  };
-  return { peek, fetch };
-}
-
-/** One remembered copy per key, e.g. per role — same sharing and logout clearing as above */
-function cachedByKey<T>(prefix: string, load: (key: string) => Promise<T>) {
-  const made = new Map<string, ReturnType<typeof cached<T>>>();
-  return (key: string) => {
-    let entry = made.get(key);
-    if (!entry) {
-      entry = cached(`${prefix}:${key}`, () => load(key));
-      made.set(key, entry);
-    }
-    return entry;
-  };
-}
+export const subscribePageData = subscribeRemembered;
 
 /** Forget everything — call on logout so the next user never sees old data. */
-export function clearPageData() {
-  store.clear();
-  inflight.clear();
-  notify();
-}
+export const clearPageData = forgetAll;
+
+const cached = remember;
+const cachedByKey = rememberByKey;
 
 export const profileData = cached("profile", getProfile);
 
@@ -96,6 +47,16 @@ export const evidencePageData = cached("evidence-page", async () => {
   return { evidence, projects, certs, roles, analysisState, profile };
 });
 
+/**
+ * The skills INAURA suggests proving. Kept apart from the analysis bundle so Skill Assessment
+ * still opens for someone who hasn't run an analysis yet.
+ */
+export const assessmentsData = cached("assessments", () =>
+  getAvailableAssessments()
+    .then((d) => d.available || [])
+    .catch(() => [] as AvailableAssessment[])
+);
+
 export const resultsPageData = cached("results-page", async () => {
   const [analysis, gaps, evidence, projects, githubRepos, assessable] = await Promise.all([
     getLatestAnalysis(),
@@ -103,9 +64,8 @@ export const resultsPageData = cached("results-page", async () => {
     listEvidence().catch(() => [] as Evidence[]),
     listProjects().catch(() => [] as Project[]),
     listGithubRepos().catch(() => [] as GithubRepo[]),
-    getAvailableAssessments()
-      .then((d) => d.available || [])
-      .catch(() => []),
+    // Fresh whenever the results are, and shared with the Skill Assessment page
+    assessmentsData.fetch(true),
   ]);
   return { analysis, gaps, evidence, projects, githubRepos, assessable };
 });
@@ -127,21 +87,32 @@ export const roadmapPageData = cached("roadmap-page", async () => {
 
 export const roleCatalogData = cached("role-catalog", getRolesCatalog);
 
+/** The DSA question bank and what you've solved — Revision builds cards from it */
+export const dsaChecklistData = cached("dsa-checklist", getDsaChecklist);
+
 /** Career Track: the capability map for one role (skills, progress, topics) */
 export const capabilityMapData = cachedByKey("capability-map", (role) => getCapabilityMap({ target_role: role }));
 
 /** Warm up every sidebar page in the background right after login. */
 export function preloadPageData() {
-  for (const d of [profileData, evidencePageData, resultsPageData, roadmapPageData]) {
+  for (const d of [profileData, roleCatalogData, evidencePageData, resultsPageData, roadmapPageData, dsaChecklistData]) {
     d.fetch().catch(() => {
       // the page itself shows the error when opened
     });
   }
+  // Career Track is the home screen, and its capability map is the slowest thing the app asks
+  // for. Start it here off the small target-role call, so it's ready before the first click.
+  analysisStateData
+    .fetch()
+    .then((state) => (state?.target_role ? capabilityMapData(state.target_role).fetch() : undefined))
+    .catch(() => undefined);
 }
 
 /** Re-fetch every page's data now — e.g. after the profile changes, since several pages show it. */
 export function refreshPageData() {
-  for (const d of [profileData, evidencePageData, resultsPageData, roadmapPageData]) {
+  for (const d of [profileData, analysisStateData, evidencePageData, resultsPageData, roadmapPageData]) {
     d.fetch(true).catch(() => undefined);
   }
+  // Career Track reads these, and they're built from the evidence that just changed
+  capabilityMapData.refreshAll();
 }

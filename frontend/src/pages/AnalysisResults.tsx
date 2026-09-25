@@ -1,10 +1,7 @@
 import { useCallback, useEffect, useMemo, useState, useSyncExternalStore } from "react";
-import { Link, useLocation } from "react-router-dom";
-import { setSkillOverride, type AnalysisResult, type SkillGap } from "../services/analysis";
+import { Link, Navigate, useLocation } from "react-router-dom";
+import { setSkillOverride, type SkillGap } from "../services/analysis";
 import {
-  type Evidence,
-  type Project,
-  type GithubRepo,
   setEvidenceExcluded,
   setProjectExcluded,
   setEvidenceAiAssisted,
@@ -15,12 +12,21 @@ import {
 import { type AvailableAssessment } from "../services/assessment";
 import { generateRoadmap } from "../services/roadmap";
 import AssessmentModal from "../components/assessment/AssessmentModal";
-import SkillAssessmentLayers from "../components/assessment/SkillAssessmentLayers";
-import DsaChecklist from "../components/assessment/DsaChecklist";
 import SkillEvidenceCard from "../components/analysis/SkillEvidenceCard";
 import Button from "../components/ui/app-button";
-import { profileData, resultsPageData, roadmapPageData, subscribePageData } from "../lib/pageData";
+import {
+  analysisStateData,
+  evidencePageData,
+  profileData,
+  resultsPageData,
+  roadmapPageData,
+  subscribePageData,
+} from "../lib/pageData";
 import { setActiveSection } from "../lib/sectionSpy";
+import { freshness } from "../lib/analysisFreshness";
+import { getRoleSync, rebuildForRole, refreshAnalysis, subscribeRoleSync } from "../lib/roleSync";
+import { friendlyError, statusOf } from "../lib/errors";
+import { useDialog } from "../lib/useDialog";
 import {
   headlineInsight,
   pct,
@@ -36,13 +42,11 @@ import SkillQuadrant from "../components/analysis/SkillQuadrant";
 import SkillOverview from "../components/analysis/SkillOverview";
 import IndustryIntelligence from "../components/analysis/IndustryIntelligence";
 import EvidenceSources from "../components/analysis/EvidenceSources";
-import { CodeforcesPanel, DsaCoverage } from "../components/analysis/CodingPractice";
-import { codingPracticeData } from "../components/analysis/codingPracticeData";
 import "./AnalysisResults.css";
 import "../components/analysis/AnalysisPage.css";
 
-/** The two Skill Assessment sidebar links still open a focused view of just that part */
-const FOCUS_VIEWS = ["dsa", "skill-assessments"];
+/** Skill Assessment used to live here as #dsa and #skill-assessments; old links still land */
+const MOVED: Record<string, string> = { dsa: "/skill-assessment/dsa", "skill-assessments": "/skill-assessment" };
 
 const NAV = [
   { id: "overview", label: "Overview" },
@@ -58,15 +62,22 @@ const NAV = [
 const scrollToSection = (id: string, smooth = true) =>
   document.getElementById(id)?.scrollIntoView({ behavior: smooth ? "smooth" : "auto", block: "start" });
 
+const NO_GAPS: SkillGap[] = [];
+const NONE: never[] = [];
+
 export default function AnalysisResults() {
-  const [analysis, setAnalysis] = useState<AnalysisResult | null>(() => resultsPageData.peek()?.analysis ?? null);
-  const [gaps, setGaps] = useState<SkillGap[]>(() => resultsPageData.peek()?.gaps ?? []);
-  const [evidence, setEvidence] = useState<Evidence[]>(() => resultsPageData.peek()?.evidence ?? []);
-  const [projects, setProjects] = useState<Project[]>(() => resultsPageData.peek()?.projects ?? []);
-  const [githubRepos, setGithubRepos] = useState<GithubRepo[]>(() => resultsPageData.peek()?.githubRepos ?? []);
-  const [assessable, setAssessable] = useState<AvailableAssessment[]>(() => resultsPageData.peek()?.assessable ?? []);
+  // Read straight from the shared copy, so a re-run finishing anywhere in the app — a career
+  // change on Career Track, say — shows here without this page having to be reopened
+  const results = useSyncExternalStore(subscribePageData, resultsPageData.peek);
+  const analysis = results?.analysis ?? null;
+  const gaps = results?.gaps ?? NO_GAPS;
+  const evidence = results?.evidence ?? NONE;
+  const projects = results?.projects ?? NONE;
+  const githubRepos = results?.githubRepos ?? NONE;
+  const assessable = results?.assessable ?? NONE;
+  const [asked, setAsked] = useState(() => !!results);
+  const loading = !asked && !results;
   const [activeAssessment, setActiveAssessment] = useState<AvailableAssessment | null>(null);
-  const [loading, setLoading] = useState(() => !resultsPageData.peek());
   const [error, setError] = useState<string | null>(null);
   const [provenanceGap, setProvenanceGap] = useState<SkillGap | null>(null);
   const [overrideConfirm, setOverrideConfirm] = useState<SkillGap | null>(null);
@@ -78,62 +89,51 @@ export default function AnalysisResults() {
   const [navActive, setNavActive] = useState("overview");
   const location = useLocation();
   const hash = location.hash.slice(1);
-  const focusView = FOCUS_VIEWS.includes(hash) ? hash : null;
 
   const roadmapData = useSyncExternalStore(subscribePageData, roadmapPageData.peek);
+  const analysisState = useSyncExternalStore(subscribePageData, analysisStateData.peek);
+  const evidenceData = useSyncExternalStore(subscribePageData, evidencePageData.peek);
+  const sync = useSyncExternalStore(subscribeRoleSync, getRoleSync);
 
   const reload = useCallback(async (force = true) => {
     try {
-      const data = await resultsPageData.fetch(force);
-      setAnalysis(data.analysis);
-      setGaps(data.gaps);
-      setEvidence(data.evidence);
-      setProjects(data.projects);
-      setGithubRepos(data.githubRepos);
-      setAssessable(data.assessable);
+      await resultsPageData.fetch(force);
       setError(null);
     } catch (e) {
       // A failed background refresh keeps the last-seen results on screen
       if (!force && resultsPageData.peek()) return;
-      const msg = e instanceof Error ? e.message : "Failed to load analysis";
-      if (msg.includes("404") || msg.toLowerCase().includes("no analysis")) {
+      const msg = e instanceof Error ? e.message.toLowerCase() : "";
+      if (statusOf(e) === 404 || msg.includes("no analysis")) {
         setError("none");
-      } else if (msg.includes("401")) {
-        setError("Your session has expired. Log in again to see your analysis.");
-      } else if (msg.includes("503")) {
-        setError("Analysis tables aren’t set up. Run backend/supabase/005_skill_engine.sql in Supabase.");
       } else {
-        setError("Your analysis couldn’t be loaded. Check your connection and try again.");
+        setError(friendlyError(e, "Your analysis couldn’t be loaded. Check your connection and try again."));
       }
     } finally {
-      setLoading(false);
+      setAsked(true);
     }
   }, []);
 
-  // State starts from the last-seen data (see useState above); refresh it in the background
+  // The page opens on the last-seen copy; refresh it in the background
   useEffect(() => {
     // Fetching on open: state is only set after the request resolves
     // eslint-disable-next-line react-hooks/set-state-in-effect
     reload(false);
     roadmapPageData.fetch().catch(() => undefined);
+    analysisStateData.fetch().catch(() => undefined);
   }, [reload]);
 
   const ready = !loading && !!analysis;
 
-  // Sidebar links like #priority-gaps scroll within this page; focused views start at the top
+  // Sidebar links like #priority-gaps scroll within this page
   useEffect(() => {
     if (!ready) return;
-    if (focusView) {
-      window.scrollTo(0, 0);
-    } else if (hash && document.getElementById(hash)) {
-      scrollToSection(hash);
-    }
+    if (hash && document.getElementById(hash)) scrollToSection(hash);
     // location.key: clicking the same sidebar link again scrolls back to that section
-  }, [ready, hash, focusView, location.key]);
+  }, [ready, hash, location.key]);
 
   // Track which section is on screen, for the sidebar and the section bar
   useEffect(() => {
-    if (!ready || focusView) {
+    if (!ready) {
       setActiveSection(null);
       return;
     }
@@ -168,7 +168,7 @@ export default function AnalysisResults() {
       window.removeEventListener("resize", onScroll);
       setActiveSection(null);
     };
-  }, [ready, focusView]);
+  }, [ready]);
 
   // Keep the active chip in view in the phone section bar. Scroll only the bar sideways:
   // scrollIntoView would also nudge the page and interrupt a smooth scroll that's in progress.
@@ -190,7 +190,7 @@ export default function AnalysisResults() {
       setOverrideConfirm(null);
       await reload();
     } catch (e) {
-      setActionError(e instanceof Error ? e.message : "That change couldn’t be saved. Try again.");
+      setActionError(friendlyError(e, "That change couldn’t be saved. Try again."));
       setOverrideConfirm(null);
     } finally {
       setOverriding(false);
@@ -205,7 +205,7 @@ export default function AnalysisResults() {
       await action();
       await reload();
     } catch (e) {
-      setActionError(e instanceof Error ? e.message : "That change couldn’t be saved. Try again.");
+      setActionError(friendlyError(e, "That change couldn’t be saved. Try again."));
     } finally {
       setEvidenceActionLoading(null);
     }
@@ -220,14 +220,28 @@ export default function AnalysisResults() {
       await generateRoadmap(analysis.target_role, profile?.hours_per_week);
       await roadmapPageData.fetch(true);
     } catch (e) {
-      setActionError(e instanceof Error ? `Your roadmap couldn’t be built: ${e.message}` : "Your roadmap couldn’t be built.");
+      setActionError(friendlyError(e, "Your roadmap couldn’t be built. Try again in a moment."));
     } finally {
       setGeneratingRoadmap(false);
     }
   };
 
   const groups = useMemo(() => splitGaps(gaps), [gaps]);
-  const coding = useMemo(() => codingPracticeData(evidence), [evidence]);
+  const provenanceRef = useDialog<HTMLDivElement>(!!provenanceGap, () => setProvenanceGap(null));
+  const overrideRef = useDialog<HTMLDivElement>(!!overrideConfirm, () => {
+    if (!overriding) setOverrideConfirm(null);
+  });
+
+  // Whether these results still describe you, and what re-running them would take
+  const targetRole = (analysisState ?? evidenceData?.analysisState)?.target_role ?? null;
+  const stale = freshness({ analysis, targetRole });
+  const rerunning = (sync.stage === "analysing" || sync.stage === "building") && !!sync.role;
+  const rerun = () => {
+    if (!analysis) return;
+    // A different role means a new plan too; otherwise only the analysis is redone
+    if (stale.reason === "role" && targetRole) rebuildForRole(targetRole);
+    else refreshAnalysis(analysis.target_role);
+  };
 
   const assessmentFor = useCallback(
     (g: SkillGap): AvailableAssessment | undefined => {
@@ -250,6 +264,8 @@ export default function AnalysisResults() {
   };
 
   /* ---------------- Loading / empty / error ---------------- */
+
+  if (MOVED[hash]) return <Navigate to={MOVED[hash]} replace />;
 
   if (loading) {
     return (
@@ -276,7 +292,8 @@ export default function AnalysisResults() {
               {none ? (
                 <Button asChild variant="primary"><Link to="/analysis">Start your analysis</Link></Button>
               ) : (
-                <Button variant="primary" onClick={() => { setLoading(true); void reload(); }}>Try again</Button>
+                <Button variant="primary" onClick={() => { setAsked(false); void reload(); }}>Try again</Button>
+
               )}
             </div>
           </section>
@@ -295,7 +312,7 @@ export default function AnalysisResults() {
     <>
       {provenanceGap && (
         <div className="prov__overlay" onClick={() => setProvenanceGap(null)} role="dialog" aria-modal="true" aria-label={`Evidence details for ${skillName(provenanceGap)}`}>
-          <div className="prov__drawer" onClick={(e) => e.stopPropagation()}>
+          <div className="prov__drawer" ref={provenanceRef} tabIndex={-1} onClick={(e) => e.stopPropagation()}>
             <div className="prov__header">
               <div>
                 <div className="prov__eyebrow">Why this score?</div>
@@ -306,17 +323,17 @@ export default function AnalysisResults() {
             <div className="prov__body">
               <SkillEvidenceCard gap={provenanceGap} />
               <div className="prov__sources">
-                <div style={{ marginTop: 12, padding: 10, background: "#f8fafc", border: "1px solid #e2e8f0", borderRadius: 8 }}>
+                <div style={{ marginTop: 12, padding: 10, background: "var(--paper-2)", border: "1px solid var(--line-strong)", borderRadius: 8 }}>
                   <h4 style={{ margin: "0 0 6px", fontSize: "0.90rem" }}>Why is this skill required for {analysis.target_role}?</h4>
-                  <div style={{ fontSize: "0.82rem", color: "#334155", display: "flex", flexDirection: "column", gap: 4 }}>
-                    <div><strong>Source:</strong> {provenanceGap.requirement_source || provenanceGap.source || "Industry requirements"} {provenanceGap.requirement_source_url ? <a href={provenanceGap.requirement_source_url} target="_blank" rel="noreferrer" style={{ color: "#0f766e", wordBreak: "break-all" }}>{provenanceGap.requirement_source_url}</a> : null}</div>
+                  <div style={{ fontSize: "0.82rem", color: "var(--muted)", display: "flex", flexDirection: "column", gap: 4 }}>
+                    <div><strong>Source:</strong> {provenanceGap.requirement_source || provenanceGap.source || "Industry requirements"} {provenanceGap.requirement_source_url ? <a href={provenanceGap.requirement_source_url} target="_blank" rel="noreferrer" style={{ color: "var(--ok-ink)", wordBreak: "break-all" }}>{provenanceGap.requirement_source_url}</a> : null}</div>
                     {provenanceGap.requirement_source_version && <div><strong>Source version:</strong> {provenanceGap.requirement_source_version}</div>}
                     {provenanceGap.requirement_source_reference && <div><strong>Reference:</strong> {provenanceGap.requirement_source_reference}</div>}
                     {provenanceGap.requirement_role_relevance && <div><strong>Role relevance:</strong> {provenanceGap.requirement_role_relevance}</div>}
                     {provenanceGap.requirement_description && <div><strong>Description:</strong> {provenanceGap.requirement_description}</div>}
                     {provenanceGap.evidence_context && <div><strong>Evidence context:</strong> {provenanceGap.evidence_context}</div>}
                   </div>
-                  <div style={{ fontSize: "0.72rem", color: "#64748b", fontStyle: "italic", marginTop: 8 }}>Industry-grounded role requirements based on O*NET/ESCO with INAURA mapping heuristics — not universally required.</div>
+                  <div style={{ fontSize: "0.72rem", color: "var(--muted-2)", fontStyle: "italic", marginTop: 8 }}>Industry-grounded role requirements based on O*NET/ESCO with INAURA mapping heuristics — not universally required.</div>
                 </div>
               </div>
               <div className="prov__footer-note">
@@ -336,13 +353,14 @@ export default function AnalysisResults() {
       )}
 
       {overrideConfirm && (
-        <div className="prov__overlay" onClick={() => setOverrideConfirm(null)} role="dialog" aria-modal="true">
-          <div className="prov__drawer" onClick={(e) => e.stopPropagation()} style={{ maxWidth: 480 }}>
-            <h3 style={{ margin: 0 }}>Set {skillName(overrideConfirm)} to 0%?</h3>
-            <p style={{ marginTop: 8, fontSize: "0.92rem", color: "#475569", lineHeight: 1.5 }}>
+        <div className="prov__overlay" onClick={() => !overriding && setOverrideConfirm(null)} role="alertdialog" aria-modal="true" aria-labelledby="override-title">
+          <div className="prov__drawer" ref={overrideRef} tabIndex={-1} onClick={(e) => e.stopPropagation()} style={{ maxWidth: 480 }}>
+            <h3 id="override-title" style={{ margin: 0 }}>Set {skillName(overrideConfirm)} to 0%?</h3>
+
+            <p style={{ marginTop: 8, fontSize: "0.92rem", color: "var(--muted)", lineHeight: 1.5 }}>
               This overrides the current estimate in future analyses. Your evidence and assessment history are kept. You can’t restore the previous estimate yourself, but new evidence or a new assessment can change the result.
             </p>
-            <p style={{ fontSize: "0.85rem", color: "#64748b" }}>
+            <p style={{ fontSize: "0.85rem", color: "var(--muted-2)" }}>
               Current: {pct(overrideConfirm.current_proficiency)}%, required: {pct(overrideConfirm.required_level)}%
             </p>
             <div style={{ display: "flex", gap: 8, justifyContent: "flex-end", marginTop: 16 }}>
@@ -367,75 +385,6 @@ export default function AnalysisResults() {
       )}
     </>
   );
-
-  /* ---------------- Focused views from the Skill Assessment sidebar group ---------------- */
-
-  if (focusView === "skill-assessments") {
-    return (
-      <div className="an">
-        <div className="an__inner">
-          <Link to="/analysis/results" className="an-link sa-back">← Full analysis</Link>
-
-          <section className="an-sec an-overview" id="skill-assessments" aria-labelledby="h-assess">
-            <div className="an-overview__head">
-              <div>
-                <h1 id="h-assess" className="an-overview__title">Skills you know</h1>
-                <p className="an-overview__sub">Show INAURA what you can actually do. Every check you finish sharpens your skill gaps and your roadmap.</p>
-              </div>
-              <Button asChild variant="secondary"><Link to="/analysis">Update evidence</Link></Button>
-            </div>
-
-            {assessable.length > 0 ? (
-              <SkillAssessmentLayers items={assessable} onStartKnowledge={(item) => setActiveAssessment(item)} onCompleted={refreshAfterAssessment} />
-            ) : (
-              <>
-                <p className="an-empty">There’s nothing to validate yet. Add your evidence and run your analysis first — INAURA then suggests the skills worth proving.</p>
-                <div className="an-actions">
-                  <Button asChild variant="primary"><Link to="/analysis">Add evidence</Link></Button>
-                </div>
-              </>
-            )}
-          </section>
-
-          {coding.cfInspection && (
-            <section className="an-sec" aria-labelledby="h-cf">
-              <header className="an-sec__head">
-                <h2 id="h-cf">Codeforces performance</h2>
-                <p>Verified from your Codeforces profile — it counts as evidence on its own, so there’s nothing to take here.</p>
-              </header>
-              <CodeforcesPanel data={coding} />
-            </section>
-          )}
-        </div>
-        {overlays}
-      </div>
-    );
-  }
-
-  if (focusView === "dsa") {
-    return (
-      <div className="an">
-        <div className="an__inner">
-          <Link to="/analysis/results" className="an-link sa-back">← Full analysis</Link>
-
-          {/* Interactive Compulsory Questions & Pattern Checklist */}
-          <DsaChecklist onProgressUpdate={() => void reload(true)} />
-
-          {/* Connected LeetCode profile insights if available */}
-          {coding.hasDsa && (
-            <section className="an-sec" style={{ marginTop: "24px" }} aria-labelledby="h-lc-coverage">
-              <header className="an-sec__head">
-                <h2 id="h-lc-coverage">Connected LeetCode Profile Insights</h2>
-                <p>Real-time submission analytics parsed from your verified LeetCode profile.</p>
-              </header>
-              <DsaCoverage data={coding} />
-            </section>
-          )}
-        </div>
-        {overlays}
-      </div>
-    );
-  }
 
   /* ---------------- The single analysis page ---------------- */
 
@@ -481,6 +430,33 @@ export default function AnalysisResults() {
             </div>
             <Button asChild variant="secondary"><Link to="/analysis">Update evidence or re-run</Link></Button>
           </div>
+
+          {/* Everything below was computed from one run; say so when that run no longer fits */}
+          {(stale.stale || rerunning) && (
+            <div className={`an-stale${rerunning ? " is-busy" : ""}`} role="status">
+              {rerunning ? (
+                <>
+                  <span className="an-stale__spin" aria-hidden="true" />
+                  <p>
+                    Re-running your analysis for <strong>{sync.role}</strong>. These results update by themselves when it’s done.
+                  </p>
+                </>
+              ) : (
+                <>
+                  <span className="an-stale__dot" aria-hidden="true" />
+                  <p>{stale.message} The numbers below may no longer describe you.</p>
+                  <Button variant="secondary" size="sm" onClick={rerun}>
+                    {stale.action}
+                  </Button>
+                </>
+              )}
+            </div>
+          )}
+          {sync.stage === "failed" && sync.message && !rerunning && (
+            <div className="an-alert" role="alert">
+              <span>{sync.message}</span>
+            </div>
+          )}
 
           <dl className="an-stats">
             <div className="an-stat">

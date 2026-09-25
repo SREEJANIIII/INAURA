@@ -1,7 +1,10 @@
 /**
  * Placeholder typewriter as a tiny state machine, kept free of React and timers so it's easy to test.
  *
- *   hold (word shown) → deleting (one char at a time) → pause ("Search for...") → typing next word → hold …
+ *   hold (phrase shown) → deleting (one char at a time) → pause ("Search for") → typing next phrase → hold …
+ *
+ * A phrase is the word plus its trailing dots, so the dots are erased and written along with it
+ * rather than sitting there on their own while the word is gone.
  */
 
 export type TypewriterPhase = "hold" | "deleting" | "pause" | "typing";
@@ -67,8 +70,11 @@ export function advance(state: TypewriterState, words: readonly string[]): Typew
   }
 }
 
-/** "Search for" + " skil" + "..." — the prefix never changes, only the word is written and erased */
-export function renderText(prefix: string, suffix: string, state: TypewriterState, words: readonly string[]): string {
-  const visible = words[state.wordIndex]?.slice(0, state.chars) ?? "";
-  return `${prefix}${visible ? ` ${visible}` : ""}${suffix}`;
+/** The word with its trailing dots attached, so both are typed and erased as one */
+export const phrasesFor = (words: readonly string[], suffix = "...") => words.map((w) => `${w}${suffix}`);
+
+/** "Search for" + " skills.." — the prefix never changes, only the phrase is written and erased */
+export function renderText(prefix: string, state: TypewriterState, phrases: readonly string[]): string {
+  const visible = phrases[state.wordIndex]?.slice(0, state.chars) ?? "";
+  return `${prefix}${visible ? ` ${visible}` : ""}`;
 }

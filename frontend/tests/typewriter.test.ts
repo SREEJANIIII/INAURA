@@ -5,46 +5,90 @@ import {
   DEFAULT_TIMING,
   delayFor,
   initialState,
+  phrasesFor,
   renderText,
   type TypewriterState,
 } from "../src/components/search/typewriter.ts";
 
 const WORDS = ["skills", "roles", "resources"];
-const text = (s: TypewriterState) => renderText("Search for", "...", s, WORDS);
+const PHRASES = phrasesFor(WORDS);
+const text = (s: TypewriterState) => renderText("Search for", s, PHRASES);
 
 /** Runs the machine and records every distinct placeholder text, in order */
 function run(steps: number) {
-  let s = initialState(WORDS);
+  let s = initialState(PHRASES);
   const seen = [text(s)];
   for (let i = 0; i < steps; i++) {
-    s = advance(s, WORDS);
+    s = advance(s, PHRASES);
     if (text(s) !== seen[seen.length - 1]) seen.push(text(s));
   }
   return { seen, state: s };
 }
 
 describe("typewriter placeholder", () => {
-  it("starts with the first word fully written", () => {
-    assert.equal(text(initialState(WORDS)), "Search for skills...");
+  it("starts with the first word fully written, dots and all", () => {
+    assert.equal(text(initialState(PHRASES)), "Search for skills...");
   });
 
-  it("erases only the word, one character at a time, never the prefix", () => {
-    const { seen } = run(9);
-    assert.deepEqual(seen.slice(0, 8), [
+  it("erases the dots along with the word, one character at a time", () => {
+    const { seen } = run(12);
+    assert.deepEqual(seen.slice(0, 10), [
       "Search for skills...",
-      "Search for skill...",
-      "Search for skil...",
-      "Search for ski...",
-      "Search for sk...",
-      "Search for s...",
-      "Search for...",
-      "Search for r...",
+      "Search for skills..",
+      "Search for skills.",
+      "Search for skills",
+      "Search for skill",
+      "Search for skil",
+      "Search for ski",
+      "Search for sk",
+      "Search for s",
+      "Search for",
     ]);
   });
 
+  it("writes the word back before the dots return", () => {
+    let s = initialState(PHRASES);
+    while (s.phase !== "pause") s = advance(s, PHRASES);
+    // Seeded with the paused text, so only what changes after it is recorded
+    const seen: string[] = [text(s)];
+    for (let i = 0; i < 12; i++) {
+      s = advance(s, PHRASES);
+      if (seen[seen.length - 1] !== text(s)) seen.push(text(s));
+    }
+    assert.deepEqual(seen.slice(1, 9), [
+      "Search for r",
+      "Search for ro",
+      "Search for rol",
+      "Search for role",
+      "Search for roles",
+      "Search for roles.",
+      "Search for roles..",
+      "Search for roles...",
+    ]);
+  });
+
+  it("never leaves the dots on their own once the word is gone", () => {
+    let s = initialState(PHRASES);
+    for (let i = 0; i < 400; i++) {
+      s = advance(s, PHRASES);
+      const t = text(s);
+      const tail = t.slice("Search for".length).trim();
+      // Dots only ever sit directly after some of the word
+      assert.ok(!/^\.+$/.test(tail), `dots shown with no word: "${t}"`);
+    }
+  });
+
+  it("shows only the prefix during the pause between words", () => {
+    let s = initialState(PHRASES);
+    while (s.phase !== "pause") s = advance(s, PHRASES);
+    assert.equal(text(s), "Search for");
+    assert.equal(advance(s, PHRASES).wordIndex, 1);
+  });
+
   it("cycles skills → roles → resources → skills", () => {
-    const { seen } = run(200);
-    const fullWords = seen.filter((t) => ["Search for skills...", "Search for roles...", "Search for resources..."].includes(t));
+    const { seen } = run(400);
+    const full = ["Search for skills...", "Search for roles...", "Search for resources..."];
+    const fullWords = seen.filter((t) => full.includes(t));
     assert.deepEqual(fullWords.slice(0, 4), [
       "Search for skills...",
       "Search for roles...",
@@ -65,10 +109,8 @@ describe("typewriter placeholder", () => {
     assert.ok(pause > DEFAULT_TIMING.typeMs);
   });
 
-  it("shows 'Search for...' during the pause between words", () => {
-    let s = initialState(WORDS);
-    while (s.phase !== "pause") s = advance(s, WORDS);
-    assert.equal(text(s), "Search for...");
-    assert.equal(advance(s, WORDS).wordIndex, 1);
+  it("attaches the dots to every word", () => {
+    assert.deepEqual(phrasesFor(["skills", "roles"]), ["skills...", "roles..."]);
+    assert.deepEqual(phrasesFor(["skills"], "…"), ["skills…"]);
   });
 });

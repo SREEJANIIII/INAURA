@@ -205,7 +205,7 @@ export default function Profile() {
 
   return (
     <div className="prof">
-      <main className="container prof__main">
+      <div className="container prof__main">
         {/* Identity */}
         <section className="prof__hero">
           <div className="prof__avatar" aria-hidden="true">
@@ -449,7 +449,7 @@ export default function Profile() {
             </section>
           </>
         )}
-      </main>
+      </div>
     </div>
   );
 }

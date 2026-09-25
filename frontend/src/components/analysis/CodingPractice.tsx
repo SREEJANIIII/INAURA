@@ -62,7 +62,7 @@ export function DsaCoverage({ data }: { data: Data }) {
         })}
       </div>
 
-      <div style={{ marginTop: 12, fontSize: "0.78rem", color: "#64748b", fontStyle: "italic" }}>
+      <div style={{ marginTop: 12, fontSize: "0.78rem", color: "var(--muted-2)", fontStyle: "italic" }}>
         * INAURA assesses algorithmic competency based on balanced pillar breadth and depth. High problem volume concentrated in single topics does not substitute for practice across Trees, Graphs, Dynamic Programming, and Backtracking.
       </div>
     </div>
@@ -103,13 +103,13 @@ export function CodeforcesPanel({ data }: { data: Data }) {
 
       {cfInspection?.problem_tags && Object.keys(cfInspection.problem_tags).length > 0 && (
         <div style={{ marginTop: 10 }}>
-          <div style={{ fontSize: "0.82rem", fontWeight: 600, color: "#334155", marginBottom: 6 }}>Verified problem tags (top):</div>
+          <div style={{ fontSize: "0.82rem", fontWeight: 600, color: "var(--muted)", marginBottom: 6 }}>Verified problem tags (top):</div>
           <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
             {Object.entries(cfInspection.problem_tags)
               .sort((a: any, b: any) => (b[1] as number) - (a[1] as number))
               .slice(0, 8)
               .map(([tag, cnt]: any) => (
-                <span key={tag} style={{ background: "#f1f5f9", border: "1px solid #e2e8f0", padding: "3px 8px", borderRadius: 12, fontSize: "0.78rem" }}>
+                <span key={tag} style={{ background: "var(--paper-2)", border: "1px solid var(--line-strong)", padding: "3px 8px", borderRadius: 12, fontSize: "0.78rem" }}>
                   {tag} · {cnt as number}
                 </span>
               ))}
@@ -119,19 +119,19 @@ export function CodeforcesPanel({ data }: { data: Data }) {
 
       <div style={{ marginTop: 10, display: "flex", flexDirection: "column", gap: 4 }}>
         {cfFacts.map((fact: string, idx: number) => (
-          <div key={idx} style={{ fontSize: "0.82rem", color: "#334155" }}>• {fact}</div>
+          <div key={idx} style={{ fontSize: "0.82rem", color: "var(--muted)" }}>• {fact}</div>
         ))}
         {cfWarnings.map((w: string, idx: number) => (
-          <div key={`w-${idx}`} style={{ fontSize: "0.78rem", color: "#b45309", background: "#fffbeb", border: "1px solid #fde68a", padding: "4px 8px", borderRadius: 6 }}>⚠ {w}</div>
+          <div key={`w-${idx}`} style={{ fontSize: "0.78rem", color: "var(--warn-ink)", background: "var(--warn-bg)", border: "1px solid var(--warn-line)", padding: "4px 8px", borderRadius: 6 }}>⚠ {w}</div>
         ))}
         {cfVerifiedSignals.length === 0 && (
-          <div style={{ fontSize: "0.78rem", color: "#64748b", fontStyle: "italic", marginTop: 4 }}>
+          <div style={{ fontSize: "0.78rem", color: "var(--muted-2)", fontStyle: "italic", marginTop: 4 }}>
             No rated contests or verified solves yet — profile exists but does not yet demonstrate competitive programming proficiency. Solve problems and enter rated contests to generate skill signals.
           </div>
         )}
       </div>
 
-      <div style={{ marginTop: 12, fontSize: "0.78rem", color: "#64748b", fontStyle: "italic" }}>
+      <div style={{ marginTop: 12, fontSize: "0.78rem", color: "var(--muted-2)", fontStyle: "italic" }}>
         * Codeforces rating is a rigorous peer-ranked signal. Even unrated profiles are verified; proficiency is only credited when contests and solves are present.
       </div>
     </div>

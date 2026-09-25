@@ -7,6 +7,7 @@ import {
   type ExistingResumeOption,
   type AtsTestResponse,
 } from "../services/resume";
+import { friendlyError } from "../lib/errors";
 import "./AtsTester.css";
 
 const POPULAR_ROLES = [
@@ -153,8 +154,8 @@ export default function AtsTester() {
       setTimeout(() => {
         resultsRef.current?.scrollIntoView({ behavior: "smooth" });
       }, 100);
-    } catch (err: any) {
-      setError(err?.message || "Failed to analyze resume. Please verify the document format.");
+    } catch (err) {
+      setError(friendlyError(err, "Your resume couldn’t be analysed. Check it’s a .docx file under 10 MB, then try again."));
     } finally {
       setLoading(false);
     }
@@ -773,7 +774,7 @@ ${result.recommendations.map((r, i) => `${i + 1}. [${r.priority.toUpperCase()}] 
                       ))}
                     </div>
                   ) : (
-                    <p style={{ fontSize: "0.85rem", color: "#059669", fontWeight: 600 }}>
+                    <p style={{ fontSize: "0.85rem", color: "var(--ok-ink)", fontWeight: 600 }}>
                       Outstanding! All canonical skills for {result.target_role} are present in your resume.
                     </p>
                   )}
@@ -1040,7 +1041,7 @@ ${result.recommendations.map((r, i) => `${i + 1}. [${r.priority.toUpperCase()}] 
                   {result.metrics_found.length > 0 ? (
                     <div className="ats-skills-pills">
                       {result.metrics_found.map((m, i) => (
-                        <span key={i} className="ats-skill-badge is-matched" style={{ background: "rgba(37, 99, 235, 0.12)", color: "#1d4ed8", borderColor: "rgba(37, 99, 235, 0.3)" }}>
+                        <span key={i} className="ats-skill-badge is-matched" style={{ background: "rgba(37, 99, 235, 0.12)", color: "var(--info-ink)", borderColor: "rgba(37, 99, 235, 0.3)" }}>
                           {m}
                         </span>
                       ))}

@@ -1,13 +1,14 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import {
-  getDsaChecklist,
   toggleDsaQuestion,
   syncDsaLeetCode,
   importDsaSolvedText,
   type DsaQuestion,
   type DsaChecklistMetrics,
 } from "../../services/assessment";
+import { dsaChecklistData } from "../../lib/pageData";
 import "./DsaChecklist.css";
+import { friendlyError } from "../../lib/errors";
 
 const LOCAL_STORAGE_KEY = "inaura_dsa_solved_ids";
 
@@ -59,7 +60,9 @@ export default function DsaChecklist({ onProgressUpdate }: Props) {
   // Fetch from backend
   useEffect(() => {
     let active = true;
-    getDsaChecklist()
+    // The shared copy, so opening this page twice doesn't re-ask the server
+    dsaChecklistData
+      .fetch()
       .then((res) => {
         if (!active) return;
         setQuestions(res.questions);
@@ -72,7 +75,7 @@ export default function DsaChecklist({ onProgressUpdate }: Props) {
         setError(null);
       })
       .catch((e) => {
-        if (active) setError(e instanceof Error ? e.message : "Failed to load DSA checklist");
+        if (active) setError(friendlyError(e, "Failed to load DSA checklist"));
       })
       .finally(() => {
         if (active) setLoading(false);
@@ -125,7 +128,7 @@ export default function DsaChecklist({ onProgressUpdate }: Props) {
       const res = await syncDsaLeetCode(syncUsername);
       if (res.success) {
         if (res.metrics) setMetrics(res.metrics);
-        const updated = await getDsaChecklist();
+        const updated = await dsaChecklistData.fetch(true);
         const nextSet = new Set(updated.solved_ids || []);
         setSolvedIds(nextSet);
         setCachedSolved(nextSet);
@@ -150,7 +153,7 @@ export default function DsaChecklist({ onProgressUpdate }: Props) {
     } catch (e) {
       setSyncModalMessage({
         type: "error",
-        text: e instanceof Error ? e.message : "Failed to sync with LeetCode. Please check your username.",
+        text: friendlyError(e, "Failed to sync with LeetCode. Please check your username."),
       });
     } finally {
       setSyncLoading(false);
@@ -165,7 +168,7 @@ export default function DsaChecklist({ onProgressUpdate }: Props) {
       const res = await importDsaSolvedText(importText);
       if (res.success) {
         if (res.metrics) setMetrics(res.metrics);
-        const updated = await getDsaChecklist();
+        const updated = await dsaChecklistData.fetch(true);
         const nextSet = new Set(updated.solved_ids || []);
         setSolvedIds(nextSet);
         setCachedSolved(nextSet);
@@ -187,7 +190,7 @@ export default function DsaChecklist({ onProgressUpdate }: Props) {
     } catch (e) {
       setSyncModalMessage({
         type: "error",
-        text: e instanceof Error ? e.message : "Failed to import questions. Please check the text.",
+        text: friendlyError(e, "Failed to import questions. Please check the text."),
       });
     } finally {
       setSyncLoading(false);
@@ -428,7 +431,7 @@ export default function DsaChecklist({ onProgressUpdate }: Props) {
             </select>
           </div>
 
-          <span style={{ fontSize: "12.5px", color: "#64748b" }}>
+          <span style={{ fontSize: "12.5px", color: "var(--muted-2)" }}>
             Showing {filteredQuestions.length} of {totalQuestions} questions
           </span>
         </div>
@@ -439,11 +442,11 @@ export default function DsaChecklist({ onProgressUpdate }: Props) {
 
       {/* Questions list grouped by topic */}
       {loading && questions.length === 0 ? (
-        <div style={{ padding: "40px", textAlign: "center", color: "#64748b" }}>
+        <div style={{ padding: "40px", textAlign: "center", color: "var(--muted-2)" }}>
           Loading compulsory pattern question bank…
         </div>
       ) : filteredQuestions.length === 0 ? (
-        <div style={{ padding: "40px", textAlign: "center", color: "#64748b" }}>
+        <div style={{ padding: "40px", textAlign: "center", color: "var(--muted-2)" }}>
           No questions match your filter. Try adjusting your search query or topic filter.
         </div>
       ) : (

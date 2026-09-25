@@ -1,2 +1,585 @@
-.revision-page{max-width:1000px;margin:0 auto;padding:clamp(28px,5vw,64px) clamp(20px,5vw,56px);color:#171b2f;font-family:var(--shell-sans)}
-.revision-head{display:flex;justify-content:space-between;align-items:flex-start;gap:24px;margin-bottom:30px}.revision-kicker{margin:0 0 8px;color:#6452b0;font-size:11px;font-weight:800;letter-spacing:.16em}.revision-head h1{margin:0;font-size:clamp(2rem,4vw,3.5rem);letter-spacing:-.05em}.revision-head p:not(.revision-kicker){max-width:620px;margin:12px 0 0;color:#686b7a;line-height:1.6}.revision-refresh,.revision-tabs button,.revision-controls button{border:1px solid rgba(100,82,176,.18);background:rgba(255,255,255,.55);color:#4b3d91;border-radius:10px;padding:10px 14px;font:600 13px var(--shell-sans);cursor:pointer}.revision-refresh:disabled{opacity:.5}.revision-tabs{display:flex;gap:8px;flex-wrap:wrap;margin-bottom:24px}.revision-tabs button{border-radius:999px;color:#686b7a}.revision-tabs button.is-active{background:#6452b0;color:#fff;border-color:#6452b0}.revision-study{max-width:720px;margin:0 auto}.revision-progress{display:flex;justify-content:space-between;gap:16px;margin-bottom:10px;color:#77798a;font-size:13px}.revision-card{width:100%;min-height:380px;padding:clamp(28px,6vw,64px);display:flex;flex-direction:column;align-items:center;justify-content:center;gap:18px;border:1px solid rgba(100,82,176,.18);border-radius:28px;background:linear-gradient(145deg,rgba(255,255,255,.9),rgba(244,240,255,.82));box-shadow:0 22px 60px rgba(81,62,150,.12);color:#171b2f;text-align:center;cursor:pointer}.revision-card__type{color:#6452b0;font-size:11px;font-weight:800;letter-spacing:.14em}.revision-card__title{font-size:clamp(1.5rem,4vw,2.3rem);font-weight:750;letter-spacing:-.035em}.revision-card__prompt,.revision-card__answer{max-width:560px;color:#484b60;font-size:1.1rem;line-height:1.65}.revision-card__answer{color:#292541}.revision-card__hint,.revision-card__detail{color:#9995a8;font-size:13px}.revision-card__detail{color:#6452b0}.revision-card a{color:#6452b0;font-size:13px;font-weight:700}.revision-controls{display:flex;justify-content:space-between;margin-top:16px}.revision-next{background:#6452b0!important;color:#fff!important}.revision-empty{text-align:center;padding:80px 20px;color:#686b7a}.revision-empty h2{color:#171b2f}.revision-empty a{color:#6452b0;font-weight:700}.revision-alert{margin:16px 0;padding:12px 14px;border-radius:10px;background:#fff1f0;color:#9b4138;font-size:14px}@media(max-width:620px){.revision-head{display:block}.revision-refresh{margin-top:20px}.revision-card{min-height:420px}.revision-controls button{padding:10px 11px}}
+/*
+ * Revision — a daily skill workout, not a flashcard app.
+ *
+ * This page deliberately steps out of the app's frosted glass. Everything else in INAURA
+ * floats on a drifting colour field, which is right for pages you scan; this is a page you
+ * sit with for ten minutes, so it lays a warm paper over that field and puts one stack of
+ * cards in the middle of it. Thin rules and one accent do the structural work — nothing
+ * here is a card unless it is, in fact, a card.
+ *
+ * The geometry of the stack and its motion live in components/ui/stacked-deck.tsx.
+ */
+
+.rev {
+  --rev-paper: #faf8f5;
+  --rev-panel: #ffffff;
+  --rev-ink: #161c2e;
+  --rev-ink-2: #454b60;
+  --rev-ink-3: #767b8d;
+  --rev-accent: #6452b0;
+  --rev-accent-soft: #efecfa;
+  --rev-rule: rgba(22, 28, 46, 0.09);
+  --rev-rule-2: rgba(22, 28, 46, 0.055);
+  --rev-serif: "Newsreader", "Iowan Old Style", Georgia, serif;
+  --rev-shadow: 0 1px 2px rgba(22, 28, 46, 0.04), 0 14px 40px -22px rgba(40, 30, 90, 0.3);
+
+  position: relative;
+  isolation: isolate;
+  min-height: calc(100dvh - var(--appbar-h, 56px));
+  padding: clamp(18px, 2.2vw, 32px) clamp(20px, 4vw, 52px) clamp(14px, 1.8vw, 24px);
+  display: flex;
+  flex-direction: column;
+  background: var(--rev-paper);
+  color: var(--rev-ink);
+  font-family: var(--shell-sans, var(--sans));
+}
+
+/* One slow wash of lavender and blue, so the paper isn't flat — and nothing more than that */
+.rev::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  z-index: -1;
+  pointer-events: none;
+  background:
+    radial-gradient(52vw 40vh at 14% -6%, rgba(126, 105, 214, 0.09), transparent 68%),
+    radial-gradient(46vw 36vh at 92% 4%, rgba(92, 140, 226, 0.07), transparent 66%);
+}
+
+/* ---------------- Header ---------------- */
+
+.rev__head {
+  display: flex;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: 24px;
+  flex-wrap: wrap;
+  padding-bottom: clamp(10px, 1.4vw, 16px);
+  border-bottom: 1px solid var(--rev-rule);
+}
+
+.rev__title h1 {
+  margin: 0;
+  font-family: var(--rev-serif);
+  font-size: clamp(1.8rem, 2.8vw, 2.4rem);
+  font-weight: 400;
+  letter-spacing: -0.022em;
+  line-height: 1;
+  color: var(--rev-ink);
+}
+
+.rev__title p {
+  margin: 5px 0 0;
+  font-size: 0.9rem;
+  color: var(--rev-ink-3);
+}
+
+/* One quiet line rather than three stat boxes — the cards are the thing to look at */
+.rev__stats {
+  display: flex;
+  align-items: baseline;
+  gap: 18px;
+  margin: 0;
+  font-size: 0.86rem;
+  color: var(--rev-ink-3);
+}
+
+.rev__stats span + span {
+  padding-left: 18px;
+  border-left: 1px solid var(--rev-rule);
+}
+
+.rev__stats strong {
+  font-family: var(--rev-serif);
+  font-size: 1.28rem;
+  font-weight: 400;
+  font-variant-numeric: tabular-nums;
+  color: var(--rev-ink);
+}
+
+/* ---------------- The stage the stack sits on ---------------- */
+
+.rev__stage {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: clamp(14px, 2vw, 24px);
+  padding: clamp(12px, 1.8vw, 22px) 0;
+}
+
+/* Room for the cards behind to sit lower and wider without being clipped. The centring is
+   stated here as well as on the component, so the stack doesn't depend on a utility class. */
+.rev-deck {
+  position: relative;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 100%;
+  height: clamp(300px, 43dvh, 392px);
+  perspective: 1400px;
+}
+
+.rev-card {
+  display: flex;
+  flex-direction: column;
+  width: min(620px, 88vw);
+  height: clamp(270px, 39dvh, 352px);
+  padding: clamp(20px, 2.4vw, 30px) clamp(22px, 2.6vw, 34px);
+  border: 1px solid var(--rev-rule);
+  border-radius: 10px;
+  /* Opaque: these overlap, so you must not read the card behind through the one in front */
+  background: var(--rev-panel);
+  box-shadow: var(--rev-shadow);
+  overflow: hidden;
+  user-select: none;
+}
+
+.rev-card__top {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 14px;
+}
+
+/* The kind is the tie to the rest of INAURA, so it is named rather than coloured in */
+.rev-card__kind {
+  padding: 3px 9px;
+  border: 1px solid var(--rev-rule);
+  border-radius: 3px;
+  font-size: 0.67rem;
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  white-space: nowrap;
+  color: var(--rev-ink-2);
+  background: #fff;
+}
+
+.rev-card__kind--gap {
+  border-color: rgba(168, 70, 60, 0.28);
+  color: #9a4238;
+  background: rgba(168, 70, 60, 0.05);
+}
+
+.rev-card__kind--evidence {
+  border-color: rgba(60, 117, 86, 0.28);
+  color: #33684b;
+  background: rgba(60, 117, 86, 0.05);
+}
+
+.rev-card__kind--industry,
+.rev-card__kind--roadmap {
+  border-color: rgba(100, 82, 176, 0.26);
+  color: var(--rev-accent);
+  background: var(--rev-accent-soft);
+}
+
+.rev-card__level {
+  font-size: 0.72rem;
+  font-weight: 500;
+  letter-spacing: 0.03em;
+  color: var(--rev-ink-3);
+}
+
+.rev-card__skill {
+  margin: clamp(14px, 1.8vw, 20px) 0 0;
+  font-family: var(--rev-serif);
+  font-size: clamp(1.35rem, 2.2vw, 1.85rem);
+  font-weight: 400;
+  letter-spacing: -0.02em;
+  line-height: 1.05;
+  color: var(--rev-ink);
+}
+
+.rev-card__q {
+  margin: 8px 0 0;
+  max-width: 42ch;
+  font-size: clamp(0.96rem, 1.3vw, 1.08rem);
+  line-height: 1.45;
+  color: var(--rev-ink-2);
+}
+
+/* Why this card exists — the line that connects revision to the rest of the product */
+.rev-card__why {
+  margin: auto 0 0;
+  padding-top: 13px;
+  border-top: 1px solid var(--rev-rule-2);
+  font-size: 0.81rem;
+  line-height: 1.45;
+  color: var(--rev-ink-3);
+}
+
+.rev-card__why span {
+  display: block;
+  margin-bottom: 2px;
+  font-size: 0.64rem;
+  font-weight: 600;
+  letter-spacing: 0.07em;
+  color: var(--rev-accent);
+}
+
+.rev-card__answer {
+  margin-top: 13px;
+  padding-top: 13px;
+  border-top: 1px solid var(--rev-rule-2);
+  /* A long answer scrolls inside the card rather than changing the card's size */
+  overflow-y: auto;
+  animation: rev-answer-in 0.2s ease-out;
+}
+
+@keyframes rev-answer-in {
+  from {
+    opacity: 0;
+  }
+}
+
+.rev-card__a-lead {
+  margin: 0;
+  font-size: 0.94rem;
+  line-height: 1.55;
+  color: var(--rev-ink-2);
+}
+
+.rev-card__points {
+  list-style: none;
+  margin: 10px 0 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.rev-card__points li {
+  position: relative;
+  padding-left: 17px;
+  font-size: 0.88rem;
+  line-height: 1.45;
+  color: var(--rev-ink);
+}
+
+.rev-card__points li::before {
+  content: "";
+  position: absolute;
+  left: 0;
+  top: 0.6em;
+  width: 9px;
+  height: 1px;
+  background: var(--rev-accent);
+}
+
+.rev-card__link {
+  display: inline-block;
+  margin-top: 10px;
+  font-size: 0.83rem;
+  font-weight: 600;
+  color: var(--rev-accent);
+  text-decoration: underline;
+  text-underline-offset: 3px;
+}
+
+/* ---------------- Revealing and marking ---------------- */
+
+.rev-act {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 8px;
+  width: min(620px, 88vw);
+}
+
+.rev-act__hint {
+  margin: 0;
+  font-size: 0.77rem;
+  color: var(--rev-ink-3);
+}
+
+.rev-reveal {
+  width: 100%;
+  padding: 13px;
+  border: 1px solid var(--rev-accent);
+  border-radius: 4px;
+  background: var(--rev-accent);
+  color: #fff;
+  font: 600 0.94rem var(--shell-sans, var(--sans));
+  cursor: pointer;
+  transition: background-color 0.16s, border-color 0.16s;
+}
+
+.rev-reveal:hover {
+  background: #57469b;
+  border-color: #57469b;
+}
+
+.rev-grade {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 9px;
+  width: 100%;
+  animation: rev-answer-in 0.2s ease-out;
+}
+
+.rev-grade__btn {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 2px;
+  padding: 11px 8px;
+  border: 1px solid var(--rev-rule);
+  border-radius: 4px;
+  background: #fff;
+  font: 600 0.88rem var(--shell-sans, var(--sans));
+  color: var(--rev-ink);
+  cursor: pointer;
+  transition: border-color 0.16s, background-color 0.16s;
+}
+
+.rev-grade__btn em {
+  font: 500 0.7rem var(--shell-sans, var(--sans));
+  font-style: normal;
+  color: var(--rev-ink-3);
+}
+
+.rev-grade__btn--again:hover {
+  border-color: rgba(168, 70, 60, 0.45);
+  background: rgba(168, 70, 60, 0.05);
+}
+
+.rev-grade__btn--almost:hover {
+  border-color: rgba(162, 106, 18, 0.45);
+  background: rgba(162, 106, 18, 0.05);
+}
+
+.rev-grade__btn--got:hover {
+  border-color: rgba(60, 117, 86, 0.45);
+  background: rgba(60, 117, 86, 0.05);
+}
+
+/* ---------------- Between sessions ---------------- */
+
+.rev-open {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  text-align: center;
+  padding: clamp(28px, 4vw, 46px);
+  width: min(560px, 90vw);
+  border: 1px solid var(--rev-rule);
+  border-radius: 10px;
+  background: var(--rev-panel);
+  box-shadow: var(--rev-shadow);
+}
+
+.rev-open__lead {
+  margin: 0;
+  font-family: var(--rev-serif);
+  font-size: clamp(1.4rem, 2.4vw, 2rem);
+  font-weight: 400;
+  letter-spacing: -0.02em;
+  color: var(--rev-ink);
+}
+
+.rev-open__lead strong {
+  font-weight: 400;
+  font-variant-numeric: tabular-nums;
+}
+
+.rev-open__mix {
+  margin: 10px 0 0;
+  max-width: 44ch;
+  font-size: 0.92rem;
+  line-height: 1.55;
+  color: var(--rev-ink-3);
+}
+
+.rev-open__held {
+  margin: 12px 0 0;
+  font-size: 0.8rem;
+  color: var(--rev-ink-3);
+}
+
+.rev-open__next {
+  margin: 18px 0 0;
+  font-size: 0.86rem;
+  color: var(--rev-ink-3);
+}
+
+.rev-open__next a {
+  color: var(--rev-accent);
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+
+.rev-open__row {
+  display: flex;
+  gap: 10px;
+}
+
+.rev__cta,
+.rev__ghost {
+  margin-top: 22px;
+  padding: 12px 26px;
+  border: 1px solid var(--rev-accent);
+  border-radius: 4px;
+  background: var(--rev-accent);
+  color: #fff;
+  font: 600 0.92rem var(--shell-sans, var(--sans));
+  cursor: pointer;
+  text-decoration: none;
+  display: inline-block;
+}
+
+.rev__cta:hover {
+  background: #57469b;
+  color: #fff;
+}
+
+.rev__ghost {
+  background: transparent;
+  color: var(--rev-accent);
+}
+
+.rev__ghost:hover {
+  background: var(--rev-accent-soft);
+}
+
+/* ---------------- Today's focus: a quiet strip, not a panel ---------------- */
+
+.rev-focus {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  flex-wrap: wrap;
+  padding-top: clamp(10px, 1.4vw, 16px);
+  border-top: 1px solid var(--rev-rule);
+}
+
+.rev-focus h2 {
+  margin: 0;
+  font-size: 0.66rem;
+  font-weight: 600;
+  letter-spacing: 0.09em;
+  color: var(--rev-ink-3);
+  white-space: nowrap;
+}
+
+.rev-focus ul {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 7px;
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  /* A real basis, so on a narrow screen the chips drop to their own full-width line
+     instead of stacking one per row beside the label */
+  flex: 1 1 280px;
+  min-width: 0;
+}
+
+.rev-focus li {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 10px;
+  border: 1px solid var(--rev-rule);
+  border-radius: 999px;
+  font-size: 0.79rem;
+  color: var(--rev-ink-2);
+  background: #fff;
+}
+
+.rev-focus li em {
+  font-style: normal;
+  font-variant-numeric: tabular-nums;
+  color: var(--rev-ink-3);
+}
+
+.rev-focus__more {
+  border-style: dashed;
+  color: var(--rev-ink-3);
+}
+
+.rev-focus a {
+  font-size: 0.79rem;
+  font-weight: 600;
+  color: var(--rev-accent);
+  text-decoration: underline;
+  text-underline-offset: 3px;
+  white-space: nowrap;
+}
+
+/* ---------------- Waiting and empty ---------------- */
+
+.rev__wait {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  text-align: center;
+  color: var(--rev-ink-3);
+}
+
+.rev__wait--empty h1 {
+  margin: 0;
+  font-family: var(--rev-serif);
+  font-size: 1.9rem;
+  font-weight: 400;
+  letter-spacing: -0.02em;
+  color: var(--rev-ink);
+}
+
+.rev__wait--empty p {
+  margin: 0;
+  max-width: 46ch;
+  line-height: 1.6;
+  color: var(--rev-ink-3);
+}
+
+/* Read out to screen readers, since the card's own text changes under them */
+.rev-live {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .rev-card__answer,
+  .rev-grade {
+    animation: none;
+  }
+}
+
+@media (max-width: 560px) {
+  .rev__head {
+    align-items: flex-start;
+    flex-direction: column;
+    gap: 12px;
+  }
+
+  .rev__stats {
+    gap: 12px;
+  }
+
+  .rev__stats span + span {
+    padding-left: 12px;
+  }
+
+  .rev-grade {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .rev-grade__btn {
+    flex-direction: row;
+    justify-content: space-between;
+    padding: 11px 14px;
+  }
+}

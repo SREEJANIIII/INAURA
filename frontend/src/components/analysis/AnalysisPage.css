@@ -7,7 +7,7 @@
 .an {
   --an-paper: rgba(255, 255, 255, 0.4);
   --an-surface: var(--glass-bg);
-  --an-hover: rgba(255, 255, 255, 0.55);
+  --an-hover: var(--hover-tint);
   --an-ink: #171b2f;
   --an-ink-2: #474b5e;
   --an-ink-3: #7a7d8c;
@@ -223,6 +223,71 @@
   background: var(--an-red-soft);
   color: #7f332b;
   font-size: 13.5px;
+}
+
+/* The results no longer match your evidence or role — amber, not red: nothing is broken */
+.an-stale {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin: 4px 0 16px;
+  padding: 10px 12px 10px 14px;
+  border: 1px solid rgba(162, 106, 18, 0.28);
+  border-radius: 10px;
+  background: var(--an-amber-soft);
+  color: var(--an-ink);
+  font-size: 13.5px;
+  line-height: 1.45;
+}
+
+.an-stale p {
+  flex: 1;
+  margin: 0;
+}
+
+.an-stale.is-busy {
+  border-color: var(--an-line-strong);
+  background: var(--an-accent-soft);
+}
+
+.an-stale__dot {
+  flex-shrink: 0;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--an-amber);
+}
+
+.an-stale__spin {
+  flex-shrink: 0;
+  width: 14px;
+  height: 14px;
+  border: 2px solid var(--an-accent-soft);
+  border-top-color: var(--an-accent);
+  border-radius: 50%;
+  animation: an-spin 0.8s linear infinite;
+}
+
+@keyframes an-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+@media (max-width: 560px) {
+  /* Text across the full width, the button under it */
+  .an-stale {
+    flex-wrap: wrap;
+    align-items: flex-start;
+  }
+
+  .an-stale p {
+    flex: 1 1 calc(100% - 24px);
+  }
+
+  .an-stale__dot {
+    margin-top: 6px;
+  }
 }
 
 .an-meter {

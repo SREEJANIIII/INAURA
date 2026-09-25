@@ -6,6 +6,8 @@
   --search-accent: var(--shell-accent, #6452b0);
   --search-bg: rgba(255, 255, 255, 0.6);
   --search-kbd-bg: rgba(255, 255, 255, 0.7);
+  --search-panel-bg: #ffffff;
+  --search-panel-hover: #f3f1fb;
   --search-border: var(--glass-edge);
   --search-font: var(--shell-sans, "Inter", system-ui, -apple-system, "Segoe UI", Roboto, sans-serif);
 
@@ -169,6 +171,103 @@
   }
 }
 
+/* ---- Results ---- */
+
+.search__panel {
+  position: absolute;
+  left: 0;
+  right: 0;
+  top: calc(100% + 7px);
+  z-index: 40;
+  overflow: hidden;
+  border: 1px solid var(--search-border);
+  border-radius: 14px;
+  background: var(--search-panel-bg);
+  box-shadow: 0 4px 10px -4px rgba(23, 27, 47, 0.1), 0 16px 34px -10px rgba(23, 27, 47, 0.22);
+  animation: search-panel-in 0.14s ease-out;
+}
+
+@keyframes search-panel-in {
+  from {
+    opacity: 0;
+    transform: translateY(-4px);
+  }
+}
+
+.search__list {
+  max-height: min(60vh, 384px);
+  margin: 0;
+  padding: 5px;
+  overflow-y: auto;
+  list-style: none;
+}
+
+.search__result {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  padding: 8px 10px;
+  border: 0;
+  border-radius: 9px;
+  background: transparent;
+  font-family: var(--search-font);
+  text-align: left;
+  cursor: pointer;
+}
+
+.search__result.is-active {
+  background: var(--search-panel-hover);
+}
+
+.search__result-text {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  min-width: 0;
+  flex: 1;
+}
+
+.search__result-label {
+  font: 500 13.5px/19px var(--search-font);
+  color: var(--search-ink);
+  /* Long task titles shouldn't stretch the panel */
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.search__result-detail {
+  font: 400 11.5px/16px var(--search-font);
+  color: var(--search-muted);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.search__result-kind {
+  flex-shrink: 0;
+  padding: 2px 7px;
+  border-radius: 9999px;
+  background: rgba(100, 82, 176, 0.09);
+  font: 500 10.5px/15px var(--search-font);
+  letter-spacing: 0.01em;
+  color: var(--search-accent);
+}
+
+.search__empty {
+  margin: 0;
+  padding: 16px 14px;
+  font: 400 13px/19px var(--search-font);
+  color: var(--search-muted);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .search__panel {
+    animation: none;
+  }
+}
+
 /* Phones: an icon in the top bar that expands into the full field */
 @media (max-width: 640px) {
   .search {
@@ -221,5 +320,11 @@
 
   .search__kbd {
     display: none;
+  }
+
+  .search__panel {
+    left: 10px;
+    right: 10px;
+    top: calc(50% + 27px);
   }
 }

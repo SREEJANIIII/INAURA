@@ -2,6 +2,8 @@ import { useState, useSyncExternalStore, type ReactNode } from "react";
 import { Link, useLocation, useNavigate } from "react-router-dom";
 import { useAuth } from "../../context/AuthContext";
 import { ANALYSIS_SECTION_IDS, getActiveSection, subscribeActiveSection } from "../../lib/sectionSpy";
+import { analysisStateData, evidencePageData, resultsPageData, subscribePageData } from "../../lib/pageData";
+import { freshness, staleLabel } from "../../lib/analysisFreshness";
 import "./Sidebar.css";
 
 type NavItem = { label: string; to: string; icon?: ReactNode; children?: NavItem[]; soon?: boolean };
@@ -22,33 +24,27 @@ const items: NavItem[] = [
     label: "Evidence",
     to: "/analysis",
     icon: <Icon><path d="M7 3.5h7l4 4v13H7z" /><path d="M14 3.5v4h4" /><path d="M10 12.5h5M10 16h5" /></Icon>,
-    children: [
-      { label: "Profile URLs", to: "/analysis#profile-urls" },
-      { label: "Notion", to: "/analysis#notion" },
-      { label: "File Evidence", to: "/analysis#file-evidence" },
-      { label: "Projects", to: "/analysis#projects" },
-      { label: "Certificates", to: "/analysis#certifications" },
-    ],
   },
   {
     label: "Analysis",
     to: "/analysis/results",
     icon: <Icon><path d="M4 20.5h16" /><rect x="5.5" y="11" width="3" height="6.5" rx="1" /><rect x="10.5" y="6.5" width="3" height="11" rx="1" /><rect x="15.5" y="13.5" width="3" height="4" rx="1" /></Icon>,
     children: [
+      // Named as the results page names its own sections, so the sidebar and the page agree
       { label: "Priority Gaps", to: "/analysis/results#priority-gaps" },
-      { label: "Evidence Gaps · Missing Independent Proof", to: "/analysis/results#evidence-gaps" },
-      { label: "Confidence-Aware Skill Quadrants", to: "/analysis/results#skill-quadrants" },
-      { label: "Skill Overview — Target-Role Requirements", to: "/analysis/results#skill-overview" },
-      { label: "Evidence Sources — Personalization Controls", to: "/analysis/results#evidence-sources" },
+      { label: "Evidence Gaps", to: "/analysis/results#evidence-gaps" },
+      { label: "Skill Quadrants", to: "/analysis/results#skill-quadrants" },
+      { label: "Skill Overview", to: "/analysis/results#skill-overview" },
+      { label: "Evidence Sources", to: "/analysis/results#evidence-sources" },
     ],
   },
   {
     label: "Skill Assessment",
-    to: "/analysis/results#skill-assessments",
+    to: "/skill-assessment",
     icon: <Icon><circle cx="12" cy="12" r="8.5" /><path d="m8.5 12.2 2.4 2.3 4.6-4.9" /></Icon>,
     children: [
-      { label: "DSA", to: "/analysis/results#dsa" },
-      { label: "Skills You Know", to: "/analysis/results#skill-assessments" },
+      { label: "Skills You Know", to: "/skill-assessment" },
+      { label: "DSA", to: "/skill-assessment/dsa" },
     ],
   },
   {
@@ -75,10 +71,13 @@ const items: NavItem[] = [
         <polyline points="10 9 9 9 8 9" />
       </Icon>
     ),
+<<<<<<< HEAD
     children: [
       { label: "ATS Tester", to: "/resume/ats-tester" },
       { label: "Resume Builder", to: "/resume" },
     ],
+=======
+>>>>>>> 3cad89f448472cdaf6129a10e69895215a350f21
   },
   {
     label: "Roadmap",
@@ -131,17 +130,30 @@ export default function Sidebar({ open, onNavigate }: SidebarProps) {
   const { signOut } = useAuth();
   const [loggingOut, setLoggingOut] = useState(false);
   const onScreen = useSyncExternalStore(subscribeActiveSection, getActiveSection);
-  const onAnalysisPage = pathname === RESULTS_PATH && !["#dsa", "#skill-assessments"].includes(hash);
-  // Start with the current page's group open, so you can see where you are
-  const [expanded, setExpanded] = useState<string | null>(() =>
-    onAnalysisPage ? "Analysis" : items.find((i) => groupHasPath(i, pathname, hash, onScreen))?.label ?? null
-  );
 
-  // Arriving on the analysis page opens its section list
-  const [wasOnAnalysisPage, setWasOnAnalysisPage] = useState(onAnalysisPage);
-  if (onAnalysisPage !== wasOnAnalysisPage) {
-    setWasOnAnalysisPage(onAnalysisPage);
-    if (onAnalysisPage) setExpanded("Analysis");
+  // Change your evidence or your role and the results stop describing you. The dot says so
+  // from wherever you are, because the page that's now wrong is one you may not be looking at.
+  const results = useSyncExternalStore(subscribePageData, resultsPageData.peek);
+  const analysisState = useSyncExternalStore(subscribePageData, analysisStateData.peek);
+  const evidence = useSyncExternalStore(subscribePageData, evidencePageData.peek);
+  const stale = freshness({
+    analysis: results?.analysis,
+    targetRole: (analysisState ?? evidence?.analysisState)?.target_role,
+  });
+  // The group the current page belongs to: the analysis page (whichever section is showing),
+  // or a group with a sub-page at this address, like Skill Assessment → DSA
+  const pageGroup =
+    pathname === RESULTS_PATH
+      ? "Analysis"
+      : items.find((i) => i.children?.some((c) => !c.to.includes("#") && c.to === pathname))?.label ?? null;
+  // Start with the current page's group open, so you can see where you are
+  const [expanded, setExpanded] = useState<string | null>(pageGroup);
+
+  // Arriving on a page in a group opens that group's list
+  const [lastGroup, setLastGroup] = useState(pageGroup);
+  if (pageGroup !== lastGroup) {
+    setLastGroup(pageGroup);
+    if (pageGroup) setExpanded(pageGroup);
   }
 
   const toggleGroup = (label: string) => setExpanded((cur) => (cur === label ? null : label));
@@ -160,11 +172,13 @@ export default function Sidebar({ open, onNavigate }: SidebarProps) {
 
   const renderLink = (item: NavItem, sub = false) =>
     item.soon ? (
-      <span key={item.label} className="sidebar__link sidebar__link--soon" aria-disabled="true">
+      // Not a link and not focusable: there's nothing to open yet, and it says so
+      <span key={item.label} className="sidebar__link sidebar__link--soon" title={`${item.label} is coming soon`}>
         {item.icon}
         <span className="sidebar__text">{item.label}</span>
         <span className="sidebar__badge">Soon</span>
       </span>
+
     ) : (
       <Link
         key={item.label}
@@ -179,7 +193,7 @@ export default function Sidebar({ open, onNavigate }: SidebarProps) {
     );
 
   return (
-    <aside className={`sidebar${open ? " is-open" : ""}`} aria-label="Main navigation" aria-hidden={!open}>
+    <aside id="app-sidebar" className={`sidebar${open ? " is-open" : ""}`} aria-label="Main navigation" aria-hidden={!open}>
       <nav className="sidebar__nav">
         {items.map((item) =>
           item.children ? (
@@ -194,6 +208,11 @@ export default function Sidebar({ open, onNavigate }: SidebarProps) {
               >
                 {item.icon}
                 <span className="sidebar__text">{item.label}</span>
+                {stale.stale && item.to === RESULTS_PATH && (
+                  <span className="sidebar__dot" title={staleLabel(stale.reason)}>
+                    <span className="sidebar__visually-hidden">{staleLabel(stale.reason)} — run the analysis again</span>
+                  </span>
+                )}
                 <svg className="sidebar__chevron" width="14" height="14" viewBox="0 0 14 14" aria-hidden="true">
                   <path d="M3.5 5.25 7 8.75l3.5-3.5" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" />
                 </svg>

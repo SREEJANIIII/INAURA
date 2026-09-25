@@ -1,4 +1,5 @@
 import logging
+import re
 from typing import Optional, List
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from fastapi.responses import RedirectResponse
@@ -46,9 +47,11 @@ async def notion_callback(
 
     # Check if user denied permission or Notion reported an error
     if error:
-        logger.warning(f"Notion OAuth authorization error: {error}")
+        logger.warning("Notion OAuth authorization error: %r", error[:200])
+        # Only a short code goes back into the address, never text someone else chose
+        code_name = re.sub(r"[^a-z0-9_]", "", error.lower())[:40] or "unknown"
         return RedirectResponse(
-            url=f"{frontend_base}/analysis?notion_error={error}#notion",
+            url=f"{frontend_base}/analysis?notion_error={code_name}#notion",
             status_code=303,
         )
 

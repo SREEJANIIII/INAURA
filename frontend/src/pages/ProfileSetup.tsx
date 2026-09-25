@@ -130,7 +130,7 @@ export default function ProfileSetup() {
     try {
       await createProfile(form);
       setSuccess(true);
-      setTimeout(() => nav("/dashboard", { replace: true }), 1200);
+      setTimeout(() => nav("/career-track", { replace: true }), 1200);
     } catch (e) {
       const msg = e instanceof Error ? e.message : "Failed to save profile";
       if (msg.includes("401") || msg.toLowerCase().includes("not authenticated")) {
@@ -149,7 +149,7 @@ export default function ProfileSetup() {
     return (
       <div className="auth">
         <div className="auth__card auth__card--wide">
-          <div style={{ textAlign: "center", color: "#64748b", padding: 24 }}>Loading your profile…</div>
+          <div style={{ textAlign: "center", color: "var(--muted-2)", padding: 24 }}>Loading your profile…</div>
         </div>
       </div>
     );
@@ -161,10 +161,10 @@ export default function ProfileSetup() {
         <div className="auth__card auth__card--wide" style={{ textAlign: "center" }}>
           <div style={{ fontSize: 32, marginBottom: 12 }}>✓</div>
           <h2 style={{ fontSize: "1.5rem", fontWeight: 750 }}>Your INAURA profile is ready.</h2>
-          <p style={{ color: "#475569", marginTop: 8 }}>
+          <p style={{ color: "var(--muted)", marginTop: 8 }}>
             We’ll use this to personalize your analysis — evidence, gaps and roadmap come next.
           </p>
-          <p style={{ color: "#64748b", fontSize: "0.9rem", marginTop: 12 }}>Redirecting to dashboard…</p>
+          <p style={{ color: "var(--muted-2)", fontSize: "0.9rem", marginTop: 12 }}>Redirecting to dashboard…</p>
         </div>
       </div>
     );
@@ -197,7 +197,7 @@ export default function ProfileSetup() {
           </div>
         </div>
 
-        <div style={{ marginBottom: 8, fontSize: "0.82rem", fontWeight: 600, color: "#64748b" }}>
+        <div style={{ marginBottom: 8, fontSize: "0.82rem", fontWeight: 600, color: "var(--muted-2)" }}>
           STEP {step} — {step === 1 ? "Basic Information" : step === 2 ? "Academic Information" : "Career Interests"}
         </div>
 
@@ -342,7 +342,7 @@ export default function ProfileSetup() {
               </div>
               <div className="auth__hint">Select up to 10. You can change these later.</div>
               {form.career_interests.length > 0 && (
-                <div style={{ fontSize: "0.84rem", color: "#475569", marginTop: 4 }}>
+                <div style={{ fontSize: "0.84rem", color: "var(--muted)", marginTop: 4 }}>
                   Selected: {form.career_interests.join(", ")}
                 </div>
               )}
@@ -364,9 +364,9 @@ export default function ProfileSetup() {
               <div className="auth__hint">For planning your roadmap — be realistic.</div>
             </div>
 
-            <div style={{ background: "#f8fafc", border: "1px solid #e2e8f0", borderRadius: 12, padding: 12 }}>
-              <div style={{ fontSize: "0.86rem", fontWeight: 600, color: "#0f172a" }}>What’s next?</div>
-              <p style={{ fontSize: "0.86rem", color: "#475569", margin: "4px 0 0" }}>
+            <div style={{ background: "var(--paper-2)", border: "1px solid var(--line-strong)", borderRadius: 12, padding: 12 }}>
+              <div style={{ fontSize: "0.86rem", fontWeight: 600, color: "var(--ink)" }}>What’s next?</div>
+              <p style={{ fontSize: "0.86rem", color: "var(--muted)", margin: "4px 0 0" }}>
                 External evidence (GitHub, LeetCode, LinkedIn, Resume, etc.) will be collected later in the INAURA analysis flow — not here.
               </p>
             </div>

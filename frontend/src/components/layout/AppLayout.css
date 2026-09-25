@@ -6,7 +6,7 @@
 .app {
   --shell-paper: rgba(255, 255, 255, 0.4);
   --shell-surface: var(--glass-bg);
-  --shell-hover: rgba(255, 255, 255, 0.55);
+  --shell-hover: var(--hover-tint);
   --shell-ink: #171b2f;
   --shell-ink-2: #474b5e;
   --shell-ink-3: #7a7d8c;
@@ -29,15 +29,16 @@
   align-items: center;
   gap: 16px;
   padding: 0 16px 0 10px;
-  background: rgba(255, 255, 255, 0.42);
+  /* Paper, slightly see-through: pages scroll under this bar, so a light blur earns its keep here */
+  background: rgba(250, 248, 245, 0.86);
   border-bottom: 1px solid var(--glass-edge);
   position: sticky;
   top: 0;
   z-index: 50;
-  backdrop-filter: var(--glass-blur);
-  -webkit-backdrop-filter: var(--glass-blur);
-  box-shadow: 0 8px 30px -22px rgba(62, 48, 140, 0.35);
+  backdrop-filter: saturate(140%) blur(12px);
+  -webkit-backdrop-filter: saturate(140%) blur(12px);
 }
+
 
 .app__menu {
   display: flex;
@@ -127,6 +128,94 @@
 .acct__bell[aria-expanded="true"] {
   background: var(--shell-hover);
   color: var(--shell-ink);
+}
+
+.acct__bell {
+  position: relative;
+}
+
+.acct__bell:focus-visible,
+.acct__trigger:focus-visible {
+  outline: 2px solid var(--shell-accent);
+  outline-offset: 2px;
+}
+
+/* How many notices are waiting — a count, so it means something, not just a red dot */
+.acct__bell-count {
+  position: absolute;
+  top: 5px;
+  right: 4px;
+  min-width: 16px;
+  height: 16px;
+  padding: 0 4px;
+  border-radius: 8px;
+  background: var(--shell-accent);
+  color: #fff;
+  font: 700 10px/16px var(--shell-sans);
+  text-align: center;
+  box-shadow: 0 0 0 2px var(--page-bg);
+}
+
+.acct__notices {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  margin: 0;
+  padding: 0 0 4px;
+  list-style: none;
+}
+
+.acct__notice {
+  display: flex;
+  gap: 10px;
+  padding: 9px 10px;
+  border-radius: 8px;
+  color: var(--shell-ink);
+  text-decoration: none;
+}
+
+.acct__notice:hover {
+  background: var(--shell-hover);
+  color: var(--shell-ink);
+}
+
+.acct__notice-mark {
+  flex-shrink: 0;
+  width: 7px;
+  height: 7px;
+  margin-top: 6px;
+  border-radius: 50%;
+  background: var(--shell-accent);
+}
+
+.acct__notice--attention .acct__notice-mark {
+  background: #b7791f;
+}
+
+.acct__notice--progress .acct__notice-mark {
+  background: transparent;
+  border: 1.5px solid var(--shell-accent);
+  border-top-color: transparent;
+  animation: session-spin 0.9s linear infinite;
+}
+
+.acct__notice-text {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
+.acct__notice-title {
+  font-size: 0.86rem;
+  font-weight: 600;
+  line-height: 1.35;
+}
+
+.acct__notice-detail {
+  font-size: 0.8rem;
+  line-height: 1.4;
+  color: var(--shell-ink-3);
 }
 
 .acct__trigger {
@@ -334,5 +423,51 @@
   .app__bar {
     grid-template-columns: minmax(0, 1fr) auto auto;
     gap: 2px;
+  }
+}
+
+.app__content:focus {
+  outline: none;
+}
+
+/* The page-shaped placeholder while a page's code downloads (first visit on a slow phone) */
+.app__loading {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  width: min(1040px, calc(100% - 40px));
+  margin: 40px auto;
+}
+
+.app__loading-line,
+.app__loading-block {
+  border-radius: 8px;
+  background: linear-gradient(90deg, rgba(22, 28, 46, 0.05), rgba(22, 28, 46, 0.09), rgba(22, 28, 46, 0.05));
+  background-size: 200% 100%;
+  animation: app-shimmer 1.4s ease-in-out infinite;
+}
+
+.app__loading-line {
+  width: 42%;
+  height: 14px;
+}
+
+.app__loading-line--title {
+  width: 30%;
+  height: 34px;
+}
+
+.app__loading-block {
+  height: 280px;
+  margin-top: 10px;
+  border-radius: 12px;
+}
+
+@keyframes app-shimmer {
+  from {
+    background-position: 100% 0;
+  }
+  to {
+    background-position: -100% 0;
   }
 }

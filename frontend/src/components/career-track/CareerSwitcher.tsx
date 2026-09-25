@@ -1,5 +1,5 @@
-import { useEffect, useRef } from "react";
 import type { RoleSummary } from "../../services/industry";
+import { useDialog } from "../../lib/useDialog";
 import { roleId } from "./careerTrackModel";
 
 type Props = {
@@ -13,23 +13,8 @@ type Props = {
 
 /** A panel of every role INAURA has industry benchmarks for, grouped by field */
 export default function CareerSwitcher({ roles, currentId, targetTitle, busyId, onSelect, onClose }: Props) {
-  const panelRef = useRef<HTMLDivElement>(null);
-  const closeRef = useRef(onClose);
-
-  useEffect(() => {
-    closeRef.current = onClose;
-  });
-
-  // Focus the current career once, when the panel opens; Escape closes it
-  useEffect(() => {
-    const onKey = (e: KeyboardEvent) => {
-      if (e.key === "Escape") closeRef.current();
-    };
-    document.addEventListener("keydown", onKey);
-    const panel = panelRef.current;
-    (panel?.querySelector<HTMLButtonElement>("button.is-current") ?? panel?.querySelector<HTMLButtonElement>(".ct-role"))?.focus();
-    return () => document.removeEventListener("keydown", onKey);
-  }, []);
+  // Opens on the current career (marked data-autofocus below); Escape closes it
+  const panelRef = useDialog<HTMLDivElement>(true, onClose);
 
   const groups = Array.from(new Set(roles.map((r) => r.category))).map((category) => ({
     category,
@@ -38,7 +23,7 @@ export default function CareerSwitcher({ roles, currentId, targetTitle, busyId, 
 
   return (
     <div className="ct-switch" role="dialog" aria-modal="true" aria-labelledby="ct-switch-title" onMouseDown={(e) => e.target === e.currentTarget && onClose()}>
-      <div className="ct-switch__panel" ref={panelRef}>
+      <div className="ct-switch__panel" ref={panelRef} tabIndex={-1}>
         <div className="ct-switch__head">
           <div>
             <h2 id="ct-switch-title" className="ct-switch__title">Choose your career</h2>
@@ -67,6 +52,8 @@ export default function CareerSwitcher({ roles, currentId, targetTitle, busyId, 
                         onClick={() => onSelect(r)}
                         disabled={!!busyId}
                         aria-current={current ? "true" : undefined}
+                        data-autofocus={current || undefined}
+
                       >
                         <span className="ct-role__title">
                           {r.title}

@@ -14,23 +14,54 @@
   --muted: #475569;
   --muted-2: #64748b;
   --muted-3: #94a3b8;
-  --line: rgba(92, 80, 160, 0.14);
-  --line-strong: rgba(92, 80, 160, 0.24);
+  /* Hairlines in the ink's own colour, so borders read as rules on paper, not as tinted glass */
+  --line: rgba(22, 28, 46, 0.1);
+  --line-strong: rgba(22, 28, 46, 0.18);
   --bg: var(--glass-bg);
   --bg-subtle: rgba(255, 255, 255, 0.34);
   --bg-muted: rgba(255, 255, 255, 0.42);
   --bg-soft: rgba(255, 255, 255, 0.34);
-  --accent: #4f46e5;
-  --accent-hover: #4338ca;
-  --accent-soft: rgba(79, 70, 229, 0.1);
-  --accent-soft-2: rgba(79, 70, 229, 0.08);
-  --accent-border: rgba(79, 70, 229, 0.14);
+  /* One accent across the app: the restrained lavender-indigo the product pages already use */
+  --accent: #6452b0;
+  --accent-hover: #57469b;
+  --accent-soft: rgba(100, 82, 176, 0.1);
+  --accent-soft-2: rgba(100, 82, 176, 0.07);
+  --accent-border: rgba(100, 82, 176, 0.2);
   --success: #0f766e;
-  --page-bg: #eceef8;
+  /* Warm paper, the same as Revision's — the calm ground every page sits on */
+  --page-bg: #faf8f5;
+  /* Quiet state for rows and ghost controls: a touch of ink, visible on paper and on white */
+  --hover-tint: rgba(22, 28, 46, 0.045);
+
+  /* The shared button (components/ui/app-button.tsx) */
+  --btn-accent: #6452b0;
+  --btn-accent-hover: #57469b;
+  --btn-accent-ink: #ffffff;
+  --btn-secondary-hover-edge: rgba(22, 28, 46, 0.32);
+
+  /* The four things any surface reports — saved, needs attention, wrong, in progress.
+     Written out here so the night theme can restate them once instead of per page. */
+  --ok-bg: #ecfdf5;
+  --ok-ink: #0f766e;
+  --ok-line: #a7f3d0;
+  --warn-bg: #fffbeb;
+  --warn-ink: #b45309;
+  --warn-line: #fde68a;
+  --bad-bg: #fef2f2;
+  --bad-ink: #dc2626;
+  --bad-line: #fecaca;
+  --info-bg: #eff6ff;
+  --info-ink: #2563eb;
+  --info-line: #bfdbfe;
+  /* Opaque panels, for surfaces that can't be glass */
+  --paper: #ffffff;
+  --paper-2: #f8fafc;
 
   /* Typography */
   --sans: "Inter", system-ui, -apple-system, "Segoe UI", Roboto, Helvetica, Arial, sans-serif, "Apple Color Emoji", "Segoe UI Emoji";
   --display: var(--sans);
+  /* The editorial serif the product pages set their headings in */
+  --serif: "Newsreader", "Iowan Old Style", "Palatino Linotype", Georgia, serif;
   --mono: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace;
 
   /* Layout */
@@ -53,16 +84,19 @@
   --duration: 0.6s;
   --duration-fast: 0.2s;
 
-  /* Liquid glass: every surface is frosted glass over one flowing colour field */
-  --glass-bg: rgba(255, 255, 255, 0.56);
-  --glass-bg-strong: rgba(255, 255, 255, 0.74);
-  --glass-bg-soft: rgba(255, 255, 255, 0.36);
-  --glass-edge: rgba(255, 255, 255, 0.72);
-  --glass-line: rgba(92, 80, 160, 0.14);
-  --glass-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.85), 0 12px 32px -18px rgba(62, 48, 140, 0.28);
-  --glass-shadow-lg: inset 0 1px 0 rgba(255, 255, 255, 0.9), 0 24px 60px -24px rgba(40, 30, 110, 0.38);
-  --glass-blur: blur(22px) saturate(170%);
-  --glass-blur-sm: blur(10px) saturate(150%);
+  /* Surfaces. Still named "glass" because every page reads them under that name, but they are
+     paper now: near-opaque white panels with a hairline edge and a soft, low shadow. Frosted
+     glass over a moving colour field cost phones a blur pass on every panel, and pulled the
+     eye away from the content. The blur tokens are kept, switched off, for the same reason. */
+  --glass-bg: rgba(255, 255, 255, 0.9);
+  --glass-bg-strong: #ffffff;
+  --glass-bg-soft: rgba(255, 255, 255, 0.66);
+  --glass-edge: rgba(22, 28, 46, 0.085);
+  --glass-line: rgba(22, 28, 46, 0.085);
+  --glass-shadow: 0 1px 2px rgba(22, 28, 46, 0.04), 0 12px 32px -24px rgba(40, 30, 90, 0.26);
+  --glass-shadow-lg: 0 1px 2px rgba(22, 28, 46, 0.05), 0 28px 60px -32px rgba(40, 30, 90, 0.34);
+  --glass-blur: none;
+  --glass-blur-sm: none;
 
   color-scheme: light;
 }
@@ -107,45 +141,69 @@ body {
   background: transparent;
 }
 
-/* The colour field every glass surface sits on: soft pools of lavender, sky, peach and mint
-   that drift slowly. Fixed, so pages scroll over it like glass over light. */
-body::before,
-body::after {
+/* One faint wash of lavender and blue across the top of the paper, so it isn't flat — the
+   same light Revision uses. Fixed and still: nothing on the page moves unless it means something. */
+body::before {
   content: "";
   position: fixed;
-  inset: -25vmax;
+  inset: 0;
   z-index: -1;
   pointer-events: none;
-}
-
-body::before {
   background:
-    radial-gradient(34vmax 30vmax at 18% 22%, rgba(150, 120, 250, 0.62), transparent 70%),
-    radial-gradient(32vmax 30vmax at 84% 16%, rgba(100, 190, 255, 0.55), transparent 70%),
-    radial-gradient(36vmax 32vmax at 76% 84%, rgba(255, 170, 140, 0.5), transparent 70%),
-    radial-gradient(30vmax 28vmax at 22% 82%, rgba(120, 220, 185, 0.46), transparent 70%);
-  animation: liquid-drift 38s ease-in-out infinite alternate;
-  will-change: transform;
+    radial-gradient(60vw 44vh at 12% -8%, rgba(126, 105, 214, 0.08), transparent 70%),
+    radial-gradient(52vw 40vh at 94% 0%, rgba(92, 140, 226, 0.06), transparent 68%);
 }
 
-/* A second, slower layer so the colours flow through each other rather than just sliding */
-body::after {
-  background:
-    radial-gradient(26vmax 24vmax at 58% 42%, rgba(205, 165, 255, 0.42), transparent 70%),
-    radial-gradient(22vmax 22vmax at 38% 60%, rgba(140, 205, 255, 0.34), transparent 70%);
-  animation: liquid-drift-2 52s ease-in-out infinite alternate;
-  will-change: transform;
+/* Elements that only ever take focus from code (a dialog panel, a skip target) don't need
+   the keyboard ring — it would flash around the whole panel as it opens */
+[tabindex="-1"]:focus:not(:focus-visible) {
+  outline: none;
 }
 
-@keyframes liquid-drift {
-  0% { transform: translate3d(0, 0, 0) rotate(0deg) scale(1); }
-  50% { transform: translate3d(4vmax, -3vmax, 0) rotate(8deg) scale(1.06); }
-  100% { transform: translate3d(-3vmax, 3vmax, 0) rotate(-6deg) scale(1.02); }
+/* Skip straight past the top bar and sidebar to the page (visible only when focused) */
+.skip-link {
+  position: fixed;
+  top: 8px;
+  left: 8px;
+  z-index: 200;
+  padding: 10px 14px;
+  border-radius: 8px;
+  background: var(--ink);
+  color: var(--paper);
+  font: 600 0.9rem var(--sans);
+  transform: translateY(-160%);
+  transition: transform 0.15s var(--ease-out);
 }
 
-@keyframes liquid-drift-2 {
-  0% { transform: translate3d(0, 0, 0) scale(1); }
-  100% { transform: translate3d(-6vmax, 4vmax, 0) scale(1.12); }
+.skip-link:focus {
+  transform: translateY(0);
+  color: var(--paper);
+}
+
+/* "Checking your session…" — shown while the saved login is read */
+.session-check {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  min-height: 60vh;
+  color: var(--muted-2);
+  font-size: 0.92rem;
+}
+
+.session-check__spin {
+  width: 16px;
+  height: 16px;
+  border: 2px solid var(--accent-soft);
+  border-top-color: var(--accent);
+  border-radius: 50%;
+  animation: session-spin 0.8s linear infinite;
+}
+
+@keyframes session-spin {
+  to {
+    transform: rotate(360deg);
+  }
 }
 
 #root {
@@ -288,6 +346,27 @@ body::after {
   --accent-border: rgba(167, 139, 250, 0.3);
   --success: #5eead4;
   --page-bg: #000000;
+  --hover-tint: rgba(255, 255, 255, 0.07);
+  --btn-accent: #a78bfa;
+  --btn-accent-hover: #c4b5fd;
+  --btn-accent-ink: #14111f;
+  --btn-secondary-hover-edge: rgba(255, 255, 255, 0.32);
+
+  /* Tinted glass over the dark page, rather than the pale washes of day */
+  --ok-bg: rgba(94, 234, 212, 0.1);
+  --ok-ink: #5eead4;
+  --ok-line: rgba(94, 234, 212, 0.28);
+  --warn-bg: rgba(250, 204, 21, 0.12);
+  --warn-ink: #fde047;
+  --warn-line: rgba(250, 204, 21, 0.3);
+  --bad-bg: rgba(248, 113, 113, 0.12);
+  --bad-ink: #fca5a5;
+  --bad-line: rgba(248, 113, 113, 0.3);
+  --info-bg: rgba(147, 197, 253, 0.12);
+  --info-ink: #93c5fd;
+  --info-line: rgba(147, 197, 253, 0.3);
+  --paper: #121212;
+  --paper-2: #161616;
   --shadow-sm: 0 2px 8px rgba(0, 0, 0, 0.3);
   --shadow: 0 12px 30px rgba(0, 0, 0, 0.38);
   --shadow-lg: 0 22px 54px rgba(0, 0, 0, 0.5);
@@ -313,11 +392,7 @@ body::after {
     radial-gradient(30vmax 28vmax at 22% 82%, rgba(39, 145, 127, 0.08), transparent 70%);
 }
 
-:root[data-theme="dark"] body::after {
-  background:
-    radial-gradient(26vmax 24vmax at 58% 42%, rgba(116, 88, 214, 0.1), transparent 70%),
-    radial-gradient(22vmax 22vmax at 38% 60%, rgba(48, 126, 194, 0.08), transparent 70%);
-}
+
 
 /* Component-local palettes that otherwise shadow the global design tokens. */
 :root[data-theme="dark"] .app,
@@ -759,12 +834,37 @@ body::after {
   border-color: rgba(255, 255, 255, 0.12) !important;
 }
 
+/* The evidence page states its own ink and tints, so the night theme restates them */
+:root[data-theme="dark"] .analysis {
+  --ev-ink: #ffffff;
+  --ev-ink-2: #c4c4cc;
+  --ev-ink-3: #9a9aa4;
+  --ev-accent: #c4b5fd;
+  --ev-accent-deep: #ddd4ff;
+  --ev-have: #5eead4;
+  --ev-line: rgba(255, 255, 255, 0.16);
+  --ev-line-soft: rgba(255, 255, 255, 0.08);
+  --ev-raise: rgba(255, 255, 255, 0.06);
+  --ev-hover: rgba(255, 255, 255, 0.05);
+}
+
 :root[data-theme="dark"] .search {
   --search-ink: #ffffff;
   --search-ink-2: #e0e0e0;
   --search-muted: #8a8a8a;
   --search-bg: #121212;
   --search-kbd-bg: #181818;
+  --search-panel-bg: #161616;
+  --search-panel-hover: rgba(255, 255, 255, 0.07);
+}
+
+:root[data-theme="dark"] .search__panel {
+  box-shadow: 0 18px 42px rgba(0, 0, 0, 0.5);
+}
+
+:root[data-theme="dark"] .search__result-kind {
+  background: rgba(255, 255, 255, 0.08);
+  color: #c9c1ec;
 }
 
 /* Landing cards stay charcoal rather than becoming a field of white frosted panels. */
@@ -828,4 +928,503 @@ body::after {
 :root[data-theme="dark"] .iv__camera,
 :root[data-theme="dark"] video {
   background: #0a0a0a;
+}
+
+
+/* ---------------------------------------------------------------------------
+ * Night theme for the pages written before it existed.
+ *
+ * Each of these had its status colours written in as literal pale washes and
+ * near-black text, which stayed pale on a black page. These rules apply only in
+ * the dark theme, so daylight is exactly as it was.
+ * ------------------------------------------------------------------------- */
+
+:root[data-theme="dark"] .assess__fb--no,
+:root[data-theme="dark"] .pract__error,
+:root[data-theme="dark"] .ct-error,
+:root[data-theme="dark"] .ct-sync--failed,
+:root[data-theme="dark"] .ct-mark--production,
+:root[data-theme="dark"] .sidebar__link--logout:hover,
+:root[data-theme="dark"] .airev-error,
+:root[data-theme="dark"] .airev-sev,
+:root[data-theme="dark"] .airev-sev--disagreement,
+:root[data-theme="dark"] .priority--critical,
+:root[data-theme="dark"] .results__error,
+:root[data-theme="dark"] .results__badge-diff--hard,
+:root[data-theme="dark"] .results__evidence-link--none,
+:root[data-theme="dark"] .results__evidence-link--overridden,
+:root[data-theme="dark"] .results__override-btn:hover,
+:root[data-theme="dark"] .results__evidence-toggle--excluded,
+:root[data-theme="dark"] .prov__note,
+:root[data-theme="dark"] .auth__input--error,
+:root[data-theme="dark"] .auth__error,
+:root[data-theme="dark"] .capmap__badge--skill-gap,
+:root[data-theme="dark"] .iv__error,
+:root[data-theme="dark"] .prof__alert {
+  background-color: var(--bad-bg);
+}
+
+:root[data-theme="dark"] .airev-sev--gemini-only,
+:root[data-theme="dark"] .airev-sev--engine-only,
+:root[data-theme="dark"] .results__pillar-badge--moderate,
+:root[data-theme="dark"] .results__estimate-badge {
+  background-color: var(--info-bg);
+}
+
+:root[data-theme="dark"] .evcard__badge--strong,
+:root[data-theme="dark"] .evcard__stat--primary,
+:root[data-theme="dark"] .evcard__source--assessment,
+:root[data-theme="dark"] .assess__option--on,
+:root[data-theme="dark"] .assess__score,
+:root[data-theme="dark"] .assess__fb--ok,
+:root[data-theme="dark"] .results__verify-btn:hover,
+:root[data-theme="dark"] .results__assessed-badge,
+:root[data-theme="dark"] .pract__note--ok,
+:root[data-theme="dark"] .evidence__mock-badge,
+:root[data-theme="dark"] .hero__card-badge,
+:root[data-theme="dark"] .hero__step-dot--final,
+:root[data-theme="dark"] .lp-tag--ready,
+:root[data-theme="dark"] .airev-sev--agreement,
+:root[data-theme="dark"] .priority--covered,
+:root[data-theme="dark"] .results__badge-diff--easy,
+:root[data-theme="dark"] .results__pillar-badge--covered,
+:root[data-theme="dark"] .results__disclaimer-box,
+:root[data-theme="dark"] .results__evidence-toggle,
+:root[data-theme="dark"] .prov__source--assessment,
+:root[data-theme="dark"] .auth__success,
+:root[data-theme="dark"] .capmap__badge--demonstrated,
+:root[data-theme="dark"] .prof__notice {
+  background-color: var(--ok-bg);
+}
+
+:root[data-theme="dark"] .dsa-modal,
+:root[data-theme="dark"] .dsa-modal-tab.is-active,
+:root[data-theme="dark"] .dsa-input-text,
+:root[data-theme="dark"] .notion-card,
+:root[data-theme="dark"] .notion-filter-search,
+:root[data-theme="dark"] .notion-filter-select,
+:root[data-theme="dark"] .notion-page-card,
+:root[data-theme="dark"] .notion-signal-card,
+:root[data-theme="dark"] .notion-dialog,
+:root[data-theme="dark"] .ctrack__station,
+:root[data-theme="dark"] .footer__logo-wrap,
+:root[data-theme="dark"] .ats-gauge-inner,
+:root[data-theme="dark"] .ats-secondary-btn:hover {
+  background-color: var(--paper);
+}
+
+:root[data-theme="dark"] .evcard__badge,
+:root[data-theme="dark"] .evcard__badge--weak,
+:root[data-theme="dark"] .evcard__badge--no-evidence,
+:root[data-theme="dark"] .evcard__stat,
+:root[data-theme="dark"] .evcard__note--subtle,
+:root[data-theme="dark"] .evcard__empty,
+:root[data-theme="dark"] .evcard__legend,
+:root[data-theme="dark"] .evcard__badge--own,
+:root[data-theme="dark"] .assess__q-tag,
+:root[data-theme="dark"] .results__estimate-badge,
+:root[data-theme="dark"] .dsa-modal-close:hover:not(:disabled),
+:root[data-theme="dark"] .dsa-modal-tabs,
+:root[data-theme="dark"] .dsa-sync-help,
+:root[data-theme="dark"] .pract__close,
+:root[data-theme="dark"] .pract__prompt,
+:root[data-theme="dark"] .airev,
+:root[data-theme="dark"] .airev-card,
+:root[data-theme="dark"] .results__note,
+:root[data-theme="dark"] .priority--low,
+:root[data-theme="dark"] .results__leetcode-card,
+:root[data-theme="dark"] .results__pillar-badge--missing,
+:root[data-theme="dark"] .results__quadrant-tag,
+:root[data-theme="dark"] .results__advice-box,
+:root[data-theme="dark"] .results__quadrant-count,
+:root[data-theme="dark"] .results__quadrant-skill-chip,
+:root[data-theme="dark"] .results__evidence-link,
+:root[data-theme="dark"] .prov__close,
+:root[data-theme="dark"] .prov__empty,
+:root[data-theme="dark"] .prov__source,
+:root[data-theme="dark"] .prov__footer-note {
+  background-color: var(--paper-2);
+}
+
+:root[data-theme="dark"] .evcard__badge--moderate,
+:root[data-theme="dark"] .evcard__badge--evidence-gap,
+:root[data-theme="dark"] .evcard__note,
+:root[data-theme="dark"] .evcard__badge--fork,
+:root[data-theme="dark"] .assess__q-tag--diff,
+:root[data-theme="dark"] .assess__warn,
+:root[data-theme="dark"] .pract__note,
+:root[data-theme="dark"] .compare__loose:nth-child(5),
+:root[data-theme="dark"] .hero__step-dot--gap,
+:root[data-theme="dark"] .pipe__stage-num--gap,
+:root[data-theme="dark"] .pipe__card--gap,
+:root[data-theme="dark"] .lp-tag,
+:root[data-theme="dark"] .airev-sev--partial-agreement,
+:root[data-theme="dark"] .priority--high,
+:root[data-theme="dark"] .priority--medium,
+:root[data-theme="dark"] .results__badge-diff--medium,
+:root[data-theme="dark"] .results__pillar-badge--weak,
+:root[data-theme="dark"] .gap-type--evidence,
+:root[data-theme="dark"] .capmap__badge--developing,
+:root[data-theme="dark"] .capmap__badge--evidence-gap,
+:root[data-theme="dark"] .iv__warn {
+  background-color: var(--warn-bg);
+}
+
+:root[data-theme="dark"] .results__evidence-link--none,
+:root[data-theme="dark"] .results__evidence-link--overridden,
+:root[data-theme="dark"] .results__evidence-toggle--excluded {
+  border-color: var(--bad-line);
+}
+
+:root[data-theme="dark"] .evcard__badge--weak,
+:root[data-theme="dark"] .evcard__badge--no-evidence,
+:root[data-theme="dark"] .evcard__note--subtle,
+:root[data-theme="dark"] .evcard__source--github,
+:root[data-theme="dark"] .evcard__badge--own {
+  border-color: var(--line-strong);
+}
+
+:root[data-theme="dark"] .evcard__badge--strong,
+:root[data-theme="dark"] .evcard__stat--primary,
+:root[data-theme="dark"] .evcard__source--assessment,
+:root[data-theme="dark"] .pract__note--ok,
+:root[data-theme="dark"] .sa-pip.is-done,
+:root[data-theme="dark"] .sa-layer.is-done,
+:root[data-theme="dark"] .ct-sync--done,
+:root[data-theme="dark"] .ct-chip--completed,
+:root[data-theme="dark"] .lp-tag--ready,
+:root[data-theme="dark"] .rm-phase-pill.is-done,
+:root[data-theme="dark"] .rm-week.is-done {
+  border-color: var(--ok-line);
+}
+
+:root[data-theme="dark"] .evcard__badge--moderate,
+:root[data-theme="dark"] .evcard__badge--fork,
+:root[data-theme="dark"] .compare__loose:nth-child(5),
+:root[data-theme="dark"] .pipe__stage-num--gap,
+:root[data-theme="dark"] .pipe__card--gap {
+  border-color: var(--warn-line);
+}
+
+:root[data-theme="dark"] .an-alert,
+:root[data-theme="dark"] .assess__error,
+:root[data-theme="dark"] .dsa-diff-badge--hard,
+:root[data-theme="dark"] .dsa-sync-alert--error,
+:root[data-theme="dark"] .pract__error,
+:root[data-theme="dark"] .ct-error,
+:root[data-theme="dark"] .ct-sync--failed,
+:root[data-theme="dark"] .notion-card__status-banner--error,
+:root[data-theme="dark"] .acct__item--danger,
+:root[data-theme="dark"] .sidebar__link--logout:hover,
+:root[data-theme="dark"] .sidebar__link--logout:hover .sidebar__icon,
+:root[data-theme="dark"] .airev-error,
+:root[data-theme="dark"] .airev-sev,
+:root[data-theme="dark"] .airev-sev--disagreement,
+:root[data-theme="dark"] .priority--critical,
+:root[data-theme="dark"] .results__error h2,
+:root[data-theme="dark"] .results__badge-diff--hard,
+:root[data-theme="dark"] .results__evidence-link--none,
+:root[data-theme="dark"] .results__evidence-link--overridden,
+:root[data-theme="dark"] .results__override-btn,
+:root[data-theme="dark"] .results__evidence-toggle--excluded,
+:root[data-theme="dark"] .prov__note,
+:root[data-theme="dark"] .ats-file-remove:hover,
+:root[data-theme="dark"] .ats-error-banner,
+:root[data-theme="dark"] .ats-rec-priority-tag.is-high,
+:root[data-theme="dark"] .ats-skill-badge.is-missing-critical,
+:root[data-theme="dark"] .ats-rewrite-label.is-original,
+:root[data-theme="dark"] .auth__error,
+:root[data-theme="dark"] .capmap__badge--skill-gap,
+:root[data-theme="dark"] .iv__error,
+:root[data-theme="dark"] .iv__tag--mistake,
+:root[data-theme="dark"] .prof__alert,
+:root[data-theme="dark"] .rm-alert--error {
+  color: var(--bad-ink);
+}
+
+:root[data-theme="dark"] .dsa-sync-alert--info,
+:root[data-theme="dark"] .notion-card__status-banner--info,
+:root[data-theme="dark"] .results__pillar-badge--moderate,
+:root[data-theme="dark"] .results__estimate-badge {
+  color: var(--info-ink);
+}
+
+:root[data-theme="dark"] .evcard__github-summary,
+:root[data-theme="dark"] .evcard__repocard-name,
+:root[data-theme="dark"] .evcard__repocard-strength,
+:root[data-theme="dark"] .assess__prompt,
+:root[data-theme="dark"] .assess__compare-row--final,
+:root[data-theme="dark"] .assess__fb-head,
+:root[data-theme="dark"] .dsa-hero h2,
+:root[data-theme="dark"] .dsa-progress-pct,
+:root[data-theme="dark"] .dsa-stat-chip strong,
+:root[data-theme="dark"] .dsa-search-input,
+:root[data-theme="dark"] .dsa-pill:hover,
+:root[data-theme="dark"] .dsa-select,
+:root[data-theme="dark"] .dsa-topic-title,
+:root[data-theme="dark"] .dsa-q-title,
+:root[data-theme="dark"] .dsa-modal-title,
+:root[data-theme="dark"] .dsa-modal-close:hover:not(:disabled),
+:root[data-theme="dark"] .dsa-modal-tab:hover,
+:root[data-theme="dark"] .dsa-field-label,
+:root[data-theme="dark"] .dsa-input-text,
+:root[data-theme="dark"] .dsa-textarea,
+:root[data-theme="dark"] .pract__score,
+:root[data-theme="dark"] .notion-card__title,
+:root[data-theme="dark"] .notion-card__meta-val,
+:root[data-theme="dark"] .notion-insight__content,
+:root[data-theme="dark"] .notion-tab:hover,
+:root[data-theme="dark"] .notion-filter-search,
+:root[data-theme="dark"] .notion-filter-select,
+:root[data-theme="dark"] .notion-page-card__title,
+:root[data-theme="dark"] .notion-evidence-row__skill,
+:root[data-theme="dark"] .notion-empty-state__title,
+:root[data-theme="dark"] .notion-dialog__title,
+:root[data-theme="dark"] .airev-badge,
+:root[data-theme="dark"] .results__evidence-link,
+:root[data-theme="dark"] .prov__detail-k,
+:root[data-theme="dark"] .revision-page,
+:root[data-theme="dark"] .revision-card,
+:root[data-theme="dark"] .revision-empty h2 {
+  color: var(--ink);
+}
+
+:root[data-theme="dark"] .evcard__badge,
+:root[data-theme="dark"] .evcard__badge--weak,
+:root[data-theme="dark"] .evcard__why ul,
+:root[data-theme="dark"] .evcard__empty,
+:root[data-theme="dark"] .evcard__source-meta,
+:root[data-theme="dark"] .evcard__explanation,
+:root[data-theme="dark"] .evcard__repo-files,
+:root[data-theme="dark"] .evcard__usage,
+:root[data-theme="dark"] .evcard__github-breakdown,
+:root[data-theme="dark"] .evcard__legend,
+:root[data-theme="dark"] .evcard__legend summary,
+:root[data-theme="dark"] .evcard__badge--own,
+:root[data-theme="dark"] .evcard__repocard-usage,
+:root[data-theme="dark"] .evcard__repocard-files-line,
+:root[data-theme="dark"] .evcard__repocard-files,
+:root[data-theme="dark"] .evcard__facts dd,
+:root[data-theme="dark"] .evcard__observed,
+:root[data-theme="dark"] .evcard__why-counts,
+:root[data-theme="dark"] .assess__state,
+:root[data-theme="dark"] .assess__error,
+:root[data-theme="dark"] .assess__q-tag,
+:root[data-theme="dark"] .assess__score-sub,
+:root[data-theme="dark"] .assess__compare-row,
+:root[data-theme="dark"] .assess__fb-exp,
+:root[data-theme="dark"] .results__estimate-badge,
+:root[data-theme="dark"] .dsa-hero__desc,
+:root[data-theme="dark"] .dsa-stat-chip,
+:root[data-theme="dark"] .dsa-pill,
+:root[data-theme="dark"] .pract__error-hint,
+:root[data-theme="dark"] .pract__prompt,
+:root[data-theme="dark"] .pract__label,
+:root[data-theme="dark"] .notion-card__notice,
+:root[data-theme="dark"] .notion-pill,
+:root[data-theme="dark"] .notion-page-card__toggle,
+:root[data-theme="dark"] .notion-tier-badge--mentioned,
+:root[data-theme="dark"] .notion-evidence-excerpt,
+:root[data-theme="dark"] .notion-topic-pill,
+:root[data-theme="dark"] .airev-reasoning,
+:root[data-theme="dark"] .airev-compare-note,
+:root[data-theme="dark"] .priority--low,
+:root[data-theme="dark"] .results__quadrant-tag,
+:root[data-theme="dark"] .results__advice-box,
+:root[data-theme="dark"] .results__quadrant-count,
+:root[data-theme="dark"] .results__quadrant-skill-chip,
+:root[data-theme="dark"] .prov__empty,
+:root[data-theme="dark"] .prov__source-meta,
+:root[data-theme="dark"] .prov__explanation,
+:root[data-theme="dark"] .prov__details,
+:root[data-theme="dark"] .prov__footer-note {
+  color: var(--muted);
+}
+
+:root[data-theme="dark"] .evcard__eyebrow,
+:root[data-theme="dark"] .evcard__category,
+:root[data-theme="dark"] .evcard__badge--no-evidence,
+:root[data-theme="dark"] .evcard__stat-label,
+:root[data-theme="dark"] .evcard__note--subtle,
+:root[data-theme="dark"] .evcard__source-type,
+:root[data-theme="dark"] .evcard__repo-meta,
+:root[data-theme="dark"] .evcard__honesty,
+:root[data-theme="dark"] .evcard__repogroup-title,
+:root[data-theme="dark"] .evcard__details-body h5,
+:root[data-theme="dark"] .evcard__facts dt,
+:root[data-theme="dark"] .evcard__aggregate-note,
+:root[data-theme="dark"] .assess__close,
+:root[data-theme="dark"] .assess__error-hint,
+:root[data-theme="dark"] .assess__meta,
+:root[data-theme="dark"] .assess__disclaimer,
+:root[data-theme="dark"] .dsa-search-icon,
+:root[data-theme="dark"] .dsa-q-why,
+:root[data-theme="dark"] .dsa-modal-desc,
+:root[data-theme="dark"] .dsa-modal-tab,
+:root[data-theme="dark"] .dsa-import-hint,
+:root[data-theme="dark"] .dsa-sync-help,
+:root[data-theme="dark"] .pract__eyebrow,
+:root[data-theme="dark"] .pract__meta,
+:root[data-theme="dark"] .pract__state,
+:root[data-theme="dark"] .pract__hint,
+:root[data-theme="dark"] .pract__check--miss,
+:root[data-theme="dark"] .notion-card__desc,
+:root[data-theme="dark"] .notion-tab,
+:root[data-theme="dark"] .notion-page-card__meta-row,
+:root[data-theme="dark"] .notion-confidence-tag,
+:root[data-theme="dark"] .notion-evidence-topics,
+:root[data-theme="dark"] .notion-signal-card__source,
+:root[data-theme="dark"] .notion-empty-state__desc,
+:root[data-theme="dark"] .footer__bottom,
+:root[data-theme="dark"] .airev-score-label,
+:root[data-theme="dark"] .airev-empty,
+:root[data-theme="dark"] .airev-meta,
+:root[data-theme="dark"] .results__pillar-badge--missing,
+:root[data-theme="dark"] .prov__eyebrow,
+:root[data-theme="dark"] .prov__source-type {
+  color: var(--muted-2);
+}
+
+:root[data-theme="dark"] .dsa-modal-close,
+:root[data-theme="dark"] .iv__intro-req,
+:root[data-theme="dark"] .iv__call-camera-off,
+:root[data-theme="dark"] .iv__call-caption-hint,
+:root[data-theme="dark"] .iv__call-typed-input::placeholder,
+:root[data-theme="dark"] .iv__report-score-label,
+:root[data-theme="dark"] .iv__report-breakdown h3,
+:root[data-theme="dark"] .iv__report-pct,
+:root[data-theme="dark"] .iv__report-note,
+:root[data-theme="dark"] .iv__call-controls .btn--ghost,
+:root[data-theme="dark"] .notion-card__meta-label,
+:root[data-theme="dark"] .dark .notion-pill,
+:root[data-theme="dark"] .dark .notion-tier-badge--mentioned,
+:root[data-theme="dark"] .dark .notion-topic-pill,
+:root[data-theme="dark"] .final__eyebrow,
+:root[data-theme="dark"] .final__desc,
+:root[data-theme="dark"] .final__meta,
+:root[data-theme="dark"] .hflow__core-note,
+:root[data-theme="dark"] .pipe__card--final .pipe__card-title,
+:root[data-theme="dark"] .pipe__score span,
+:root[data-theme="dark"] .footer__desc,
+:root[data-theme="dark"] .footer__col a,
+:root[data-theme="dark"] .footer__tagline {
+  color: var(--muted-3);
+}
+
+:root[data-theme="dark"] .evcard__badge--strong,
+:root[data-theme="dark"] .evcard__repo-name a,
+:root[data-theme="dark"] .evcard__repocard-name a,
+:root[data-theme="dark"] .evcard__details > summary,
+:root[data-theme="dark"] .evcard__repo-link,
+:root[data-theme="dark"] .assess__eyebrow,
+:root[data-theme="dark"] .assess__score-label,
+:root[data-theme="dark"] .results__verify-btn,
+:root[data-theme="dark"] .results__assessed-badge,
+:root[data-theme="dark"] .dsa-hero__impact-badge--covered,
+:root[data-theme="dark"] .dsa-q-row.is-solved .dsa-q-title,
+:root[data-theme="dark"] .dsa-diff-badge--easy,
+:root[data-theme="dark"] .dsa-sync-alert--success,
+:root[data-theme="dark"] .pract__note--ok,
+:root[data-theme="dark"] .pract__check--pass,
+:root[data-theme="dark"] .ct-sync--done,
+:root[data-theme="dark"] .notion-card__badge--connected,
+:root[data-theme="dark"] .notion-card__status-banner--success,
+:root[data-theme="dark"] .notion-tier-badge--demonstrated,
+:root[data-theme="dark"] .ctrack__step--ready .ctrack__step-status,
+:root[data-theme="dark"] .evidence__mock-badge,
+:root[data-theme="dark"] .feat__phase--done,
+:root[data-theme="dark"] .feat__verified,
+:root[data-theme="dark"] .hero__card-badge,
+:root[data-theme="dark"] .opps__ring,
+:root[data-theme="dark"] .pipe__rows em.is-high,
+:root[data-theme="dark"] .lp-tag--ready,
+:root[data-theme="dark"] .airev-sev--agreement,
+:root[data-theme="dark"] .priority--covered,
+:root[data-theme="dark"] .results__badge-diff--easy,
+:root[data-theme="dark"] .results__pillar-badge--covered,
+:root[data-theme="dark"] .results__evidence-toggle,
+:root[data-theme="dark"] .ats-skill-badge.is-matched,
+:root[data-theme="dark"] .ats-rewrite-label.is-improved,
+:root[data-theme="dark"] .auth__success,
+:root[data-theme="dark"] .capmap__badge--demonstrated,
+:root[data-theme="dark"] .iv__tag--strength,
+:root[data-theme="dark"] .rm-alert {
+  color: var(--ok-ink);
+}
+
+:root[data-theme="dark"] .evcard__badge--moderate,
+:root[data-theme="dark"] .evcard__note,
+:root[data-theme="dark"] .evcard__badge--fork,
+:root[data-theme="dark"] .assess__q-tag--diff,
+:root[data-theme="dark"] .assess__warn,
+:root[data-theme="dark"] .dsa-diff-badge--medium,
+:root[data-theme="dark"] .dsa-link-btn--leetcode,
+:root[data-theme="dark"] .dsa-sync-btn,
+:root[data-theme="dark"] .pract__note,
+:root[data-theme="dark"] .notion-card__badge--warning,
+:root[data-theme="dark"] .notion-tier-badge--practiced,
+:root[data-theme="dark"] .compare__loose:nth-child(5),
+:root[data-theme="dark"] .opps__ring--low,
+:root[data-theme="dark"] .pipe__stage-num--gap,
+:root[data-theme="dark"] .pipe__rows em.is-low,
+:root[data-theme="dark"] .pipe__rows--gap em.is-high,
+:root[data-theme="dark"] .lp-tag,
+:root[data-theme="dark"] .airev-sev--partial-agreement,
+:root[data-theme="dark"] .priority--high,
+:root[data-theme="dark"] .priority--medium,
+:root[data-theme="dark"] .results__badge-diff--medium,
+:root[data-theme="dark"] .results__pillar-badge--weak,
+:root[data-theme="dark"] .gap-type--evidence,
+:root[data-theme="dark"] .ats-rec-priority-tag.is-medium,
+:root[data-theme="dark"] .ats-skill-badge.is-missing-important,
+:root[data-theme="dark"] .capmap__badge--developing,
+:root[data-theme="dark"] .iv__warn,
+:root[data-theme="dark"] .iv__tag--missing {
+  color: var(--warn-ink);
+}
+
+/* The burnt-orange pair the capability map uses for gaps, which the sweep above didn't cover */
+:root[data-theme="dark"] .capmap__badge--evidence-gap,
+:root[data-theme="dark"] .capmap__legend-dot--evidence-gap,
+:root[data-theme="dark"] .capmap__status--evidence_gap {
+  color: var(--warn-ink);
+  border-color: var(--warn-line);
+}
+
+/* The revision deck dims the cards behind the front one; at night it veils with dark, not light */
+:root[data-theme="dark"] .revision-deck {
+  --deck-veil: rgba(0, 0, 0, 0.86);
+}
+
+:root[data-theme="dark"] .revision-card {
+  --card-face-1: #17161c;
+  --card-face-2: #100f16;
+}
+
+:root[data-theme="dark"] .revision-card {
+  box-shadow: 0 22px 60px rgba(0, 0, 0, 0.55);
+}
+
+/* Filled-accent controls: the accent is a pale lavender at night, so white sits on it
+   almost invisibly. These take dark text on the fill instead. */
+:root[data-theme="dark"] .audience__card:hover .audience__icon,
+:root[data-theme="dark"] .compare__node,
+:root[data-theme="dark"] .ats-role-pill.is-selected,
+:root[data-theme="dark"] .ats-submit-btn,
+:root[data-theme="dark"] .prof__chip--toggle.is-on,
+:root[data-theme="dark"] .revision-tabs button.is-active,
+:root[data-theme="dark"] .revision-next {
+  color: #1b1526 !important;
+}
+
+/* The logo is navy ink on transparent, which vanishes on the night bar. Inverting lightness
+   and turning the hue back round keeps the purple mark purple while the wordmark goes light. */
+:root[data-theme="dark"] .app__brand img {
+  filter: invert(1) hue-rotate(180deg) brightness(1.1);
+}
+
+/* The stale-analysis mark needs to stay legible on the dark sidebar */
+:root[data-theme="dark"] .sidebar__dot {
+  background: #f87171;
+  box-shadow: 0 0 0 3px rgba(248, 113, 113, 0.2);
 }

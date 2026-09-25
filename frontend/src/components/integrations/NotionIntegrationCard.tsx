@@ -13,7 +13,30 @@ import {
   type NotionEvidenceItem,
 } from "../../services/notion";
 import { refreshPageData } from "../../lib/pageData";
+import { friendlyError } from "../../lib/errors";
 import "./NotionIntegrationCard.css";
+
+type Banner = { type: "success" | "error" | "info"; message: string };
+
+const OAUTH_ERRORS: Record<string, string> = {
+  access_denied: "Notion authorization was denied. You can connect any time you’re ready.",
+  invalid_state: "That sign-in link expired before it finished. Please connect again.",
+  missing_code_or_state: "Notion didn’t send back everything INAURA needs. Please connect again.",
+  token_exchange_failed: "Notion couldn’t confirm the connection. Please try again.",
+  missing_access_token: "Notion didn’t grant access. Please try again.",
+};
+
+/** What the return trip from Notion's consent screen reported, in the address */
+function bannerFromOAuth(search: string): Banner | null {
+  const params = new URLSearchParams(search);
+  if (params.get("notion") === "connected") {
+    return { type: "success", message: "Notion connected. Sync your pages to add them as evidence." };
+  }
+  const code = params.get("notion_error");
+  if (!code) return null;
+  // Only known codes are shown; the address is not a place to take wording from
+  return { type: "error", message: OAUTH_ERRORS[code] ?? "Notion didn’t finish connecting. Please try again." };
+}
 
 interface NotionIntegrationCardProps {
   onSyncComplete?: () => void;
@@ -69,7 +92,10 @@ export default function NotionIntegrationCard({
   const [syncResult, setSyncResult] = useState<NotionSyncResult | null>(null);
   const [disconnecting, setDisconnecting] = useState(false);
   const [showDisconnectModal, setShowDisconnectModal] = useState(false);
-  const [banner, setBanner] = useState<{ type: "success" | "error" | "info"; message: string } | null>(null);
+  const location = useLocation();
+  const navigate = useNavigate();
+  // Coming back from Notion's consent screen, the address says how it went
+  const [banner, setBanner] = useState<Banner | null>(() => bannerFromOAuth(location.search));
   const [showPrivacy, setShowPrivacy] = useState(false);
 
   // View & filtering states
@@ -80,51 +106,38 @@ export default function NotionIntegrationCard({
   const [expandedPageIds, setExpandedPageIds] = useState<Set<string>>(new Set());
   const [togglingPageIds, setTogglingPageIds] = useState<Set<string>>(new Set());
 
-  const location = useLocation();
-  const navigate = useNavigate();
-
   const loadStatus = async () => {
     try {
-      setLoading(true);
       const data = await getNotionStatus();
       setStatus(data);
-    } catch (err) {
-      console.error("Failed to load Notion status:", err);
+    } catch {
+      // The card still offers to connect; a failed status check isn't worth an alarm
     } finally {
       setLoading(false);
     }
   };
 
+  // Once, when the card opens
   useEffect(() => {
-    loadStatus();
+    let alive = true;
+    getNotionStatus()
+      .then((data) => alive && setStatus(data))
+      .catch(() => undefined)
+      .finally(() => alive && setLoading(false));
+    return () => {
+      alive = false;
+    };
+  }, []);
 
-    // Check URL parameters for OAuth redirect callbacks
+  // The OAuth result has been read into the banner; take it out of the address so a refresh
+  // doesn't announce it again
+  useEffect(() => {
     const params = new URLSearchParams(location.search);
-    const notionParam = params.get("notion");
-    const errorParam = params.get("notion_error");
-
-    if (notionParam === "connected") {
-      setBanner({
-        type: "success",
-        message: "Notion connected successfully! INAURA can now analyze your authorized notes.",
-      });
-      params.delete("notion");
-      navigate({ search: params.toString(), hash: location.hash }, { replace: true });
-    } else if (errorParam) {
-      const errorMessages: Record<string, string> = {
-        access_denied: "Notion authorization was denied. You can connect anytime when ready.",
-        invalid_state: "Security verification failed (expired or invalid state). Please try again.",
-        missing_code_or_state: "Missing OAuth response data from Notion. Please try again.",
-        token_exchange_failed: "Could not exchange code with Notion OAuth service. Please retry.",
-      };
-      setBanner({
-        type: "error",
-        message: errorMessages[errorParam] || `Notion connection failed: ${errorParam}`,
-      });
-      params.delete("notion_error");
-      navigate({ search: params.toString(), hash: location.hash }, { replace: true });
-    }
-  }, [location.search]);
+    if (!params.has("notion") && !params.has("notion_error")) return;
+    params.delete("notion");
+    params.delete("notion_error");
+    navigate({ search: params.toString(), hash: location.hash }, { replace: true });
+  }, [location.search, location.hash, navigate]);
 
   const handleConnect = async () => {
     try {
@@ -132,11 +145,11 @@ export default function NotionIntegrationCard({
       setBanner(null);
       const authUrl = await getNotionConnectUrl();
       window.location.href = authUrl;
-    } catch (err: any) {
+    } catch (err) {
       setConnecting(false);
       setBanner({
         type: "error",
-        message: err?.message || "Failed to start Notion authorization. Please try again.",
+        message: friendlyError(err, "Notion couldn’t be reached to start connecting. Please try again."),
       });
     }
   };
@@ -160,11 +173,11 @@ export default function NotionIntegrationCard({
       setTimeout(() => {
         setSyncingStep(null);
       }, 2500);
-    } catch (err: any) {
+    } catch (err) {
       setSyncingStep(null);
       setBanner({
         type: "error",
-        message: err?.message || "Synchronization failed. Please check your connection and try again.",
+        message: friendlyError(err, "Your Notion pages couldn’t be synced. Check your connection and try again."),
       });
     }
   };
@@ -181,10 +194,10 @@ export default function NotionIntegrationCard({
       });
       refreshPageData();
       if (onDisconnectComplete) onDisconnectComplete();
-    } catch (err: any) {
+    } catch (err) {
       setBanner({
         type: "error",
-        message: err?.message || "Failed to disconnect Notion. Please try again.",
+        message: friendlyError(err, "Notion couldn’t be disconnected. Please try again."),
       });
     } finally {
       setDisconnecting(false);
@@ -228,12 +241,13 @@ export default function NotionIntegrationCard({
           ? `"${page.page_title}" excluded from scoring — kept below as a study link.`
           : `"${page.page_title}" included in scoring again.`,
       });
-    } catch (err: any) {
+    } catch (err) {
       setBanner({
         type: "error",
-        message: err?.message || "Failed to update page scoring preference.",
+        message: friendlyError(err, "That page’s setting couldn’t be changed. Please try again."),
       });
     } finally {
+
       setTogglingPageIds((prev) => {
         const nextSet = new Set(prev);
         nextSet.delete(page.page_id);
@@ -339,7 +353,7 @@ export default function NotionIntegrationCard({
             ⚠ Reconnect Needed
           </span>
         ) : (
-          <span className="notion-card__badge" style={{ background: "rgba(0,0,0,0.06)", color: "#64748b" }}>
+          <span className="notion-card__badge" style={{ background: "rgba(0,0,0,0.06)", color: "var(--muted-2)" }}>
             Not Connected
           </span>
         )}
@@ -461,7 +475,7 @@ export default function NotionIntegrationCard({
               variant="ghost"
               size="sm"
               onClick={() => setShowDisconnectModal(true)}
-              style={{ color: "#ef4444" }}
+              style={{ color: "var(--bad-ink)" }}
             >
               Disconnect
             </Button>
