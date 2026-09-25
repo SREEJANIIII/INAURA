@@ -1,6 +1,5 @@
 import { lazy, Suspense, type ReactNode } from "react";
 import { Navigate, Routes, Route } from "react-router-dom";
-<<<<<<< HEAD
 import Home from "./pages/Home";
 import ProfileSetup from "./pages/ProfileSetup";
 import Profile from "./pages/Profile";
@@ -15,8 +14,6 @@ import Interview from "./pages/Interview";
 import AtsTester from "./pages/AtsTester";
 import Resume from "./pages/Resume";
 import Revision from "./pages/Revision";
-=======
->>>>>>> 3cad89f448472cdaf6129a10e69895215a350f21
 import { ProtectedRoute, GuestOnly } from "./components/auth/ProtectedRoute";
 import AppLayout from "./components/layout/AppLayout";
 import NotFound from "./pages/NotFound";
