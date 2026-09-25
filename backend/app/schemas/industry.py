@@ -55,6 +55,7 @@ class IndustryRequirementResponse(BaseModel):
     outcome_overlay: Optional[OutcomeOverlay] = Field(
         default=None,
         description="Observed employer-demand context for this curated requirement",
+    )
     # Dynamic Industry Intelligence (additive, all optional for compatibility).
     location: Optional[dict] = Field(
         default=None,
