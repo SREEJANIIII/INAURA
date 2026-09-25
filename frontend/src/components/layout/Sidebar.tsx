@@ -71,13 +71,10 @@ const items: NavItem[] = [
         <polyline points="10 9 9 9 8 9" />
       </Icon>
     ),
-<<<<<<< HEAD
     children: [
       { label: "ATS Tester", to: "/resume/ats-tester" },
       { label: "Resume Builder", to: "/resume" },
     ],
-=======
->>>>>>> 3cad89f448472cdaf6129a10e69895215a350f21
   },
   {
     label: "Roadmap",

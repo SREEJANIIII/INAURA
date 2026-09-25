@@ -2,12 +2,8 @@ import { Suspense, useEffect, useState } from "react";
 import { Link, Outlet } from "react-router-dom";
 import Sidebar from "./Sidebar";
 import AccountMenu from "./AccountMenu";
-<<<<<<< HEAD
-import SearchBar from "../search/SearchBar";
 import InauraLogo from "./InauraLogo";
-=======
 import AppSearch from "../search/AppSearch";
->>>>>>> 3cad89f448472cdaf6129a10e69895215a350f21
 import { preloadPageData } from "../../lib/pageData";
 import "./AppLayout.css";
 
