@@ -114,7 +114,7 @@ export function phaseFor(category: string) {
 
 /* ---------------- Building a track ---------------- */
 
-const displayName = (skill: string) => {
+export const displayName = (skill: string) => {
   // Canonical names come lowercase with underscores from the engine ("html_css")
   if (/[A-Z]/.test(skill)) return skill;
   const special: Record<string, string> = {

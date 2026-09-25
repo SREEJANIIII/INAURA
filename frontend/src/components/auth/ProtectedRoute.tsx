@@ -9,7 +9,7 @@ export function ProtectedRoute({ children }: { children: ReactNode }) {
     return (
       <div style={{ padding: "4rem 1.5rem", textAlign: "center", maxWidth: 640, margin: "0 auto" }}>
         <h2 style={{ fontSize: "1.25rem", fontWeight: 700 }}>Supabase not configured</h2>
-        <p style={{ color: "#475569", marginTop: 8 }}>
+        <p style={{ color: "var(--muted)", marginTop: 8 }}>
           Set <code>VITE_SUPABASE_URL</code> and <code>VITE_SUPABASE_ANON_KEY</code> in <code>frontend/.env</code>.
           See <code>frontend/.env.example</code>.
         </p>
@@ -19,7 +19,7 @@ export function ProtectedRoute({ children }: { children: ReactNode }) {
 
   if (loading) {
     return (
-      <div style={{ padding: "4rem 1.5rem", textAlign: "center", color: "#64748b" }}>
+      <div style={{ padding: "4rem 1.5rem", textAlign: "center", color: "var(--muted-2)" }}>
         Checking session…
       </div>
     );
@@ -37,7 +37,7 @@ export function GuestOnly({ children }: { children: ReactNode }) {
 
   if (loading) {
     return (
-      <div style={{ padding: "4rem 1.5rem", textAlign: "center", color: "#64748b" }}>
+      <div style={{ padding: "4rem 1.5rem", textAlign: "center", color: "var(--muted-2)" }}>
         Checking session…
       </div>
     );

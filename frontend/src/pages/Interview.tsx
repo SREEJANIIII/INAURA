@@ -486,7 +486,7 @@ export default function Interview() {
 
                                 {turn.misconceptions && turn.misconceptions.length > 0 && (
                                   <div className="iv__tags-row" style={{ marginTop: "0.5rem" }}>
-                                    <span className="iv__tags-label" style={{ color: "#dc2626" }}>Misconceptions / Mistakes:</span>
+                                    <span className="iv__tags-label" style={{ color: "var(--bad-ink)" }}>Misconceptions / Mistakes:</span>
                                     {turn.misconceptions.map((m, mIdx) => (
                                       <span key={mIdx} className="iv__tag iv__tag--mistake">✗ {m}</span>
                                     ))}
@@ -495,7 +495,7 @@ export default function Interview() {
 
                                 {turn.missing && turn.missing.length > 0 && (
                                   <div className="iv__tags-row" style={{ marginTop: "0.4rem" }}>
-                                    <span className="iv__tags-label" style={{ color: "#d97706" }}>Missing Concepts:</span>
+                                    <span className="iv__tags-label" style={{ color: "var(--warn-ink)" }}>Missing Concepts:</span>
                                     {turn.missing.map((ms, msIdx) => (
                                       <span key={msIdx} className="iv__tag iv__tag--missing">! {ms}</span>
                                     ))}
@@ -504,7 +504,7 @@ export default function Interview() {
 
                                 {turn.demonstrated && turn.demonstrated.length > 0 && (
                                   <div className="iv__tags-row" style={{ marginTop: "0.4rem" }}>
-                                    <span className="iv__tags-label" style={{ color: "#16a34a" }}>Demonstrated:</span>
+                                    <span className="iv__tags-label" style={{ color: "var(--ok-ink)" }}>Demonstrated:</span>
                                     {turn.demonstrated.map((dm, dmIdx) => (
                                       <span key={dmIdx} className="iv__tag iv__tag--strength">✓ {dm}</span>
                                     ))}

@@ -2,7 +2,7 @@ import { useEffect, useState } from "react";
 import { Link, Outlet } from "react-router-dom";
 import Sidebar from "./Sidebar";
 import AccountMenu from "./AccountMenu";
-import SearchBar from "../search/SearchBar";
+import AppSearch from "../search/AppSearch";
 import { preloadPageData } from "../../lib/pageData";
 import "./AppLayout.css";
 
@@ -37,9 +37,8 @@ export default function AppLayout() {
             <img src="/logo.png" alt="INAURA" width={120} height={30} />
           </Link>
         </div>
-        {/* Search isn't built yet: the bar is fully interactive, and onSubmit is where results will plug in */}
         <div className="app__search">
-          <SearchBar />
+          <AppSearch />
         </div>
         <div className="app__actions">
           <AccountMenu />

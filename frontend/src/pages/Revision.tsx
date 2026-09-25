@@ -5,6 +5,7 @@ import { getLatestAnalysis, type AnalysisResult } from "../services/analysis";
 import { getCapabilityMap, type SkillCapability } from "../services/capability";
 import { getDsaChecklist, type DsaQuestion } from "../services/assessment";
 import { roadmapPageData } from "../lib/pageData";
+import CardDeck from "@/components/ui/card-deck";
 import type { RoadmapTask } from "../services/roadmap";
 import "./Revision.css";
 
@@ -135,13 +136,46 @@ export default function Revision() {
       {loading ? <div className="revision-empty">Building your revision deck…</div> : !activeCard ? (
         <div className="revision-empty"><h2>No cards yet</h2><p>Complete an analysis or add roadmap/DSA progress to build your personalized deck.</p><Link to="/roadmap">Open your roadmap →</Link></div>
       ) : (
-        <section className="revision-study" aria-live="polite">
+        <section className="revision-study">
           <div className="revision-progress"><span>{safeIndex + 1} / {visibleCards.length}</span><span>{activeCard.label}</span></div>
-          <button type="button" className={`revision-card ${showAnswer ? "is-flipped" : ""}`} onClick={() => setShowAnswer((value) => !value)} aria-label={showAnswer ? "Hide answer" : "Reveal answer"}>
-            <span className="revision-card__type">{activeCard.kind === "dsa" ? "DSA FLASHCARD" : activeCard.kind === "roadmap" ? "ROADMAP FLASHCARD" : "SKILL FLASHCARD"}</span>
-            <span className="revision-card__title">{activeCard.title}</span>
-            {!showAnswer ? <><span className="revision-card__prompt">{activeCard.prompt}</span><span className="revision-card__hint">Tap to reveal answer</span></> : <><span className="revision-card__answer">{activeCard.answer}</span>{activeCard.detail && <span className="revision-card__detail">{activeCard.detail}</span>}{activeCard.link && <a href={activeCard.link} target="_blank" rel="noreferrer" onClick={(event) => event.stopPropagation()}>Open practice resource ↗</a>}</>}
-          </button>
+
+          <CardDeck
+            className="revision-deck"
+            cardClassName="revision-card"
+            items={visibleCards}
+            index={safeIndex}
+            onIndexChange={(next) => { setIndex(next); setShowAnswer(false); }}
+            onTap={() => setShowAnswer((value) => !value)}
+            label="Revision cards — drag or use the arrow keys to move through them, enter to turn one over"
+            renderCard={(card, isFront) => (
+              <>
+                <span className="revision-card__type">{card.kind === "dsa" ? "DSA FLASHCARD" : card.kind === "roadmap" ? "ROADMAP FLASHCARD" : "SKILL FLASHCARD"}</span>
+                <span className="revision-card__title">{card.title}</span>
+                {isFront && showAnswer ? (
+                  <>
+                    <span className="revision-card__answer">{card.answer}</span>
+                    {card.detail && <span className="revision-card__detail">{card.detail}</span>}
+                    {card.link && (
+                      <a href={card.link} target="_blank" rel="noreferrer" className="revision-card__link" onClick={(event) => event.stopPropagation()}>
+                        Open practice resource ↗
+                      </a>
+                    )}
+                  </>
+                ) : (
+                  <>
+                    <span className="revision-card__prompt">{card.prompt}</span>
+                    {isFront && <span className="revision-card__hint">Tap to reveal · drag to move on</span>}
+                  </>
+                )}
+              </>
+            )}
+          />
+
+          {/* The card itself is only readable one at a time, so the live region sits outside it */}
+          <p className="revision-live" aria-live="polite">
+            {showAnswer ? activeCard.answer : activeCard.prompt}
+          </p>
+
           <div className="revision-controls"><button type="button" onClick={() => move(-1)}>← Previous</button><button type="button" className="revision-next" onClick={() => move(1)}>Next card →</button></div>
         </section>
       )}

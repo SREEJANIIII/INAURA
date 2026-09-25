@@ -1,15 +1,19 @@
-import { useCallback, useEffect, useId, useRef, useState, type FormEvent, type KeyboardEvent } from "react";
-import { renderText } from "./typewriter";
+import { useCallback, useEffect, useId, useMemo, useRef, useState, type FormEvent, type KeyboardEvent } from "react";
+import { phrasesFor, renderText } from "./typewriter";
 import { useTypewriter } from "./useTypewriter";
+import { SEARCH_SUGGESTIONS, shuffled } from "./suggestions";
+import type { SearchResult } from "./searchIndex";
 import "./SearchBar.css";
 
-const DEFAULT_WORDS = ["skills", "roles", "resources"] as const;
-
 type SearchBarProps = {
-  /** Called on Enter with the trimmed query. Search isn't built yet, so this is optional. */
+  /** Called on Enter when nothing in the list is picked */
   onSubmit?: (query: string) => void;
-  /** Called on every keystroke, for live results later */
+  /** Called on every keystroke, so the parent can work out the results */
   onQueryChange?: (query: string) => void;
+  /** Matches for what's been typed, best first */
+  results?: SearchResult[];
+  /** Called when a result is clicked or chosen with the keyboard */
+  onSelect?: (result: SearchResult) => void;
   words?: readonly string[];
   prefix?: string;
   /** Listen for Ctrl/⌘ + K anywhere on the page */
@@ -27,7 +31,9 @@ const isApple = () => {
 export default function SearchBar({
   onSubmit,
   onQueryChange,
-  words = DEFAULT_WORDS,
+  results = [],
+  onSelect,
+  words,
   prefix = "Search for",
   enableShortcut = true,
   className = "",
@@ -38,15 +44,26 @@ export default function SearchBar({
   // On phones the bar starts as an icon and expands over the top bar
   const [expanded, setExpanded] = useState(false);
   const [apple] = useState(isApple);
+  const [active, setActive] = useState(0);
   const hintId = useId();
+  const listId = useId();
+
+  // A different order each time the bar loads, so it isn't always the same few words
+  const suggestions = useMemo(() => words ?? shuffled(SEARCH_SUGGESTIONS), [words]);
+  // The dots belong to the word, so they're erased and written along with it
+  const phrases = useMemo(() => phrasesFor(suggestions), [suggestions]);
 
   // The animation only runs while nobody is using the field
   const idle = !focused && query === "";
-  const { state, animating } = useTypewriter(words, idle);
+  const { state, animating } = useTypewriter(phrases, idle);
   // Once focused, finish the current word rather than freezing halfway through it
   const placeholder = focused
-    ? renderText(prefix, "...", { ...state, chars: words[state.wordIndex]?.length ?? 0 }, words)
-    : renderText(prefix, "...", state, words);
+    ? renderText(prefix, { ...state, chars: phrases[state.wordIndex]?.length ?? 0 }, phrases)
+    : renderText(prefix, state, phrases);
+
+  const typed = query.trim();
+  const showResults = focused && typed !== "";
+  const chosen = results[active] ?? results[0];
 
   const open = useCallback(() => {
     setExpanded(true);
@@ -66,17 +83,40 @@ export default function SearchBar({
     return () => window.removeEventListener("keydown", onKey);
   }, [enableShortcut, open]);
 
+  const close = () => {
+    setQuery("");
+    onQueryChange?.("");
+    setActive(0);
+    inputRef.current?.blur();
+  };
+
+  const pick = (result: SearchResult) => {
+    onSelect?.(result);
+    close();
+  };
+
   const handleKeyDown = (e: KeyboardEvent<HTMLInputElement>) => {
     if (e.key === "Escape") {
       e.preventDefault();
-      inputRef.current?.blur();
+      close();
+      return;
+    }
+    if (!showResults || results.length === 0) return;
+    if (e.key === "ArrowDown") {
+      e.preventDefault();
+      setActive((i) => (i + 1) % results.length);
+    } else if (e.key === "ArrowUp") {
+      e.preventDefault();
+      setActive((i) => (i - 1 + results.length) % results.length);
     }
   };
 
   const handleSubmit = (e: FormEvent) => {
     e.preventDefault();
-    const q = query.trim();
-    if (q) onSubmit?.(q);
+    if (!typed) return;
+    // Enter opens whatever is highlighted; only with nothing to open does it fall back
+    if (chosen) pick(chosen);
+    else onSubmit?.(typed);
   };
 
   return (
@@ -107,8 +147,14 @@ export default function SearchBar({
             type="search"
             className="search__input"
             value={query}
+            role="combobox"
+            aria-expanded={showResults}
+            aria-controls={listId}
+            aria-autocomplete="list"
+            aria-activedescendant={showResults && chosen ? `${listId}-${results.indexOf(chosen)}` : undefined}
             onChange={(e) => {
               setQuery(e.target.value);
+              setActive(0);
               onQueryChange?.(e.target.value);
             }}
             onFocus={() => setFocused(true)}
@@ -117,7 +163,7 @@ export default function SearchBar({
               if (!inputRef.current?.value) setExpanded(false);
             }}
             onKeyDown={handleKeyDown}
-            aria-label={`${prefix} ${words.join(", ")}`}
+            aria-label={`${prefix} ${suggestions.join(", ")}`}
             aria-describedby={hintId}
             autoComplete="off"
             spellCheck={false}
@@ -142,6 +188,38 @@ export default function SearchBar({
           )}
         </kbd>
       </div>
+
+      {showResults && (
+        <div className="search__panel">
+          {results.length === 0 ? (
+            <p className="search__empty">No matches for “{typed}”</p>
+          ) : (
+            <ul className="search__list" id={listId} role="listbox" aria-label="Search results">
+              {results.map((result, i) => (
+                <li key={result.id} role="presentation">
+                  <button
+                    type="button"
+                    id={`${listId}-${i}`}
+                    role="option"
+                    aria-selected={result === chosen}
+                    className={`search__result${result === chosen ? " is-active" : ""}`}
+                    // Keeps focus on the input, so the panel doesn't close before the click lands
+                    onMouseDown={(e) => e.preventDefault()}
+                    onMouseEnter={() => setActive(i)}
+                    onClick={() => pick(result)}
+                  >
+                    <span className="search__result-text">
+                      <span className="search__result-label">{result.label}</span>
+                      {result.detail && <span className="search__result-detail">{result.detail}</span>}
+                    </span>
+                    <span className="search__result-kind">{result.kind}</span>
+                  </button>
+                </li>
+              ))}
+            </ul>
+          )}
+        </div>
+      )}
     </form>
   );
 }

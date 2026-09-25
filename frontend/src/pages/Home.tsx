@@ -36,7 +36,7 @@ export default function Home() {
           style={{
             fontSize: "0.88rem",
             fontWeight: 600,
-            color: "#4f46e5",
+            color: "var(--accent)",
             textDecoration: "none",
           }}
         >
@@ -47,10 +47,10 @@ export default function Home() {
         <h1 style={{ margin: 0, fontSize: "2.25rem", fontWeight: 700 }}>
           INAURA
         </h1>
-        <p style={{ margin: "0.35rem 0 0", color: "#666", fontSize: "1.05rem" }}>
+        <p style={{ margin: "0.35rem 0 0", color: "var(--muted-2)", fontSize: "1.05rem" }}>
           Bridging skills to industry.
         </p>
-        <p style={{ margin: "0.75rem 0 0", color: "#444", lineHeight: 1.5 }}>
+        <p style={{ margin: "0.75rem 0 0", color: "var(--muted)", lineHeight: 1.5 }}>
           Minimal app shell — Phase 1 verifies{" "}
           <code>frontend → FastAPI</code> connectivity via{" "}
           <code>/api/v1/health</code>.
@@ -62,13 +62,13 @@ export default function Home() {
           border: "1px solid #e5e7eb",
           borderRadius: 12,
           padding: "1.25rem",
-          background: "#fff",
+          background: "var(--glass-bg)",
         }}
       >
         <h2 style={{ margin: "0 0 0.5rem", fontSize: "1.15rem" }}>
           Backend Connection Check
         </h2>
-        <p style={{ margin: "0 0 1rem", color: "#666", fontSize: "0.9rem" }}>
+        <p style={{ margin: "0 0 1rem", color: "var(--muted-2)", fontSize: "0.9rem" }}>
           API base: <code>{API_BASE_URL}</code>
         </p>
 
@@ -93,23 +93,23 @@ export default function Home() {
 
         <div style={{ marginTop: "1rem", minHeight: 60 }}>
           {health.status === "idle" && (
-            <p style={{ color: "#888", fontSize: "0.9rem", margin: 0 }}>
+            <p style={{ color: "var(--muted-3)", fontSize: "0.9rem", margin: 0 }}>
               Click the button to call <code>GET /api/v1/health</code>.
             </p>
           )}
           {health.status === "loading" && (
-            <p style={{ color: "#666", margin: 0 }}>Contacting FastAPI…</p>
+            <p style={{ color: "var(--muted-2)", margin: 0 }}>Contacting FastAPI…</p>
           )}
           {health.status === "success" && health.data && (
             <div
               style={{
-                background: "#f0fdf4",
+                background: "var(--ok-bg)",
                 border: "1px solid #bbf7d0",
                 borderRadius: 8,
                 padding: "0.75rem 1rem",
               }}
             >
-              <div style={{ color: "#15803d", fontWeight: 600 }}>
+              <div style={{ color: "var(--ok-ink)", fontWeight: 600 }}>
                 ● Connected — {health.data.status}
               </div>
               <div style={{ fontSize: "0.9rem", marginTop: 4 }}>
@@ -124,7 +124,7 @@ export default function Home() {
                 style={{
                   margin: "0.5rem 0 0",
                   fontSize: "0.8rem",
-                  background: "#fff",
+                  background: "var(--glass-bg)",
                   padding: "0.5rem",
                   borderRadius: 6,
                   overflowX: "auto",
@@ -137,13 +137,13 @@ export default function Home() {
           {health.status === "error" && (
             <div
               style={{
-                background: "#fef2f2",
+                background: "var(--bad-bg)",
                 border: "1px solid #fecaca",
                 borderRadius: 8,
                 padding: "0.75rem 1rem",
               }}
             >
-              <div style={{ color: "#dc2626", fontWeight: 600 }}>
+              <div style={{ color: "var(--bad-ink)", fontWeight: 600 }}>
                 ● Not connected
               </div>
               <div
@@ -158,7 +158,7 @@ export default function Home() {
               <p
                 style={{
                   fontSize: "0.85rem",
-                  color: "#666",
+                  color: "var(--muted-2)",
                   margin: "0.5rem 0 0",
                 }}
               >
@@ -175,7 +175,7 @@ export default function Home() {
           marginTop: "2rem",
           paddingTop: "1rem",
           borderTop: "1px solid #eee",
-          color: "#888",
+          color: "var(--muted-3)",
           fontSize: "0.85rem",
         }}
       >

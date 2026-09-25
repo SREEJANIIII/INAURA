@@ -773,7 +773,7 @@ ${result.recommendations.map((r, i) => `${i + 1}. [${r.priority.toUpperCase()}] 
                       ))}
                     </div>
                   ) : (
-                    <p style={{ fontSize: "0.85rem", color: "#059669", fontWeight: 600 }}>
+                    <p style={{ fontSize: "0.85rem", color: "var(--ok-ink)", fontWeight: 600 }}>
                       Outstanding! All canonical skills for {result.target_role} are present in your resume.
                     </p>
                   )}
@@ -1040,7 +1040,7 @@ ${result.recommendations.map((r, i) => `${i + 1}. [${r.priority.toUpperCase()}] 
                   {result.metrics_found.length > 0 ? (
                     <div className="ats-skills-pills">
                       {result.metrics_found.map((m, i) => (
-                        <span key={i} className="ats-skill-badge is-matched" style={{ background: "rgba(37, 99, 235, 0.12)", color: "#1d4ed8", borderColor: "rgba(37, 99, 235, 0.3)" }}>
+                        <span key={i} className="ats-skill-badge is-matched" style={{ background: "rgba(37, 99, 235, 0.12)", color: "var(--info-ink)", borderColor: "rgba(37, 99, 235, 0.3)" }}>
                           {m}
                         </span>
                       ))}

@@ -91,6 +91,9 @@ export default function CareerTrack() {
         }
       });
       roleCatalogData.fetch(force).catch((e) => setCatalogError(errorText(e)));
+      // Which career to open is all this needs, and it's one small call — asking for it
+      // directly means the redirect below doesn't wait on the whole evidence bundle
+      analysisStateData.fetch(force).catch(() => undefined);
       evidencePageData.fetch(force).catch(() => undefined);
       roadmapPageData.fetch(force).catch(() => undefined);
       resultsPageData

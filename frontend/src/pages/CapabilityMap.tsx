@@ -475,7 +475,7 @@ export default function CapabilityMap() {
 
       <main className="container results__main">
         {loading && (
-          <div style={{ padding: "2rem 0", textAlign: "center", color: "#64748b" }}>
+          <div style={{ padding: "2rem 0", textAlign: "center", color: "var(--muted-2)" }}>
             Loading capability map…
           </div>
         )}
@@ -570,7 +570,7 @@ export default function CapabilityMap() {
         )}
 
         {!loading && !error && summary && (
-          <p style={{ color: "#64748b", fontSize: "0.85rem" }}>
+          <p style={{ color: "var(--muted-2)", fontSize: "0.85rem" }}>
             {summary.total_skills} skills in map · proficiency and readiness
             unchanged — this map explains, it does not rescore.
           </p>

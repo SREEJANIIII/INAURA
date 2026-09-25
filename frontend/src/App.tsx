@@ -91,7 +91,7 @@ export default function App() {
         element={
           <div style={{ padding: "4rem 1.5rem", textAlign: "center" }}>
             <h2 style={{ fontSize: "1.4rem", fontWeight: 700 }}>404 — Not found</h2>
-            <a href="/" style={{ color: "#4f46e5", fontWeight: 600 }}>
+            <a href="/" style={{ color: "var(--accent)", fontWeight: 600 }}>
               Go home
             </a>
           </div>

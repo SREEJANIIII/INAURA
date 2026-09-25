@@ -12,7 +12,7 @@
  */
 import { runAnalysis } from "../services/analysis";
 import { generateRoadmap } from "../services/roadmap";
-import { profileData, resultsPageData, roadmapPageData } from "./pageData";
+import { capabilityMapData, profileData, resultsPageData, roadmapPageData } from "./pageData";
 
 export type RoleSyncStage = "idle" | "analysing" | "building" | "done" | "failed";
 
@@ -122,6 +122,8 @@ async function rebuild(role: string, reason: RoleSyncReason) {
   try {
     await runAnalysis(role);
     await resultsPageData.fetch(true);
+    // The career track's skills and readiness are built from this analysis, so reload them too
+    capabilityMapData(role).fetch(true).catch(() => undefined);
   } catch (error) {
     set({ stage: "failed", role, reason, message: analysisProblem(error, reason) });
     return;

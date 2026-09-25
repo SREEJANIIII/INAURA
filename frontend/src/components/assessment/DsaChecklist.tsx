@@ -428,7 +428,7 @@ export default function DsaChecklist({ onProgressUpdate }: Props) {
             </select>
           </div>
 
-          <span style={{ fontSize: "12.5px", color: "#64748b" }}>
+          <span style={{ fontSize: "12.5px", color: "var(--muted-2)" }}>
             Showing {filteredQuestions.length} of {totalQuestions} questions
           </span>
         </div>
@@ -439,11 +439,11 @@ export default function DsaChecklist({ onProgressUpdate }: Props) {
 
       {/* Questions list grouped by topic */}
       {loading && questions.length === 0 ? (
-        <div style={{ padding: "40px", textAlign: "center", color: "#64748b" }}>
+        <div style={{ padding: "40px", textAlign: "center", color: "var(--muted-2)" }}>
           Loading compulsory pattern question bank…
         </div>
       ) : filteredQuestions.length === 0 ? (
-        <div style={{ padding: "40px", textAlign: "center", color: "#64748b" }}>
+        <div style={{ padding: "40px", textAlign: "center", color: "var(--muted-2)" }}>
           No questions match your filter. Try adjusting your search query or topic filter.
         </div>
       ) : (

@@ -339,7 +339,7 @@ export default function NotionIntegrationCard({
             ⚠ Reconnect Needed
           </span>
         ) : (
-          <span className="notion-card__badge" style={{ background: "rgba(0,0,0,0.06)", color: "#64748b" }}>
+          <span className="notion-card__badge" style={{ background: "rgba(0,0,0,0.06)", color: "var(--muted-2)" }}>
             Not Connected
           </span>
         )}
@@ -461,7 +461,7 @@ export default function NotionIntegrationCard({
               variant="ghost"
               size="sm"
               onClick={() => setShowDisconnectModal(true)}
-              style={{ color: "#ef4444" }}
+              style={{ color: "var(--bad-ink)" }}
             >
               Disconnect
             </Button>

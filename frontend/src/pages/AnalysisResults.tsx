@@ -304,17 +304,17 @@ export default function AnalysisResults() {
             <div className="prov__body">
               <SkillEvidenceCard gap={provenanceGap} />
               <div className="prov__sources">
-                <div style={{ marginTop: 12, padding: 10, background: "#f8fafc", border: "1px solid #e2e8f0", borderRadius: 8 }}>
+                <div style={{ marginTop: 12, padding: 10, background: "var(--paper-2)", border: "1px solid var(--line-strong)", borderRadius: 8 }}>
                   <h4 style={{ margin: "0 0 6px", fontSize: "0.90rem" }}>Why is this skill required for {analysis.target_role}?</h4>
-                  <div style={{ fontSize: "0.82rem", color: "#334155", display: "flex", flexDirection: "column", gap: 4 }}>
-                    <div><strong>Source:</strong> {provenanceGap.requirement_source || provenanceGap.source || "Industry requirements"} {provenanceGap.requirement_source_url ? <a href={provenanceGap.requirement_source_url} target="_blank" rel="noreferrer" style={{ color: "#0f766e", wordBreak: "break-all" }}>{provenanceGap.requirement_source_url}</a> : null}</div>
+                  <div style={{ fontSize: "0.82rem", color: "var(--muted)", display: "flex", flexDirection: "column", gap: 4 }}>
+                    <div><strong>Source:</strong> {provenanceGap.requirement_source || provenanceGap.source || "Industry requirements"} {provenanceGap.requirement_source_url ? <a href={provenanceGap.requirement_source_url} target="_blank" rel="noreferrer" style={{ color: "var(--ok-ink)", wordBreak: "break-all" }}>{provenanceGap.requirement_source_url}</a> : null}</div>
                     {provenanceGap.requirement_source_version && <div><strong>Source version:</strong> {provenanceGap.requirement_source_version}</div>}
                     {provenanceGap.requirement_source_reference && <div><strong>Reference:</strong> {provenanceGap.requirement_source_reference}</div>}
                     {provenanceGap.requirement_role_relevance && <div><strong>Role relevance:</strong> {provenanceGap.requirement_role_relevance}</div>}
                     {provenanceGap.requirement_description && <div><strong>Description:</strong> {provenanceGap.requirement_description}</div>}
                     {provenanceGap.evidence_context && <div><strong>Evidence context:</strong> {provenanceGap.evidence_context}</div>}
                   </div>
-                  <div style={{ fontSize: "0.72rem", color: "#64748b", fontStyle: "italic", marginTop: 8 }}>Industry-grounded role requirements based on O*NET/ESCO with INAURA mapping heuristics — not universally required.</div>
+                  <div style={{ fontSize: "0.72rem", color: "var(--muted-2)", fontStyle: "italic", marginTop: 8 }}>Industry-grounded role requirements based on O*NET/ESCO with INAURA mapping heuristics — not universally required.</div>
                 </div>
               </div>
               <div className="prov__footer-note">
@@ -337,10 +337,10 @@ export default function AnalysisResults() {
         <div className="prov__overlay" onClick={() => setOverrideConfirm(null)} role="dialog" aria-modal="true">
           <div className="prov__drawer" onClick={(e) => e.stopPropagation()} style={{ maxWidth: 480 }}>
             <h3 style={{ margin: 0 }}>Set {skillName(overrideConfirm)} to 0%?</h3>
-            <p style={{ marginTop: 8, fontSize: "0.92rem", color: "#475569", lineHeight: 1.5 }}>
+            <p style={{ marginTop: 8, fontSize: "0.92rem", color: "var(--muted)", lineHeight: 1.5 }}>
               This overrides the current estimate in future analyses. Your evidence and assessment history are kept. You can’t restore the previous estimate yourself, but new evidence or a new assessment can change the result.
             </p>
-            <p style={{ fontSize: "0.85rem", color: "#64748b" }}>
+            <p style={{ fontSize: "0.85rem", color: "var(--muted-2)" }}>
               Current: {pct(overrideConfirm.current_proficiency)}%, required: {pct(overrideConfirm.required_level)}%
             </p>
             <div style={{ display: "flex", gap: 8, justifyContent: "flex-end", marginTop: 16 }}>
