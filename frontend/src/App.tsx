@@ -13,6 +13,9 @@ import AIReviewTest from "./pages/AIReviewTest";
 import Interview from "./pages/Interview";
 import AtsTester from "./pages/AtsTester";
 import Revision from "./pages/Revision";
+import Employers from "./pages/Employers";
+import Applications from "./pages/Applications";
+import Outcomes from "./pages/Outcomes";
 import { ProtectedRoute, GuestOnly } from "./components/auth/ProtectedRoute";
 import AppLayout from "./components/layout/AppLayout";
 
@@ -73,6 +76,10 @@ export default function App() {
         <Route path="/analysis/capabilities" element={<CapabilityMap />} />
         <Route path="/roadmap" element={<Roadmap />} />
         <Route path="/revision" element={<Revision />} />
+        {/* Person 2: employer & outcomes (additive, isolated module) */}
+        <Route path="/employers" element={<Employers />} />
+        <Route path="/applications" element={<Applications />} />
+        <Route path="/outcomes" element={<Outcomes />} />
         {/* Career Track: one page per career and one per skill, rendered from the role's data */}
         <Route path="/career-track" element={<CareerTrack />} />
         <Route path="/career-track/:careerId" element={<CareerTrack />} />

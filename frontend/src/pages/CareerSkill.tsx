@@ -1,7 +1,9 @@
 import { useEffect, useMemo, useState, useSyncExternalStore, type CSSProperties } from "react";
 import { Link, useParams } from "react-router-dom";
 import AssessmentModal from "../components/assessment/AssessmentModal";
+import OutcomeSignal from "../components/outcomes/OutcomeSignal";
 import type { AvailableAssessment } from "../services/assessment";
+import { getRequirements, type OutcomeOverlay } from "../services/industry";
 import {
   capabilityMapData,
   resultsPageData,
@@ -35,6 +37,8 @@ export default function CareerSkill() {
   const [error, setError] = useState<string | null>(null);
   const [assessing, setAssessing] = useState<AvailableAssessment | null>(null);
   const [refreshing, setRefreshing] = useState(false);
+  // Phase 3: employer demand signal for this skill (context only, may be absent)
+  const [overlay, setOverlay] = useState<OutcomeOverlay | null>(null);
 
   // A new skill page starts at the top, not wherever the previous page was scrolled to
   useEffect(() => {
@@ -53,6 +57,23 @@ export default function CareerSkill() {
 
   const track = useMemo(() => (role && map ? buildTrack({ role, map, analysis: results?.analysis }) : null), [role, map, results]);
   const skill = track?.skills.find((s) => s.id === skillId);
+
+  // Phase 3: load the curated requirements once per role and pick out this
+  // skill's employer-demand overlay, if the backend attached one.
+  useEffect(() => {
+    if (!role) return;
+    let alive = true;
+    getRequirements(role.title)
+      .then((reqs) => {
+        if (!alive) return;
+        const match = reqs.find((r) => r.skill.toLowerCase() === skill?.name.toLowerCase());
+        setOverlay(match?.outcome_overlay ?? null);
+      })
+      .catch(() => undefined);
+    return () => {
+      alive = false;
+    };
+  }, [role, skill?.name]);
 
   // After an assessment, refresh the numbers in place — no page reload
   const refreshAfterAssessment = async () => {
@@ -183,6 +204,8 @@ export default function CareerSkill() {
           <GapBlock skill={skill} />
           <Stats skill={skill} assessment={assessment} />
         </div>
+
+        {overlay && <OutcomeSignal overlay={overlay} />}
 
         <Topics skill={skill} />
 

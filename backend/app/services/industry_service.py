@@ -1971,6 +1971,37 @@ def aggregate_requirements(req_rows: List[dict]) -> List[dict]:
     return aggregated
 
 
+def _attach_outcome_overlays(items: List[dict], canonical_role: str) -> List[dict]:
+    """Phase 3 (Person 2 integration, additive): attach contextual
+    outcome_overlay blocks to curated requirement rows. No curated field is
+    read or written here — overlay keys are new and are dropped by
+    build_requirements_map(), so gap mathematics cannot change. Returns items
+    unchanged when the OUTCOME_OVERLAY_ENABLED flag is off or when outcome
+    intelligence is unavailable (existing curated behavior preserved)."""
+    try:
+        from ..core.config import get_settings
+        if not get_settings().outcome_overlay_enabled:
+            return items
+    except Exception:
+        return items
+    try:
+        from .industry_outcome_service import build_overlay
+    except Exception:
+        return items
+    out: List[dict] = []
+    for it in items or []:
+        try:
+            row = dict(it)
+            canon = normalize_skill(str(row.get("skill", "") or "")) or str(row.get("skill", "") or "")
+            ov = build_overlay(canonical_role, canon)
+            if ov:
+                row["outcome_overlay"] = ov
+            out.append(row)
+        except Exception:
+            out.append(it)
+    return out
+
+
 def list_roles() -> List[str]:
     """
     Return distinct target roles available in industry knowledge.
@@ -2046,6 +2077,9 @@ def list_by_role(role: str) -> List[dict]:
 
     # Aggregate and cache result
     aggregated = aggregate_requirements(matched_rows)
+    # Phase 3: contextual outcome overlay (flag-gated, additive, curated
+    # values untouched). Cached together; refresh busts via clear_industry_cache().
+    aggregated = _attach_outcome_overlays(aggregated, canonical_role)
     _ROLE_REQUIREMENTS_CACHE[canonical_role] = aggregated
     _CACHE_TIMESTAMP = now
 

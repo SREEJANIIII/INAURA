@@ -52,6 +52,15 @@ class Settings(BaseSettings):
     notion_client_secret: str | None = None
     notion_redirect_uri: str = "http://localhost:8000/api/integrations/notion/callback"
     notion_token_encryption_key: str | None = None
+    # Phase 3: employer-outcome overlay on industry reads. Additive contextual
+    # annotation only; gap mathematics never read observed fields. MUST stay
+    # False until the Phase 3F student-impact gate passes.
+    outcome_overlay_enabled: bool = False
+    # Phase 3: refresh endpoint gate. When set, POST
+    # /api/v1/outcomes/observations/refresh requires header
+    # X-Outcome-Refresh-Key to match. When unset the endpoint is disabled
+    # (503) so observations can never be written by ordinary callers.
+    outcome_refresh_key: str | None = None
 
     class Config:
         env_file = ".env"

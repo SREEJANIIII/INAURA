@@ -1,0 +1,160 @@
+/* Person 2: employer & outcomes pages — uses INAURA design tokens, co-located scope */
+.p2 {
+  max-width: 1080px;
+  margin: 0 auto;
+  padding: 2rem 1.5rem 4rem;
+  display: flex;
+  flex-direction: column;
+  gap: 1.75rem;
+}
+
+.p2__head h1 {
+  font-size: 1.6rem;
+  font-weight: 700;
+  margin: 0 0 0.25rem;
+}
+
+.p2__head p {
+  margin: 0;
+  opacity: 0.75;
+}
+
+.p2__error {
+  color: #b3261e;
+  font-weight: 600;
+}
+
+.p2__cols {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 1.5rem;
+}
+
+@media (max-width: 860px) {
+  .p2__cols {
+    grid-template-columns: 1fr;
+  }
+}
+
+.p2__list {
+  list-style: none;
+  margin: 0.75rem 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.4rem;
+}
+
+.p2__pick {
+  width: 100%;
+  text-align: left;
+  background: transparent;
+  border: 1px solid color-mix(in srgb, currentColor 20%, transparent);
+  border-radius: 0.6rem;
+  padding: 0.55rem 0.8rem;
+  cursor: pointer;
+  color: inherit;
+}
+
+.p2__pick.is-active {
+  border-color: var(--accent, #4f7cff);
+  border-width: 2px;
+}
+
+.p2__card {
+  border: 1px solid color-mix(in srgb, currentColor 15%, transparent);
+  border-radius: 0.6rem;
+  padding: 0.55rem 0.8rem;
+}
+
+.p2__form {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+  margin-top: 0.75rem;
+}
+
+.p2__form input {
+  padding: 0.55rem 0.7rem;
+  border-radius: 0.5rem;
+  border: 1px solid color-mix(in srgb, currentColor 25%, transparent);
+  background: transparent;
+  color: inherit;
+}
+
+.p2__row {
+  display: flex;
+  gap: 0.5rem;
+  margin-top: 0.75rem;
+}
+
+.p2__timeline {
+  margin: 0.75rem 0;
+  padding-left: 1.25rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.35rem;
+}
+
+.p2__hint {
+  opacity: 0.7;
+  font-size: 0.9rem;
+}
+
+.p2__funnel {
+  flex-direction: row;
+  flex-wrap: wrap;
+  gap: 0.5rem 1.25rem;
+}
+
+/* Feedback loop panel */
+.fbloop {
+  margin-top: 1.25rem;
+  border-top: 1px solid color-mix(in srgb, currentColor 15%, transparent);
+  padding-top: 1rem;
+}
+
+.fbloop__note {
+  opacity: 0.75;
+  font-size: 0.9rem;
+}
+
+.fbloop__error {
+  color: #b3261e;
+  font-weight: 600;
+}
+
+.fbloop__cols {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 1rem;
+}
+
+@media (max-width: 860px) {
+  .fbloop__cols {
+    grid-template-columns: 1fr;
+  }
+}
+
+.fbloop__list {
+  list-style: none;
+  margin: 0.5rem 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.3rem;
+}
+
+.fbloop__quote {
+  font-style: italic;
+  opacity: 0.85;
+}
+
+.fbloop__cta {
+  color: var(--accent, #4f7cff);
+  font-weight: 600;
+}
+
+.fbloop__wait {
+  opacity: 0.7;
+}
