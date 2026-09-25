@@ -783,3 +783,27 @@
     padding: 2px 4px 22px 19px;
   }
 }
+
+/* Your evidence moved on and the last analysis didn't — said here, right above the button
+   that fixes it, because this is the page where evidence gets added and removed. */
+.ledger__stale {
+  display: flex;
+  gap: 8px;
+  margin: 16px 0 0;
+  padding: 10px 12px;
+  border: 1px solid var(--bad-line);
+  border-radius: 10px;
+  background: var(--bad-bg);
+  font-size: 0.82rem;
+  line-height: 1.45;
+  color: var(--ev-ink-2);
+}
+
+.ledger__stale-dot {
+  flex-shrink: 0;
+  width: 7px;
+  height: 7px;
+  margin-top: 5px;
+  border-radius: 50%;
+  background: var(--bad-ink);
+}

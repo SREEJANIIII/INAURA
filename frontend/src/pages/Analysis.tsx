@@ -1,4 +1,4 @@
-import { useEffect, useLayoutEffect, useState } from "react";
+import { useEffect, useLayoutEffect, useState, useSyncExternalStore } from "react";
 import { useLocation, useNavigate } from "react-router-dom";
 import {
   createEvidence,
@@ -25,6 +25,8 @@ type EvidencePageData = NonNullable<ReturnType<typeof evidencePageData.peek>>;
 import NotionIntegrationCard from "../components/integrations/NotionIntegrationCard";
 import EvidenceSection from "../components/analysis/EvidenceSection";
 import EvidenceLedger, { type LedgerSource } from "../components/analysis/EvidenceLedger";
+import { resultsPageData, subscribePageData } from "../lib/pageData";
+import { freshness } from "../lib/analysisFreshness";
 import "./Analysis.css";
 
 type UrlSource = "github" | "leetcode" | "codeforces" | "kaggle" | "linkedin";
@@ -157,6 +159,9 @@ export default function Analysis() {
     const cachedData = evidencePageData.peek();
     if (cachedData) applyData(cachedData);
     loadAll(false);
+    // The last analysis, so this page can warn when the evidence below has moved past it.
+    // Shared and de-duplicated, so it costs nothing when it's already here.
+    resultsPageData.fetch().catch(() => undefined);
     // eslint-disable-next-line react-hooks/exhaustive-deps -- run once when the page opens
   }, []);
 
@@ -481,6 +486,12 @@ export default function Analysis() {
     analysisDone && analysisState?.updated_at
       ? new Date(analysisState.updated_at).toLocaleDateString(undefined, { day: "numeric", month: "short" })
       : null;
+
+  // This is the page where evidence is added and removed, so it's where the warning belongs.
+  // Subscribed rather than peeked, so it appears when the last analysis arrives, not only
+  // if something else happens to re-render the page afterwards.
+  const lastResults = useSyncExternalStore(subscribePageData, resultsPageData.peek);
+  const stale = freshness({ analysis: lastResults?.analysis, targetRole: targetRole || null });
 
   const runBlocked = !roleDone
     ? "Choose the role you're aiming for first."
@@ -942,6 +953,7 @@ export default function Analysis() {
             running={preparing}
             onRun={handleStartAnalysis}
             blocked={runBlocked}
+            stale={stale.stale && stale.message && stale.action ? { message: stale.message, action: stale.action } : null}
           />
         </div>
 

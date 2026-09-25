@@ -12,6 +12,8 @@ type EvidenceLedgerProps = {
   onRun: () => void;
   /** Why the run button can't be pressed yet, or null when it can */
   blocked: string | null;
+  /** Set when the last analysis no longer matches this evidence or this role */
+  stale?: { message: string; action: string } | null;
 };
 
 /**
@@ -20,7 +22,7 @@ type EvidenceLedgerProps = {
  * The tally is a count and never a score — ten strokes for ten named sources. The page is
  * explicit that this isn't readiness, so it must not look like a percentage or a meter.
  */
-export default function EvidenceLedger({ sources, role, lastRun, running, onRun, blocked }: EvidenceLedgerProps) {
+export default function EvidenceLedger({ sources, role, lastRun, running, onRun, blocked, stale }: EvidenceLedgerProps) {
   const gathered = sources.filter((s) => s.present);
   const missing = sources.filter((s) => !s.present);
 
@@ -49,9 +51,17 @@ export default function EvidenceLedger({ sources, role, lastRun, running, onRun,
         </p>
       )}
 
+      {/* Sits above the button, because the button is the thing it wants you to press */}
+      {stale && !running && (
+        <p className="ledger__stale" role="status">
+          <span aria-hidden="true" className="ledger__stale-dot" />
+          {stale.message}
+        </p>
+      )}
+
       <div className="ledger__run">
         <Button variant="primary" size="md" onClick={onRun} disabled={running || !!blocked}>
-          {running ? "Running…" : lastRun ? "Run analysis again" : "Run analysis"}
+          {running ? "Running…" : stale ? stale.action : lastRun ? "Run analysis again" : "Run analysis"}
         </Button>
         <p className="ledger__run-note">
           {blocked

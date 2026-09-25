@@ -24,6 +24,7 @@ import {
 } from "../components/home/homeModel";
 import RoleSyncNotice from "../components/career-track/RoleSyncNotice";
 import { getRoleSync, rebuildForRole, refreshAnalysis, subscribeRoleSync } from "../lib/roleSync";
+import { freshness, type StaleReason } from "../lib/analysisFreshness";
 import { buildTrack, currentSkill, findRole, roleId } from "../components/career-track/careerTrackModel";
 import { navigateWithTransition, useCountUp, useInViewOnce } from "../components/career-track/motion";
 import { ProgressBar } from "../components/career-track/Progress";
@@ -293,13 +294,9 @@ export default function CareerTrack() {
               current={current?.name ?? null}
               analysedOn={analysis ? new Date(analysis.created_at).toLocaleDateString(undefined, { day: "numeric", month: "short", year: "numeric" }) : null}
               outdated={
-                track.readiness.source !== "analysis" || !analysis
+                track.readiness.source !== "analysis"
                   ? null
-                  : analysis.evidence_changed
-                    ? "evidence"
-                    : analysis.scoring_outdated
-                      ? "scoring"
-                      : null
+                  : freshness({ analysis, targetRole: targetTitle }).reason
               }
               onRefresh={() => refreshAnalysis(track.title)}
               isTarget={!!targetTitle && targetTitle.toLowerCase() === track.title.toLowerCase()}
@@ -365,7 +362,7 @@ function HomeHeader({
   current: string | null;
   analysedOn: string | null;
   /** Why the analysis's readiness no longer holds, if it doesn't */
-  outdated: "evidence" | "scoring" | null;
+  outdated: StaleReason | null;
   onRefresh: () => void;
   isTarget: boolean;
   onChange: () => void;
@@ -431,7 +428,9 @@ function HomeHeader({
             <p>
               {outdated === "evidence"
                 ? "Your evidence has changed since this analysis."
-                : "INAURA’s readiness scoring has been improved since this analysis."}{" "}
+                : outdated === "role"
+                  ? "This analysis was run against a different role."
+                  : "INAURA’s readiness scoring has been improved since this analysis."}{" "}
               Re-run it to update this score.
             </p>
             <Button variant="secondary" size="sm" onClick={onRefresh} disabled={rerunning}>

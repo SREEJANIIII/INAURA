@@ -1,0 +1,14 @@
+{
+  /*
+   * The tests were not type-checked by anything, so a test could call a function with the
+   * wrong argument and still pass — the runner strips types rather than checking them.
+   * This project puts them under `tsc -b` with the source.
+   */
+  "extends": "./tsconfig.app.json",
+  "compilerOptions": {
+    "tsBuildInfoFile": "./node_modules/.tmp/tsconfig.test.tsbuildinfo",
+    "types": ["node", "vite/client"],
+    "lib": ["ES2023", "DOM"]
+  },
+  "include": ["tests", "src"]
+}

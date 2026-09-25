@@ -1374,3 +1374,9 @@ body::after {
 :root[data-theme="dark"] .revision-next {
   color: #1b1526 !important;
 }
+
+/* The stale-analysis mark needs to stay legible on the dark sidebar */
+:root[data-theme="dark"] .sidebar__dot {
+  background: #f87171;
+  box-shadow: 0 0 0 3px rgba(248, 113, 113, 0.2);
+}

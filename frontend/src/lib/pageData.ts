@@ -3,7 +3,7 @@
  * instantly while fresh data is fetched in the background.
  */
 import { getLatestAnalysis, getGaps, type SkillGap } from "../services/analysis";
-import { getAvailableAssessments } from "../services/assessment";
+import { getAvailableAssessments, getDsaChecklist } from "../services/assessment";
 import {
   listCerts,
   listEvidence,
@@ -78,12 +78,15 @@ export const roadmapPageData = cached("roadmap-page", async () => {
 
 export const roleCatalogData = cached("role-catalog", getRolesCatalog);
 
+/** The DSA question bank and what you've solved — Revision builds cards from it */
+export const dsaChecklistData = cached("dsa-checklist", getDsaChecklist);
+
 /** Career Track: the capability map for one role (skills, progress, topics) */
 export const capabilityMapData = cachedByKey("capability-map", (role) => getCapabilityMap({ target_role: role }));
 
 /** Warm up every sidebar page in the background right after login. */
 export function preloadPageData() {
-  for (const d of [profileData, roleCatalogData, evidencePageData, resultsPageData, roadmapPageData]) {
+  for (const d of [profileData, roleCatalogData, evidencePageData, resultsPageData, roadmapPageData, dsaChecklistData]) {
     d.fetch().catch(() => {
       // the page itself shows the error when opened
     });

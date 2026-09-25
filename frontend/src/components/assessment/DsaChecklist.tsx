@@ -1,12 +1,12 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import {
-  getDsaChecklist,
   toggleDsaQuestion,
   syncDsaLeetCode,
   importDsaSolvedText,
   type DsaQuestion,
   type DsaChecklistMetrics,
 } from "../../services/assessment";
+import { dsaChecklistData } from "../../lib/pageData";
 import "./DsaChecklist.css";
 
 const LOCAL_STORAGE_KEY = "inaura_dsa_solved_ids";
@@ -59,7 +59,9 @@ export default function DsaChecklist({ onProgressUpdate }: Props) {
   // Fetch from backend
   useEffect(() => {
     let active = true;
-    getDsaChecklist()
+    // The shared copy, so opening this page twice doesn't re-ask the server
+    dsaChecklistData
+      .fetch()
       .then((res) => {
         if (!active) return;
         setQuestions(res.questions);
@@ -125,7 +127,7 @@ export default function DsaChecklist({ onProgressUpdate }: Props) {
       const res = await syncDsaLeetCode(syncUsername);
       if (res.success) {
         if (res.metrics) setMetrics(res.metrics);
-        const updated = await getDsaChecklist();
+        const updated = await dsaChecklistData.fetch(true);
         const nextSet = new Set(updated.solved_ids || []);
         setSolvedIds(nextSet);
         setCachedSolved(nextSet);
@@ -165,7 +167,7 @@ export default function DsaChecklist({ onProgressUpdate }: Props) {
       const res = await importDsaSolvedText(importText);
       if (res.success) {
         if (res.metrics) setMetrics(res.metrics);
-        const updated = await getDsaChecklist();
+        const updated = await dsaChecklistData.fetch(true);
         const nextSet = new Set(updated.solved_ids || []);
         setSolvedIds(nextSet);
         setCachedSolved(nextSet);

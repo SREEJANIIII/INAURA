@@ -2,6 +2,8 @@ import { useState, useSyncExternalStore, type ReactNode } from "react";
 import { Link, useLocation, useNavigate } from "react-router-dom";
 import { useAuth } from "../../context/AuthContext";
 import { ANALYSIS_SECTION_IDS, getActiveSection, subscribeActiveSection } from "../../lib/sectionSpy";
+import { analysisStateData, evidencePageData, resultsPageData, subscribePageData } from "../../lib/pageData";
+import { freshness, staleLabel } from "../../lib/analysisFreshness";
 import "./Sidebar.css";
 
 type NavItem = { label: string; to: string; icon?: ReactNode; children?: NavItem[]; soon?: boolean };
@@ -28,11 +30,12 @@ const items: NavItem[] = [
     to: "/analysis/results",
     icon: <Icon><path d="M4 20.5h16" /><rect x="5.5" y="11" width="3" height="6.5" rx="1" /><rect x="10.5" y="6.5" width="3" height="11" rx="1" /><rect x="15.5" y="13.5" width="3" height="4" rx="1" /></Icon>,
     children: [
+      // Named as the results page names its own sections, so the sidebar and the page agree
       { label: "Priority Gaps", to: "/analysis/results#priority-gaps" },
-      { label: "Evidence Gaps · Missing Independent Proof", to: "/analysis/results#evidence-gaps" },
-      { label: "Confidence-Aware Skill Quadrants", to: "/analysis/results#skill-quadrants" },
-      { label: "Skill Overview — Target-Role Requirements", to: "/analysis/results#skill-overview" },
-      { label: "Evidence Sources — Personalization Controls", to: "/analysis/results#evidence-sources" },
+      { label: "Evidence Gaps", to: "/analysis/results#evidence-gaps" },
+      { label: "Skill Quadrants", to: "/analysis/results#skill-quadrants" },
+      { label: "Skill Overview", to: "/analysis/results#skill-overview" },
+      { label: "Evidence Sources", to: "/analysis/results#evidence-sources" },
     ],
   },
   {
@@ -120,6 +123,16 @@ export default function Sidebar({ open, onNavigate }: SidebarProps) {
   const { signOut } = useAuth();
   const [loggingOut, setLoggingOut] = useState(false);
   const onScreen = useSyncExternalStore(subscribeActiveSection, getActiveSection);
+
+  // Change your evidence or your role and the results stop describing you. The dot says so
+  // from wherever you are, because the page that's now wrong is one you may not be looking at.
+  const results = useSyncExternalStore(subscribePageData, resultsPageData.peek);
+  const analysisState = useSyncExternalStore(subscribePageData, analysisStateData.peek);
+  const evidence = useSyncExternalStore(subscribePageData, evidencePageData.peek);
+  const stale = freshness({
+    analysis: results?.analysis,
+    targetRole: (analysisState ?? evidence?.analysisState)?.target_role,
+  });
   const onAnalysisPage = pathname === RESULTS_PATH && !["#dsa", "#skill-assessments"].includes(hash);
   // Start with the current page's group open, so you can see where you are
   const [expanded, setExpanded] = useState<string | null>(() =>
@@ -183,6 +196,11 @@ export default function Sidebar({ open, onNavigate }: SidebarProps) {
               >
                 {item.icon}
                 <span className="sidebar__text">{item.label}</span>
+                {stale.stale && item.to === RESULTS_PATH && (
+                  <span className="sidebar__dot" title={staleLabel(stale.reason)}>
+                    <span className="sidebar__visually-hidden">{staleLabel(stale.reason)} — run the analysis again</span>
+                  </span>
+                )}
                 <svg className="sidebar__chevron" width="14" height="14" viewBox="0 0 14 14" aria-hidden="true">
                   <path d="M3.5 5.25 7 8.75l3.5-3.5" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" />
                 </svg>
