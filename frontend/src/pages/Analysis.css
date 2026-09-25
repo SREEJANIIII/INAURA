@@ -736,6 +736,27 @@
   color: var(--ev-ink-3);
 }
 
+.ledger__error {
+  margin: 0;
+  padding: 8px 10px;
+  border: 1px solid var(--bad-line);
+  border-radius: 8px;
+  background: var(--bad-bg);
+  color: var(--bad-ink);
+  font-size: 0.82rem;
+  line-height: 1.45;
+}
+
+/* While the evidence loads: the shape of the source list, not a line of text */
+.analysis__skeleton {
+  height: 360px;
+  margin-top: 8px;
+  border-radius: 14px;
+  background: linear-gradient(90deg, rgba(22, 28, 46, 0.045), rgba(22, 28, 46, 0.08), rgba(22, 28, 46, 0.045));
+  background-size: 200% 100%;
+  animation: app-shimmer 1.4s ease-in-out infinite;
+}
+
 .analysis__confirm {
   margin-top: 18px;
   padding: 16px 18px;

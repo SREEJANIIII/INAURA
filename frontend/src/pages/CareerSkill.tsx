@@ -128,7 +128,7 @@ export default function CareerSkill() {
 
         <div className="ct-actions ct-rise" style={{ "--d": 3 } as CSSProperties}>
           {roadmapTask ? (
-            <Button asChild variant="primary" className="h-auto min-h-10 flex-col py-2">
+            <Button asChild variant="primary" className="ib--stacked">
               <Link to="/roadmap">
                 Continue learning
                 <span className="ct-btn__sub">Week {roadmapTask.week.week_number}: {roadmapTask.task.title}</span>

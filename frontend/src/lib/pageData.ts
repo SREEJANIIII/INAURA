@@ -3,7 +3,7 @@
  * instantly while fresh data is fetched in the background.
  */
 import { getLatestAnalysis, getGaps, type SkillGap } from "../services/analysis";
-import { getAvailableAssessments, getDsaChecklist } from "../services/assessment";
+import { getAvailableAssessments, getDsaChecklist, type AvailableAssessment } from "../services/assessment";
 import {
   listCerts,
   listEvidence,
@@ -47,6 +47,16 @@ export const evidencePageData = cached("evidence-page", async () => {
   return { evidence, projects, certs, roles, analysisState, profile };
 });
 
+/**
+ * The skills INAURA suggests proving. Kept apart from the analysis bundle so Skill Assessment
+ * still opens for someone who hasn't run an analysis yet.
+ */
+export const assessmentsData = cached("assessments", () =>
+  getAvailableAssessments()
+    .then((d) => d.available || [])
+    .catch(() => [] as AvailableAssessment[])
+);
+
 export const resultsPageData = cached("results-page", async () => {
   const [analysis, gaps, evidence, projects, githubRepos, assessable] = await Promise.all([
     getLatestAnalysis(),
@@ -54,9 +64,8 @@ export const resultsPageData = cached("results-page", async () => {
     listEvidence().catch(() => [] as Evidence[]),
     listProjects().catch(() => [] as Project[]),
     listGithubRepos().catch(() => [] as GithubRepo[]),
-    getAvailableAssessments()
-      .then((d) => d.available || [])
-      .catch(() => []),
+    // Fresh whenever the results are, and shared with the Skill Assessment page
+    assessmentsData.fetch(true),
   ]);
   return { analysis, gaps, evidence, projects, githubRepos, assessable };
 });

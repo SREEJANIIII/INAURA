@@ -1,9 +1,20 @@
-import { Navigate } from "react-router-dom";
+import { Navigate, useLocation } from "react-router-dom";
 import { useAuth } from "../../context/AuthContext";
+import { returnPath } from "../../lib/authRedirect";
 import type { ReactNode } from "react";
+
+function Checking() {
+  return (
+    <div className="session-check" role="status" aria-live="polite">
+      <span className="session-check__spin" aria-hidden="true" />
+      Checking your session…
+    </div>
+  );
+}
 
 export function ProtectedRoute({ children }: { children: ReactNode }) {
   const { user, loading, isConfigured } = useAuth();
+  const location = useLocation();
 
   if (!isConfigured) {
     return (
@@ -17,16 +28,11 @@ export function ProtectedRoute({ children }: { children: ReactNode }) {
     );
   }
 
-  if (loading) {
-    return (
-      <div style={{ padding: "4rem 1.5rem", textAlign: "center", color: "var(--muted-2)" }}>
-        Checking session…
-      </div>
-    );
-  }
+  if (loading) return <Checking />;
 
   if (!user) {
-    return <Navigate to="/login" replace />;
+    // Remember the page, so a link shared to a logged-out student still ends up there
+    return <Navigate to="/login" replace state={{ from: location }} />;
   }
 
   return <>{children}</>;
@@ -34,18 +40,13 @@ export function ProtectedRoute({ children }: { children: ReactNode }) {
 
 export function GuestOnly({ children }: { children: ReactNode }) {
   const { user, loading, isConfigured } = useAuth();
+  const location = useLocation();
 
-  if (loading) {
-    return (
-      <div style={{ padding: "4rem 1.5rem", textAlign: "center", color: "var(--muted-2)" }}>
-        Checking session…
-      </div>
-    );
-  }
+  if (loading) return <Checking />;
 
   // If Supabase not configured, allow guest pages to render (show config warning inside)
   if (isConfigured && user) {
-    return <Navigate to="/dashboard" replace />;
+    return <Navigate to={returnPath(location.state)} replace />;
   }
 
   return <>{children}</>;

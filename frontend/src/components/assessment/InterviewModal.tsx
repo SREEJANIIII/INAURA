@@ -14,6 +14,7 @@ import { useInterviewAudioCapture } from "../../hooks/useInterviewAudioCapture";
 import { useTextToSpeech } from "../../hooks/useTextToSpeech";
 import { withTimeout } from "../../services/tts";
 import "./InterviewModal.css";
+import { friendlyError } from "../../lib/errors";
 
 type Props = {
   skill: string;
@@ -425,7 +426,7 @@ export default function InterviewModal({ skill, onClose, onCompleted }: Props) {
       await speakThenListen(greeting);
     } catch (e) {
       if (!interviewActiveRef.current) return;
-      setError(e instanceof Error ? e.message : "Could not start the interview");
+      setError(friendlyError(e, "Could not start the interview"));
       setPhase("error");
       setLoading(false);
       interviewActiveRef.current = false;

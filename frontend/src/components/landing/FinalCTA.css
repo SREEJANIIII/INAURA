@@ -95,13 +95,16 @@
   flex-wrap: wrap;
 }
 
-.final__primary {
+.ib.final__primary {
   color: #1e1b4b;
+  border-color: transparent;
+  border-radius: var(--radius-full);
   background: linear-gradient(180deg, #ffffff, #e8e9ff);
   box-shadow: 0 10px 30px -12px rgba(165, 180, 252, 0.55);
 }
 
-.final__primary:hover {
+.ib.final__primary:hover {
+  color: #1e1b4b;
   background: linear-gradient(180deg, #ffffff, #f1f2ff);
 }
 

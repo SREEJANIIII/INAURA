@@ -8,6 +8,7 @@ import {
 } from "../../services/assessment";
 import { dsaChecklistData } from "../../lib/pageData";
 import "./DsaChecklist.css";
+import { friendlyError } from "../../lib/errors";
 
 const LOCAL_STORAGE_KEY = "inaura_dsa_solved_ids";
 
@@ -74,7 +75,7 @@ export default function DsaChecklist({ onProgressUpdate }: Props) {
         setError(null);
       })
       .catch((e) => {
-        if (active) setError(e instanceof Error ? e.message : "Failed to load DSA checklist");
+        if (active) setError(friendlyError(e, "Failed to load DSA checklist"));
       })
       .finally(() => {
         if (active) setLoading(false);
@@ -152,7 +153,7 @@ export default function DsaChecklist({ onProgressUpdate }: Props) {
     } catch (e) {
       setSyncModalMessage({
         type: "error",
-        text: e instanceof Error ? e.message : "Failed to sync with LeetCode. Please check your username.",
+        text: friendlyError(e, "Failed to sync with LeetCode. Please check your username."),
       });
     } finally {
       setSyncLoading(false);
@@ -189,7 +190,7 @@ export default function DsaChecklist({ onProgressUpdate }: Props) {
     } catch (e) {
       setSyncModalMessage({
         type: "error",
-        text: e instanceof Error ? e.message : "Failed to import questions. Please check the text.",
+        text: friendlyError(e, "Failed to import questions. Please check the text."),
       });
     } finally {
       setSyncLoading(false);

@@ -399,6 +399,18 @@
   color: var(--rev-ink-3);
 }
 
+.rev-open__next {
+  margin: 18px 0 0;
+  font-size: 0.86rem;
+  color: var(--rev-ink-3);
+}
+
+.rev-open__next a {
+  color: var(--rev-accent);
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+
 .rev-open__row {
   display: flex;
   gap: 10px;
@@ -459,7 +471,10 @@
   list-style: none;
   margin: 0;
   padding: 0;
-  flex: 1;
+  /* A real basis, so on a narrow screen the chips drop to their own full-width line
+     instead of stacking one per row beside the label */
+  flex: 1 1 280px;
+  min-width: 0;
 }
 
 .rev-focus li {

@@ -1,0 +1,152 @@
+/* INAURA's shared button (components/ui/app-button.tsx). Colours come from the design tokens
+   in index.css, so the night theme restates them once there instead of per button. */
+
+.ib {
+  --ib-bg: var(--btn-accent);
+  --ib-fg: var(--btn-accent-ink);
+  --ib-edge: var(--btn-accent);
+  --ib-hover-bg: var(--btn-accent-hover);
+
+  appearance: none;
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.45rem;
+  flex-shrink: 0;
+  max-width: 100%;
+  border: 1px solid var(--ib-edge);
+  border-radius: 8px;
+  background: var(--ib-bg);
+  color: var(--ib-fg);
+  font-family: var(--sans);
+  font-weight: 600;
+  letter-spacing: -0.01em;
+  line-height: 1.15;
+  text-align: center;
+  text-decoration: none;
+  white-space: nowrap;
+  cursor: pointer;
+  user-select: none;
+  -webkit-tap-highlight-color: transparent;
+  transition:
+    background-color 0.16s var(--ease-out),
+    border-color 0.16s var(--ease-out),
+    color 0.16s var(--ease-out),
+    box-shadow 0.16s var(--ease-out),
+    transform 0.12s var(--ease-out);
+}
+
+.ib:hover {
+  background: var(--ib-hover-bg);
+  color: var(--ib-fg);
+}
+
+/* A link styled as a button keeps the button's colours, whatever the page says links look
+   like (several pages set every link to inherit, and their CSS loads after this file) */
+a.ib[data-slot="button"],
+a.ib[data-slot="button"]:hover,
+a.ib[data-slot="button"]:visited {
+  color: var(--ib-fg);
+  text-decoration: none;
+}
+
+/* A press you can feel, without the layout moving */
+.ib:active:not(:disabled) {
+  transform: translateY(1px);
+}
+
+.ib:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+.ib:disabled,
+.ib[aria-disabled="true"] {
+  cursor: not-allowed;
+  opacity: 0.5;
+}
+
+.ib svg {
+  width: 1em;
+  height: 1em;
+  flex-shrink: 0;
+}
+
+/* ---------- Variants ---------- */
+
+.ib--primary {
+  box-shadow: 0 1px 2px rgba(22, 28, 46, 0.12);
+}
+
+.ib--secondary {
+  --ib-bg: var(--paper);
+  --ib-fg: var(--ink);
+  --ib-edge: var(--line-strong);
+  --ib-hover-bg: var(--paper-2);
+}
+
+.ib--secondary:hover {
+  border-color: var(--btn-secondary-hover-edge);
+}
+
+.ib--ghost {
+  --ib-bg: transparent;
+  --ib-fg: var(--ink-700);
+  --ib-edge: transparent;
+  --ib-hover-bg: var(--hover-tint);
+}
+
+/* A title with a second line under it, e.g. "Continue learning / Week 2: …" */
+.ib.ib--stacked {
+  flex-direction: column;
+  gap: 2px;
+  padding-block: 8px;
+  white-space: normal;
+}
+
+/* ---------- Sizes (heights meet the 32/40/48 touch steps) ---------- */
+
+.ib--sm {
+  min-height: 32px;
+  padding: 0 12px;
+  font-size: 0.8125rem;
+}
+
+.ib--md {
+  min-height: 40px;
+  padding: 0 16px;
+  font-size: 0.875rem;
+}
+
+.ib--lg {
+  min-height: 48px;
+  padding: 0 22px;
+  font-size: 0.95rem;
+}
+
+/* On a phone, a small button is still a thumb's width tall */
+@media (pointer: coarse) {
+  .ib--sm {
+    min-height: 36px;
+  }
+}
+
+/* Destructive: said in red, never filled red — it's a decision, not an alarm */
+.ib.ib--danger {
+  --ib-fg: var(--bad-ink);
+  --ib-edge: var(--bad-line);
+  --ib-hover-bg: var(--bad-bg);
+}
+
+.ib.ib--danger:hover {
+  border-color: var(--bad-ink);
+}
+
+/* "Yes, remove" + "Cancel", in the place the single button was */
+.confirm-inline {
+  display: inline-flex;
+  flex-shrink: 0;
+  align-items: center;
+  gap: 6px;
+}

@@ -9,6 +9,7 @@ import {
   type SkillCapability,
 } from "../services/capability";
 import "./CapabilityMap.css";
+import { friendlyError } from "../lib/errors";
 
 const STATUS_LABELS: Record<string, string> = {
   demonstrated: "Demonstrated",
@@ -398,7 +399,7 @@ export default function CapabilityMap() {
       setSummary(data.summary);
       setSelectedSkill(null);
     } catch (e) {
-      setError(e instanceof Error ? e.message : "Failed to load capability map");
+      setError(friendlyError(e, "Failed to load capability map"));
       setSkills([]);
       setSummary(null);
       setSelectedSkill(null);
@@ -473,7 +474,7 @@ export default function CapabilityMap() {
         </div>
       </header>
 
-      <main className="container results__main">
+      <div className="container results__main">
         {loading && (
           <div style={{ padding: "2rem 0", textAlign: "center", color: "var(--muted-2)" }}>
             Loading capability map…
@@ -575,7 +576,7 @@ export default function CapabilityMap() {
             unchanged — this map explains, it does not rescore.
           </p>
         )}
-      </main>
+      </div>
     </div>
   );
 }

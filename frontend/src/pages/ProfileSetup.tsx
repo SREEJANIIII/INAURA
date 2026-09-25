@@ -127,7 +127,7 @@ export default function ProfileSetup() {
     try {
       await createProfile(form);
       setSuccess(true);
-      setTimeout(() => nav("/dashboard", { replace: true }), 1200);
+      setTimeout(() => nav("/career-track", { replace: true }), 1200);
     } catch (e) {
       const msg = e instanceof Error ? e.message : "Failed to save profile";
       if (msg.includes("401") || msg.toLowerCase().includes("not authenticated")) {

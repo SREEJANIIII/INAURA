@@ -8,7 +8,7 @@
 .ct {
   --ct-paper: rgba(255, 255, 255, 0.4);
   --ct-surface: var(--glass-bg);
-  --ct-hover: rgba(255, 255, 255, 0.55);
+  --ct-hover: var(--hover-tint);
   --ct-ink: #171b2f;
   --ct-ink-2: #474b5e;
   --ct-ink-3: #7a7d8c;

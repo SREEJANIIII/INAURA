@@ -499,11 +499,16 @@ Personalized learning plan
 Inaura/
 ├── frontend/          # React + Vite + TypeScript
 │   ├── src/
-│   │   ├── pages/          Landing.tsx, Home.tsx, ProfileSetup.tsx, Analysis.tsx, AnalysisResults.tsx, Roadmap.tsx, Dashboard.tsx, Login.tsx, Signup.tsx
-│   │   ├── components/
-│   │   ├── pages/
-│   │   ├── services/  # api.ts, healthService etc.
-│   │   └── ...
+│   │   ├── pages/        # one file per screen, each loaded on demand:
+│   │   │                 # CareerTrack (home), CareerSkill, Analysis (Evidence),
+│   │   │                 # AnalysisResults (Analysis), SkillAssessment, Roadmap,
+│   │   │                 # Revision, Interview, AtsTester, Profile, ProfileSetup,
+│   │   │                 # Landing, Login, Signup, ResetPassword, NotFound
+│   │   ├── components/   # layout (top bar, sidebar), ui (shared button, dialogs), …
+│   │   ├── lib/          # shared page data, errors, analysis freshness, revision
+│   │   ├── services/     # api.ts and one client per backend area
+│   │   └── index.css     # design tokens: warm paper, ink, one accent
+│   ├── tests/            # node --test unit tests (npm test)
 │   └── vite.config.ts # proxy /api -> FastAPI
 └── backend/           # FastAPI + Python
     ├── app/
@@ -560,6 +565,15 @@ VITE_API_URL=http://localhost:8000/api/v1
 ```
 
 Vite dev proxy also forwards `/api` to `http://localhost:8000` for local dev without CORS.
+
+#### Supabase Auth settings the frontend relies on
+
+In the Supabase dashboard → **Authentication → URL Configuration**, add these to
+**Redirect URLs** (for each place the app runs, e.g. `http://localhost:5173` and the
+deployed domain):
+
+- `<site>/reset-password` — the "Forgot password?" email lands here to set a new password
+- `<site>/career-track` — where Google/GitHub sign-in returns
 
 ## INTERVIEW VOICE (NVIDIA TTS via backend, no browser speech)
 

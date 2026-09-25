@@ -1,63 +1,56 @@
-import { lazy, Suspense } from "react";
+import { lazy, Suspense, type ReactNode } from "react";
 import { Navigate, Routes, Route } from "react-router-dom";
-import Home from "./pages/Home";
-import ProfileSetup from "./pages/ProfileSetup";
-import Profile from "./pages/Profile";
-import CareerTrack from "./pages/CareerTrack";
-import CareerSkill from "./pages/CareerSkill";
-import Analysis from "./pages/Analysis";
-import AnalysisResults from "./pages/AnalysisResults";
-import CapabilityMap from "./pages/CapabilityMap";
-import Roadmap from "./pages/Roadmap";
-import AIReviewTest from "./pages/AIReviewTest";
-import Interview from "./pages/Interview";
-import AtsTester from "./pages/AtsTester";
-import Revision from "./pages/Revision";
 import { ProtectedRoute, GuestOnly } from "./components/auth/ProtectedRoute";
 import AppLayout from "./components/layout/AppLayout";
+import NotFound from "./pages/NotFound";
 
-// The landing page carries the liquid metal hero (animation + 3D shader libraries), so it loads
-// separately: students opening the app after login never download that code
+// Every page is its own download, so a student opening Career Track on a phone doesn't wait
+// for the interview recorder, the ATS tester or the landing page's 3D hero.
 const Landing = lazy(() => import("./pages/Landing"));
-// Same for sign-up and login (animation, confetti and icon libraries)
 const Signup = lazy(() => import("./pages/Signup"));
 const Login = lazy(() => import("./pages/Login"));
+const ResetPassword = lazy(() => import("./pages/ResetPassword"));
+const Home = lazy(() => import("./pages/Home"));
+const ProfileSetup = lazy(() => import("./pages/ProfileSetup"));
+const Profile = lazy(() => import("./pages/Profile"));
+const CareerTrack = lazy(() => import("./pages/CareerTrack"));
+const CareerSkill = lazy(() => import("./pages/CareerSkill"));
+const Analysis = lazy(() => import("./pages/Analysis"));
+const AnalysisResults = lazy(() => import("./pages/AnalysisResults"));
+const CapabilityMap = lazy(() => import("./pages/CapabilityMap"));
+const SkillAssessment = lazy(() => import("./pages/SkillAssessment"));
+const Roadmap = lazy(() => import("./pages/Roadmap"));
+const AIReviewTest = lazy(() => import("./pages/AIReviewTest"));
+const Interview = lazy(() => import("./pages/Interview"));
+const AtsTester = lazy(() => import("./pages/AtsTester"));
+const Revision = lazy(() => import("./pages/Revision"));
+
+/** Pages outside the app frame load without a placeholder: they're quick and full-screen */
+const Bare = ({ children }: { children: ReactNode }) => <Suspense fallback={null}>{children}</Suspense>;
 
 export default function App() {
   return (
     <Routes>
-      <Route path="/" element={<Suspense fallback={null}><Landing /></Suspense>} />
+      <Route path="/" element={<Bare><Landing /></Bare>} />
       {/* Dev health check */}
-      <Route path="/health" element={<Home />} />
+      <Route path="/health" element={<Bare><Home /></Bare>} />
 
-      {/* Auth — guest only (redirects to /dashboard if already logged in) */}
-      <Route
-        path="/login"
-        element={
-          <GuestOnly>
-            <Suspense fallback={null}><Login /></Suspense>
-          </GuestOnly>
-        }
-      />
-      <Route
-        path="/signup"
-        element={
-          <GuestOnly>
-            <Suspense fallback={null}><Signup /></Suspense>
-          </GuestOnly>
-        }
-      />
+      {/* Auth — guest only (sends a signed-in visitor on to where they were going) */}
+      <Route path="/login" element={<GuestOnly><Bare><Login /></Bare></GuestOnly>} />
+      <Route path="/signup" element={<GuestOnly><Bare><Signup /></Bare></GuestOnly>} />
+      {/* The password-reset email lands here, signed in by the link itself */}
+      <Route path="/reset-password" element={<Bare><ResetPassword /></Bare>} />
 
       {/* Protected */}
       <Route
         path="/profile/setup"
         element={
           <ProtectedRoute>
-            <ProfileSetup />
+            <Bare><ProfileSetup /></Bare>
           </ProtectedRoute>
         }
       />
-      {/* Logged-in pages share the top bar + sidebar */}
+      {/* Logged-in pages share the top bar + sidebar; AppLayout shows a placeholder while each loads */}
       <Route
         element={
           <ProtectedRoute>
@@ -71,6 +64,8 @@ export default function App() {
         <Route path="/analysis" element={<Analysis />} />
         <Route path="/analysis/results" element={<AnalysisResults />} />
         <Route path="/analysis/capabilities" element={<CapabilityMap />} />
+        <Route path="/skill-assessment" element={<SkillAssessment view="skills" />} />
+        <Route path="/skill-assessment/dsa" element={<SkillAssessment view="dsa" />} />
         <Route path="/roadmap" element={<Roadmap />} />
         <Route path="/revision" element={<Revision />} />
         {/* Career Track: one page per career and one per skill, rendered from the role's data */}
@@ -86,17 +81,7 @@ export default function App() {
         <Route path="/ai-review-test" element={<AIReviewTest />} />
       </Route>
 
-      <Route
-        path="*"
-        element={
-          <div style={{ padding: "4rem 1.5rem", textAlign: "center" }}>
-            <h2 style={{ fontSize: "1.4rem", fontWeight: 700 }}>404 — Not found</h2>
-            <a href="/" style={{ color: "var(--accent)", fontWeight: 600 }}>
-              Go home
-            </a>
-          </div>
-        }
-      />
+      <Route path="*" element={<NotFound />} />
     </Routes>
   );
 }

@@ -1,7 +1,9 @@
 import type { CSSProperties } from "react";
-import { Link, useNavigate } from "react-router-dom";
+import { Link, useLocation, useNavigate } from "react-router-dom";
 import { useAuth } from "../context/AuthContext";
 import { getProfile } from "../services/profile";
+import { returnPath } from "../lib/authRedirect";
+import { statusOf } from "../lib/errors";
 import { AuthComponent, type SignUpResult } from "@/components/ui/sign-up";
 
 function validateEmail(v: string) {
@@ -11,6 +13,8 @@ function validateEmail(v: string) {
 export default function Login() {
   const { signIn, resetPassword, signInWithProvider, isConfigured } = useAuth();
   const nav = useNavigate();
+  // Where they were headed before being asked to log in
+  const location = useLocation();
 
   // Signs in, then sends the student to profile setup or their career track
   const handleLogIn = async (email: string, password: string): Promise<SignUpResult> => {
@@ -31,22 +35,22 @@ export default function Login() {
 
     try {
       await getProfile();
-      nav("/dashboard", { replace: true });
+      nav(returnPath(location.state), { replace: true });
       return { error: null, message: "Welcome back!" };
     } catch (err) {
       const m = err instanceof Error ? err.message : "";
       const lower = m.toLowerCase();
-      if (m.includes("404") || lower.includes("not found")) {
+      if (statusOf(err) === 404 || lower.includes("not found")) {
         nav("/profile/setup", { replace: true });
         return { error: null, message: "Welcome! Let’s set up your profile." };
       }
-      if (m.includes("401") || lower.includes("not authenticated") || lower.includes("invalid token")) {
-        return { error: "Session expired. Please log in again." };
+      if (statusOf(err) === 401 || lower.includes("not authenticated") || lower.includes("invalid token")) {
+        return { error: "Your session couldn't be started. Please log in again." };
       }
-      if (m.includes("503") || lower.includes("supabase not configured") || lower.includes("permission denied")) {
-        return { error: "Database not configured. Please contact support or check backend Supabase settings." };
+      if (statusOf(err) === 0) {
+        return { error: "You're logged in, but INAURA's server can't be reached right now. Try again in a moment." };
       }
-      return { error: "Could not verify your profile. Please try again." };
+      return { error: "You're logged in, but your profile couldn't be loaded. Please try again." };
     }
   };
 

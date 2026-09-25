@@ -24,7 +24,23 @@ ALLOWED_FILE_TYPES = {
     "application/vnd.openxmlformats-officedocument.wordprocessingml.document": ".docx",
 }
 ALLOWED_EXTS = {".pdf", ".doc", ".docx"}
+CONTENT_TYPE_FOR_EXT = {ext: ctype for ctype, ext in ALLOWED_FILE_TYPES.items()}
 MAX_SIZE = 10 * 1024 * 1024  # 10 MB
+
+
+def sniff_document_type(content: bytes) -> Optional[str]:
+    """The extension a document's own bytes say it is: .pdf, .doc or .docx — or None."""
+    head = content[:1024]
+    # PDF readers accept a few stray bytes before the header, so look near the start
+    if b"%PDF-" in head:
+        return ".pdf"
+    # Legacy Word files are OLE2 compound documents
+    if head.startswith(b"\xd0\xcf\x11\xe0\xa1\xb1\x1a\xe1"):
+        return ".doc"
+    # .docx is a zip archive; its directory (at the end of the file) lists a word/ folder
+    if head.startswith(b"PK\x03\x04") and b"word/" in content:
+        return ".docx"
+    return None
 _IN_FLIGHT_VERIFICATIONS: Dict[str, asyncio.Task] = {}
 
 
@@ -393,31 +409,31 @@ async def upload_file(user_id: str, evidence_type: str, file: UploadFile) -> tup
         ext = "." + (file.filename or "").split(".")[-1].lower() if file.filename and "." in file.filename else ""
         if ext not in ALLOWED_EXTS:
             raise HTTPException(status_code=400, detail="Invalid file type. Allowed: PDF, DOC, DOCX")
-    content = await file.read()
+    # Read one byte past the limit rather than the whole upload, so an oversized file is
+    # refused without first being held in memory
+    content = await file.read(MAX_SIZE + 1)
     if len(content) > MAX_SIZE:
-        raise HTTPException(status_code=400, detail="File too large. Max 10 MB")
+        raise HTTPException(status_code=413, detail="File too large. Max 10 MB")
     if len(content) == 0:
         raise HTTPException(status_code=400, detail="Empty file")
 
-    ext = ALLOWED_FILE_TYPES.get(file.content_type or "", "")
-    if not ext and file.filename and "." in file.filename:
-        ext = "." + file.filename.split(".")[-1].lower()
-        if ext not in ALLOWED_EXTS:
-            ext = ".pdf"
-    if not ext:
-        ext = ".pdf"
+    # The name and the browser's content type are both the uploader's say-so; the bytes aren't
+    ext = sniff_document_type(content)
+    if ext is None:
+        raise HTTPException(status_code=400, detail="That file isn't a real PDF, DOC or DOCX. Save it as a PDF and try again.")
+    content_type = CONTENT_TYPE_FOR_EXT[ext]
 
     filename = f"{uuid.uuid4().hex}{ext}"
     storage_path = f"{user_id}/{evidence_type}/{filename}"
 
     c = _client()
     try:
-        c.storage.from_(BUCKET).upload(storage_path, content, {"content-type": file.content_type or "application/pdf"})
+        c.storage.from_(BUCKET).upload(storage_path, content, {"content-type": content_type})
     except Exception as e:
         msg = str(e).lower()
         if "already exists" in msg or "duplicate" in msg:
             try:
-                c.storage.from_(BUCKET).update(storage_path, content, {"content-type": file.content_type or "application/pdf"})
+                c.storage.from_(BUCKET).update(storage_path, content, {"content-type": content_type})
             except Exception as e2:
                 raise HTTPException(status_code=500, detail=f"Failed to upload file: {str(e2)[:200]}")
         elif "bucket not found" in msg or "not found" in msg:

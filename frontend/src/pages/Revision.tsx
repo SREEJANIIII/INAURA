@@ -27,6 +27,7 @@ import {
   type CardProgress,
 } from "../lib/revision/schedule";
 import { loadProgress, loadStudyDays, recordStudyDay, saveProgress } from "../lib/revision/store";
+import { useAuth } from "../context/AuthContext";
 import "./Revision.css";
 
 type Answered = { card: RevisionCard; answer: Answer; firstTry: boolean };
@@ -36,6 +37,8 @@ const pressedAt = () => Date.now();
 
 /** Throwing a card left, down or right is the same as pressing the button underneath it */
 const BY_DIRECTION: Record<DeckDirection, Answer> = { left: "again", down: "almost", right: "got" };
+/** …and pressing a button throws the card the same way a swipe would */
+const DIRECTION_OF: Record<Answer, DeckDirection> = { again: "left", almost: "down", got: "right" };
 
 /**
  * Revision reads the same remembered copies every other page uses, rather than fetching its
@@ -44,8 +47,11 @@ const BY_DIRECTION: Record<DeckDirection, Answer> = { left: "again", down: "almo
  * rest as it arrives, instead of showing a spinner while it asks all over again.
  */
 export default function Revision() {
-  const [progress, setProgress] = useState<Record<string, CardProgress>>(() => loadProgress());
-  const [days, setDays] = useState<string[]>(() => loadStudyDays());
+  // Behind the login, so there is always an account to keep this student's progress under
+  const owner = useAuth().user?.id ?? "signed-out";
+  const [progress, setProgress] = useState<Record<string, CardProgress>>(() => loadProgress(owner));
+  const [days, setDays] = useState<string[]>(() => loadStudyDays(owner));
+  const [throwDir, setThrowDir] = useState<DeckDirection>("right");
   /** Read when something happens rather than on every render, so rendering stays pure */
   const [now, setNow] = useState(() => Date.now());
 
@@ -148,7 +154,7 @@ export default function Revision() {
     setAnswered([]);
     setShowAnswer(false);
     setStarted(true);
-    setDays(recordStudyDay(at));
+    setDays(recordStudyDay(owner, at));
   };
 
   const answer = (choice: Answer) => {
@@ -157,7 +163,8 @@ export default function Revision() {
     setNow(at);
     const next = { ...progress, [card.id]: grade(progress[card.id] ?? newProgress(), choice, at) };
     setProgress(next);
-    saveProgress(next);
+    saveProgress(owner, next);
+    setThrowDir(DIRECTION_OF[choice]);
 
     if (choice === "again") missed.current.add(card.id);
     setAnswered((list) => [
@@ -176,15 +183,15 @@ export default function Revision() {
 
   if (waiting) {
     return (
-      <main className="rev">
+      <div className="rev">
         <div className="rev__wait">Building today's session…</div>
-      </main>
+      </div>
     );
   }
 
   if (!cards.length) {
     return (
-      <main className="rev">
+      <div className="rev">
         <div className="rev__wait rev__wait--empty">
           <h1>Nothing to revise yet</h1>
           <p>
@@ -195,12 +202,12 @@ export default function Revision() {
             Add your evidence
           </Link>
         </div>
-      </main>
+      </div>
     );
   }
 
   return (
-    <main className="rev">
+    <div className="rev">
       <header className="rev__head">
         <div className="rev__title">
           <h1>Revision</h1>
@@ -267,6 +274,10 @@ export default function Revision() {
                 </button>
               )}
             </div>
+            {/* What the cards were for: back to the plan they came from */}
+            <p className="rev-open__next">
+              Next: <Link to="/roadmap">this week’s roadmap tasks</Link> or <Link to="/career-track">your career track</Link>.
+            </p>
           </div>
         ) : (
           <>
@@ -275,6 +286,7 @@ export default function Revision() {
               cardClassName="rev-card"
               items={queue}
               getKey={(c) => c.id}
+              exitDirection={throwDir}
               revealed={showAnswer}
               onReveal={() => setShowAnswer(true)}
               onAnswer={(dir) => answer(BY_DIRECTION[dir])}
@@ -353,9 +365,10 @@ export default function Revision() {
               )}
               <p className="rev-act__hint">
                 {showAnswer
-                  ? "Swipe the card, or use the arrow keys"
-                  : `${seenCount + 1} of ${planned} · tap the card or press enter`}
+                  ? "Swipe the card, or use ← ↓ → on a keyboard"
+                  : `Card ${Math.min(seenCount + 1, planned)} of ${planned} · tap the card or press Enter`}
               </p>
+
             </div>
           </>
         )}
@@ -380,6 +393,6 @@ export default function Revision() {
       <p className="rev-live" aria-live="polite">
         {card ? (showAnswer ? `Answer: ${card.answer}. ${card.points.join(". ")}` : card.question) : ""}
       </p>
-    </main>
+    </div>
   );
 }

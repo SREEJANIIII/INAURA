@@ -7,6 +7,7 @@ import {
   type SubmitAssessmentResponse,
 } from "../../services/assessment";
 import "./AssessmentModal.css";
+import { friendlyError } from "../../lib/errors";
 
 type Props = {
   skill: string;
@@ -42,7 +43,7 @@ export default function AssessmentModal({
         if (active) setAttempt(data);
       })
       .catch((e) => {
-        if (active) setError(e instanceof Error ? e.message : "Could not start the assessment");
+        if (active) setError(friendlyError(e, "Could not start the assessment"));
       })
       .finally(() => {
         if (active) setLoading(false);
@@ -69,7 +70,7 @@ export default function AssessmentModal({
       setResult(data);
       onCompleted?.(data);
     } catch (e) {
-      setError(e instanceof Error ? e.message : "Could not submit the assessment");
+      setError(friendlyError(e, "Could not submit the assessment"));
     } finally {
       setSubmitting(false);
     }

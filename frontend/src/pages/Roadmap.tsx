@@ -12,10 +12,13 @@ import {
   type RoadmapTask,
   type RoadmapWeek,
 } from "../services/roadmap";
-import { roadmapPageData } from "../lib/pageData";
+import { resultsPageData, roadmapPageData } from "../lib/pageData";
 import { getRoleSync, resetRoleSync, subscribeRoleSync } from "../lib/roleSync";
+import { friendlyError } from "../lib/errors";
+import { useDialog } from "../lib/useDialog";
 import Button from "@/components/ui/app-button";
 import AssessmentModal from "../components/assessment/AssessmentModal";
+import type { SubmitAssessmentResponse } from "../services/assessment";
 
 type RoadmapPageData = NonNullable<ReturnType<typeof roadmapPageData.peek>>;
 import "./Roadmap.css";
@@ -69,9 +72,11 @@ function formatDate(value?: string | null) {
     : date.toLocaleDateString(undefined, { month: "short", day: "numeric", year: "numeric" });
 }
 
-function errorMessage(error: unknown, fallback: string) {
-  return error instanceof Error ? error.message : fallback;
-}
+/** The score a knowledge check has to reach to count as proof — the same bar the analysis uses */
+const PASS_SCORE = 0.6;
+
+const passed = (result: SubmitAssessmentResponse) =>
+  result.score >= PASS_SCORE && result.counts_as_evidence !== false && result.validity !== "invalid";
 
 /** Minutes as something readable: 45 min, 1h 30m, 2h */
 function readableMinutes(minutes: number) {
@@ -219,7 +224,7 @@ function TaskRow({ task, updating, expanded, onToggleExpanded, onUpdate, onLaunc
                   <Link to="/interview">Mock Interview Practice →</Link>
                 </Button>
                 <span className="rm-task__action-hint">
-                  Passing this assessment marks this milestone complete automatically.
+                  Scoring {Math.round(PASS_SCORE * 100)}% or more marks this milestone complete.
                 </span>
               </>
             )}
@@ -359,6 +364,12 @@ function WeekPanel({
         })
       )}
 
+      {(week.skills ?? []).length > 0 && (
+        <p className="rm-revise">
+          Keep this week’s skills from slipping: <Link to="/revision">revise them in a few minutes</Link>.
+        </p>
+      )}
+
       <div className="rm-panel__foot">
         <Button variant="ghost" disabled={!canPrev} onClick={() => onStep(-1)}>
           ← Previous week
@@ -385,6 +396,10 @@ export default function Roadmap() {
   const [expanded, setExpanded] = useState<Record<string, boolean>>({});
   const [showAdaptiveNotice, setShowAdaptiveNotice] = useState(false);
   const [assessingTarget, setAssessingTarget] = useState<{ skillName: string; task: RoadmapTask } | null>(null);
+  const [assessNote, setAssessNote] = useState<string | null>(null);
+  // Rebuilding throws away the current plan and every task ticked on it, so it asks first
+  const [confirmRebuild, setConfirmRebuild] = useState(false);
+  const rebuildRef = useDialog<HTMLDivElement>(confirmRebuild, () => setConfirmRebuild(false));
 
   const applyData = useCallback((data: RoadmapPageData) => {
     setProfile(data.profile);
@@ -406,10 +421,7 @@ export default function Roadmap() {
     } catch (loadError) {
       // A failed background refresh keeps the last-seen roadmap on screen
       if (!force && roadmapPageData.peek()) return;
-      const message = errorMessage(loadError, "Failed to load roadmap");
-      if (message.includes("503")) setError("Roadmap tables not configured — run backend/supabase/022_adaptive_weekly_roadmap.sql");
-      else if (message.includes("401")) setError("Session expired. Please log in again.");
-      else setError(message);
+      setError(friendlyError(loadError, "Your roadmap couldn’t be loaded. Check your connection and try again."));
     } finally {
       setLoading(false);
     }
@@ -432,8 +444,9 @@ export default function Roadmap() {
   }, [roleSync.stage, applyData]);
 
   const handleGenerate = async () => {
+    setConfirmRebuild(false);
     if (!profile?.hours_per_week) {
-      setError("Update your weekly availability to create a realistic timeline.");
+      setError("Set how many hours a week you can study in your profile, so the plan fits your time.");
       return;
     }
     setGenerating(true);
@@ -447,7 +460,7 @@ export default function Roadmap() {
       }
       await loadAll();
     } catch (generateError) {
-      setError(errorMessage(generateError, "Failed to generate roadmap"));
+      setError(friendlyError(generateError, "Your roadmap couldn’t be built. Try again in a moment."));
     } finally {
       setGenerating(false);
     }
@@ -466,7 +479,7 @@ export default function Roadmap() {
       setShowAdaptiveNotice(true);
       await loadAll();
     } catch (reassessError) {
-      setError(errorMessage(reassessError, "Failed to update roadmap"));
+      setError(friendlyError(reassessError, "Your schedule couldn’t be adjusted. Try again in a moment."));
     } finally {
       setReassessing(false);
     }
@@ -495,7 +508,7 @@ export default function Roadmap() {
       // Refresh the remembered copy so reopening Roadmap shows this change
       roadmapPageData.fetch(true).catch(() => undefined);
     } catch (updateError) {
-      setError(errorMessage(updateError, "Failed to update task"));
+      setError(friendlyError(updateError, "That task couldn’t be updated. Check your connection and try again."));
     } finally {
       setUpdating(null);
     }
@@ -605,7 +618,7 @@ export default function Roadmap() {
                 <Button variant="secondary" onClick={handleAdaptiveReassess} disabled={reassessing || generating || rebuilding}>
                   {reassessing ? "Updating…" : "Adjust schedule"}
                 </Button>
-                <Button variant="primary" onClick={handleGenerate} disabled={generating || rebuilding || !profile?.hours_per_week}>
+                <Button variant="primary" onClick={() => setConfirmRebuild(true)} disabled={generating || rebuilding || !profile?.hours_per_week}>
                   {generating ? "Rebuilding…" : "Rebuild roadmap"}
                 </Button>
               </>
@@ -676,10 +689,15 @@ export default function Roadmap() {
                 : "Run your analysis first — INAURA then turns your skill gaps into a realistic week-by-week plan."}
             </p>
             <div className="rm-blank__actions">
-              <Button variant="primary" onClick={handleGenerate} disabled={generating || rebuilding || !profile?.hours_per_week}>
-                {generating ? "Building your plan…" : "Build my roadmap"}
-              </Button>
-              {!profile?.hours_per_week && (
+              {analysis ? (
+                <Button variant="primary" onClick={handleGenerate} disabled={generating || rebuilding || !profile?.hours_per_week}>
+                  {generating ? "Building your plan…" : "Build my roadmap"}
+                </Button>
+              ) : (
+                // Nothing to plan from yet: the analysis comes first, and it lives on Evidence
+                <Button asChild variant="primary"><Link to="/analysis">Add evidence and run your analysis</Link></Button>
+              )}
+              {analysis && !profile?.hours_per_week && (
                 <Button asChild variant="secondary"><Link to="/profile">Set your hours per week first</Link></Button>
               )}
             </div>
@@ -751,19 +769,68 @@ export default function Roadmap() {
         )}
       </div>
 
+      {assessNote && (
+        <div className="rm-toast" role="status">
+          <span>{assessNote}</span>
+          <button type="button" className="rm-alert__close" onClick={() => setAssessNote(null)} aria-label="Dismiss">
+            <svg width="14" height="14" viewBox="0 0 16 16" aria-hidden="true">
+              <path d="M4 4l8 8M12 4l-8 8" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" />
+            </svg>
+          </button>
+        </div>
+      )}
+
       {assessingTarget && (
         <AssessmentModal
           skill={assessingTarget.skillName}
+          // The modal stays open on its results either way, so the feedback can be read
           onClose={() => setAssessingTarget(null)}
-          onCompleted={async () => {
-            await handleUpdateTask(assessingTarget.task, {
-              status: "completed",
-              completion_percentage: 100,
-            });
-            setAssessingTarget(null);
+          onCompleted={async (result) => {
+            const target = assessingTarget;
+            // A new result changes the analysis this plan was built from
+            resultsPageData.fetch(true).catch(() => undefined);
+            if (passed(result)) {
+              await handleUpdateTask(target.task, { status: "completed", completion_percentage: 100 });
+              setAssessNote(`You passed ${target.skillName} — “${target.task.title}” is marked done.`);
+            } else {
+              setAssessNote(
+                `${target.skillName}: ${Math.round(result.score * 100)}%. Reaching ${Math.round(PASS_SCORE * 100)}% completes this milestone — review the feedback and try again when you’re ready.`
+              );
+            }
           }}
         />
       )}
+
+      {confirmRebuild && (
+        <div className="rm-confirm" onClick={() => setConfirmRebuild(false)}>
+          <div
+            className="rm-confirm__panel"
+            ref={rebuildRef}
+            tabIndex={-1}
+            role="alertdialog"
+            aria-modal="true"
+            aria-labelledby="rm-confirm-title"
+            aria-describedby="rm-confirm-text"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <h2 id="rm-confirm-title">Rebuild your roadmap?</h2>
+            <p id="rm-confirm-text">
+              INAURA will make a new plan from your latest analysis. This plan and the {Math.round(progress)}% of it you’ve
+              ticked off will be replaced. To keep your progress and only fit the remaining weeks to your time, use “Adjust
+              schedule” instead.
+            </p>
+            <div className="rm-confirm__actions">
+              <Button variant="secondary" onClick={() => setConfirmRebuild(false)} data-autofocus>
+                Keep this plan
+              </Button>
+              <Button variant="primary" onClick={handleGenerate}>
+                Rebuild it
+              </Button>
+            </div>
+          </div>
+        </div>
+      )}
+
     </div>
   );
 }

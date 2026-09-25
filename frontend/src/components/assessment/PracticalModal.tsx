@@ -6,6 +6,7 @@ import {
   type StartPracticalResponse,
   type SubmitPracticalResponse,
 } from "../../services/assessment";
+import { friendlyError } from "../../lib/errors";
 import "./PracticalModal.css";
 
 type Props = {
@@ -33,7 +34,7 @@ export default function PracticalModal({ skill, onClose, onCompleted }: Props) {
         setCode(data.task.starter_code || "");
       })
       .catch((e) => {
-        if (active) setError(e instanceof Error ? e.message : "Could not start the practical task");
+        if (active) setError(friendlyError(e, "Could not start the practical task"));
       })
       .finally(() => {
         if (active) setLoading(false);
@@ -55,7 +56,7 @@ export default function PracticalModal({ skill, onClose, onCompleted }: Props) {
       setResult(data);
       onCompleted?.(data);
     } catch (e) {
-      setError(e instanceof Error ? e.message : "Could not submit your solution");
+      setError(friendlyError(e, "Could not submit your solution"));
     } finally {
       setSubmitting(false);
     }

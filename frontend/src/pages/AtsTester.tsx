@@ -7,6 +7,7 @@ import {
   type ExistingResumeOption,
   type AtsTestResponse,
 } from "../services/resume";
+import { friendlyError } from "../lib/errors";
 import "./AtsTester.css";
 
 const POPULAR_ROLES = [
@@ -153,8 +154,8 @@ export default function AtsTester() {
       setTimeout(() => {
         resultsRef.current?.scrollIntoView({ behavior: "smooth" });
       }, 100);
-    } catch (err: any) {
-      setError(err?.message || "Failed to analyze resume. Please verify the document format.");
+    } catch (err) {
+      setError(friendlyError(err, "Your resume couldn’t be analysed. Check it’s a .docx file under 10 MB, then try again."));
     } finally {
       setLoading(false);
     }

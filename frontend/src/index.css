@@ -13,19 +13,30 @@
   --muted: #475569;
   --muted-2: #64748b;
   --muted-3: #94a3b8;
-  --line: rgba(92, 80, 160, 0.14);
-  --line-strong: rgba(92, 80, 160, 0.24);
+  /* Hairlines in the ink's own colour, so borders read as rules on paper, not as tinted glass */
+  --line: rgba(22, 28, 46, 0.1);
+  --line-strong: rgba(22, 28, 46, 0.18);
   --bg: var(--glass-bg);
   --bg-subtle: rgba(255, 255, 255, 0.34);
   --bg-muted: rgba(255, 255, 255, 0.42);
   --bg-soft: rgba(255, 255, 255, 0.34);
-  --accent: #4f46e5;
-  --accent-hover: #4338ca;
-  --accent-soft: rgba(79, 70, 229, 0.1);
-  --accent-soft-2: rgba(79, 70, 229, 0.08);
-  --accent-border: rgba(79, 70, 229, 0.14);
+  /* One accent across the app: the restrained lavender-indigo the product pages already use */
+  --accent: #6452b0;
+  --accent-hover: #57469b;
+  --accent-soft: rgba(100, 82, 176, 0.1);
+  --accent-soft-2: rgba(100, 82, 176, 0.07);
+  --accent-border: rgba(100, 82, 176, 0.2);
   --success: #0f766e;
-  --page-bg: #eceef8;
+  /* Warm paper, the same as Revision's — the calm ground every page sits on */
+  --page-bg: #faf8f5;
+  /* Quiet state for rows and ghost controls: a touch of ink, visible on paper and on white */
+  --hover-tint: rgba(22, 28, 46, 0.045);
+
+  /* The shared button (components/ui/app-button.tsx) */
+  --btn-accent: #6452b0;
+  --btn-accent-hover: #57469b;
+  --btn-accent-ink: #ffffff;
+  --btn-secondary-hover-edge: rgba(22, 28, 46, 0.32);
 
   /* The four things any surface reports — saved, needs attention, wrong, in progress.
      Written out here so the night theme can restate them once instead of per page. */
@@ -48,6 +59,8 @@
   /* Typography */
   --sans: "Inter", system-ui, -apple-system, "Segoe UI", Roboto, Helvetica, Arial, sans-serif, "Apple Color Emoji", "Segoe UI Emoji";
   --display: var(--sans);
+  /* The editorial serif the product pages set their headings in */
+  --serif: "Newsreader", "Iowan Old Style", "Palatino Linotype", Georgia, serif;
   --mono: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace;
 
   /* Layout */
@@ -70,16 +83,19 @@
   --duration: 0.6s;
   --duration-fast: 0.2s;
 
-  /* Liquid glass: every surface is frosted glass over one flowing colour field */
-  --glass-bg: rgba(255, 255, 255, 0.56);
-  --glass-bg-strong: rgba(255, 255, 255, 0.74);
-  --glass-bg-soft: rgba(255, 255, 255, 0.36);
-  --glass-edge: rgba(255, 255, 255, 0.72);
-  --glass-line: rgba(92, 80, 160, 0.14);
-  --glass-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.85), 0 12px 32px -18px rgba(62, 48, 140, 0.28);
-  --glass-shadow-lg: inset 0 1px 0 rgba(255, 255, 255, 0.9), 0 24px 60px -24px rgba(40, 30, 110, 0.38);
-  --glass-blur: blur(22px) saturate(170%);
-  --glass-blur-sm: blur(10px) saturate(150%);
+  /* Surfaces. Still named "glass" because every page reads them under that name, but they are
+     paper now: near-opaque white panels with a hairline edge and a soft, low shadow. Frosted
+     glass over a moving colour field cost phones a blur pass on every panel, and pulled the
+     eye away from the content. The blur tokens are kept, switched off, for the same reason. */
+  --glass-bg: rgba(255, 255, 255, 0.9);
+  --glass-bg-strong: #ffffff;
+  --glass-bg-soft: rgba(255, 255, 255, 0.66);
+  --glass-edge: rgba(22, 28, 46, 0.085);
+  --glass-line: rgba(22, 28, 46, 0.085);
+  --glass-shadow: 0 1px 2px rgba(22, 28, 46, 0.04), 0 12px 32px -24px rgba(40, 30, 90, 0.26);
+  --glass-shadow-lg: 0 1px 2px rgba(22, 28, 46, 0.05), 0 28px 60px -32px rgba(40, 30, 90, 0.34);
+  --glass-blur: none;
+  --glass-blur-sm: none;
 
   color-scheme: light;
 }
@@ -124,45 +140,69 @@ body {
   background: transparent;
 }
 
-/* The colour field every glass surface sits on: soft pools of lavender, sky, peach and mint
-   that drift slowly. Fixed, so pages scroll over it like glass over light. */
-body::before,
-body::after {
+/* One faint wash of lavender and blue across the top of the paper, so it isn't flat — the
+   same light Revision uses. Fixed and still: nothing on the page moves unless it means something. */
+body::before {
   content: "";
   position: fixed;
-  inset: -25vmax;
+  inset: 0;
   z-index: -1;
   pointer-events: none;
-}
-
-body::before {
   background:
-    radial-gradient(34vmax 30vmax at 18% 22%, rgba(150, 120, 250, 0.62), transparent 70%),
-    radial-gradient(32vmax 30vmax at 84% 16%, rgba(100, 190, 255, 0.55), transparent 70%),
-    radial-gradient(36vmax 32vmax at 76% 84%, rgba(255, 170, 140, 0.5), transparent 70%),
-    radial-gradient(30vmax 28vmax at 22% 82%, rgba(120, 220, 185, 0.46), transparent 70%);
-  animation: liquid-drift 38s ease-in-out infinite alternate;
-  will-change: transform;
+    radial-gradient(60vw 44vh at 12% -8%, rgba(126, 105, 214, 0.08), transparent 70%),
+    radial-gradient(52vw 40vh at 94% 0%, rgba(92, 140, 226, 0.06), transparent 68%);
 }
 
-/* A second, slower layer so the colours flow through each other rather than just sliding */
-body::after {
-  background:
-    radial-gradient(26vmax 24vmax at 58% 42%, rgba(205, 165, 255, 0.42), transparent 70%),
-    radial-gradient(22vmax 22vmax at 38% 60%, rgba(140, 205, 255, 0.34), transparent 70%);
-  animation: liquid-drift-2 52s ease-in-out infinite alternate;
-  will-change: transform;
+/* Elements that only ever take focus from code (a dialog panel, a skip target) don't need
+   the keyboard ring — it would flash around the whole panel as it opens */
+[tabindex="-1"]:focus:not(:focus-visible) {
+  outline: none;
 }
 
-@keyframes liquid-drift {
-  0% { transform: translate3d(0, 0, 0) rotate(0deg) scale(1); }
-  50% { transform: translate3d(4vmax, -3vmax, 0) rotate(8deg) scale(1.06); }
-  100% { transform: translate3d(-3vmax, 3vmax, 0) rotate(-6deg) scale(1.02); }
+/* Skip straight past the top bar and sidebar to the page (visible only when focused) */
+.skip-link {
+  position: fixed;
+  top: 8px;
+  left: 8px;
+  z-index: 200;
+  padding: 10px 14px;
+  border-radius: 8px;
+  background: var(--ink);
+  color: var(--paper);
+  font: 600 0.9rem var(--sans);
+  transform: translateY(-160%);
+  transition: transform 0.15s var(--ease-out);
 }
 
-@keyframes liquid-drift-2 {
-  0% { transform: translate3d(0, 0, 0) scale(1); }
-  100% { transform: translate3d(-6vmax, 4vmax, 0) scale(1.12); }
+.skip-link:focus {
+  transform: translateY(0);
+  color: var(--paper);
+}
+
+/* "Checking your session…" — shown while the saved login is read */
+.session-check {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  min-height: 60vh;
+  color: var(--muted-2);
+  font-size: 0.92rem;
+}
+
+.session-check__spin {
+  width: 16px;
+  height: 16px;
+  border: 2px solid var(--accent-soft);
+  border-top-color: var(--accent);
+  border-radius: 50%;
+  animation: session-spin 0.8s linear infinite;
+}
+
+@keyframes session-spin {
+  to {
+    transform: rotate(360deg);
+  }
 }
 
 #root {
@@ -305,6 +345,11 @@ body::after {
   --accent-border: rgba(167, 139, 250, 0.3);
   --success: #5eead4;
   --page-bg: #000000;
+  --hover-tint: rgba(255, 255, 255, 0.07);
+  --btn-accent: #a78bfa;
+  --btn-accent-hover: #c4b5fd;
+  --btn-accent-ink: #14111f;
+  --btn-secondary-hover-edge: rgba(255, 255, 255, 0.32);
 
   /* Tinted glass over the dark page, rather than the pale washes of day */
   --ok-bg: rgba(94, 234, 212, 0.1);
@@ -346,11 +391,7 @@ body::after {
     radial-gradient(30vmax 28vmax at 22% 82%, rgba(39, 145, 127, 0.08), transparent 70%);
 }
 
-:root[data-theme="dark"] body::after {
-  background:
-    radial-gradient(26vmax 24vmax at 58% 42%, rgba(116, 88, 214, 0.1), transparent 70%),
-    radial-gradient(22vmax 22vmax at 38% 60%, rgba(48, 126, 194, 0.08), transparent 70%);
-}
+
 
 /* Component-local palettes that otherwise shadow the global design tokens. */
 :root[data-theme="dark"] .app,
@@ -1373,6 +1414,12 @@ body::after {
 :root[data-theme="dark"] .revision-tabs button.is-active,
 :root[data-theme="dark"] .revision-next {
   color: #1b1526 !important;
+}
+
+/* The logo is navy ink on transparent, which vanishes on the night bar. Inverting lightness
+   and turning the hue back round keeps the purple mark purple while the wordmark goes light. */
+:root[data-theme="dark"] .app__brand img {
+  filter: invert(1) hue-rotate(180deg) brightness(1.1);
 }
 
 /* The stale-analysis mark needs to stay legible on the dark sidebar */

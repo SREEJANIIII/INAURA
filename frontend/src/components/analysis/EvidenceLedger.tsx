@@ -14,6 +14,8 @@ type EvidenceLedgerProps = {
   blocked: string | null;
   /** Set when the last analysis no longer matches this evidence or this role */
   stale?: { message: string; action: string } | null;
+  /** Why the last press didn't work, shown right under the button that was pressed */
+  error?: string | null;
 };
 
 /**
@@ -22,7 +24,7 @@ type EvidenceLedgerProps = {
  * The tally is a count and never a score — ten strokes for ten named sources. The page is
  * explicit that this isn't readiness, so it must not look like a percentage or a meter.
  */
-export default function EvidenceLedger({ sources, role, lastRun, running, onRun, blocked, stale }: EvidenceLedgerProps) {
+export default function EvidenceLedger({ sources, role, lastRun, running, onRun, blocked, stale, error }: EvidenceLedgerProps) {
   const gathered = sources.filter((s) => s.present);
   const missing = sources.filter((s) => !s.present);
 
@@ -60,9 +62,14 @@ export default function EvidenceLedger({ sources, role, lastRun, running, onRun,
       )}
 
       <div className="ledger__run">
-        <Button variant="primary" size="md" onClick={onRun} disabled={running || !!blocked}>
+        <Button variant="primary" size="md" onClick={onRun} disabled={running || !!blocked} aria-busy={running || undefined}>
           {running ? "Running…" : stale ? stale.action : lastRun ? "Run analysis again" : "Run analysis"}
         </Button>
+        {error && !running && (
+          <p className="ledger__error" role="alert">
+            {error}
+          </p>
+        )}
         <p className="ledger__run-note">
           {blocked
             ? blocked
