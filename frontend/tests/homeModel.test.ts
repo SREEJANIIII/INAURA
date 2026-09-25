@@ -93,10 +93,32 @@ describe("buildActions", () => {
     assert.equal(actions[0].meta, "SQL, 30 min");
   });
 
-  it("leaves run-analysis to the step tracker and suggests specific evidence instead", () => {
+  it("with no evidence at all, asks for specific evidence rather than an analysis", () => {
     const actions = buildActions({ analysis: null, roadmap: null, weeks: [], coverage: buildCoverage([], [], []).items, assessable: [] });
     assert.equal(actions[0].id, "add-github");
     assert.ok(!actions.some((a) => a.id === "run-analysis" || a.id === "add-evidence" || a.id === "roadmap"));
+  });
+
+  it("with evidence in but no analysis, puts running it first — never 'nothing pressing'", () => {
+    const project = { id: "p", name: "App", technologies: [], created_at: "2026-01-01" } as never;
+    const coverage = buildCoverage([], [project], []).items;
+    const actions = buildActions({ analysis: null, roadmap: null, weeks: [], coverage, assessable: [] });
+    assert.equal(actions[0].id, "run-analysis");
+    assert.equal(actions[0].kind === "link" && actions[0].to, "/analysis");
+  });
+
+  it("sends due revision cards and proof-of-skill to their own pages", () => {
+    const actions = buildActions({
+      analysis: { id: "x" } as never,
+      roadmap: { current_week_index: 1 } as Roadmap,
+      weeks: [],
+      coverage: buildCoverage([], [], []).items,
+      assessable: [{ skill: "SQL", skill_key: "sql", already_assessed: false, priority_score: 1 } as never],
+      revisionDue: 2,
+    });
+    const to = (id: string) => actions.find((a) => a.id === id);
+    assert.equal(to("revision")?.title, "Revise 2 cards");
+    assert.equal((to("assess-sql") as { to?: string })?.to, "/skill-assessment");
   });
 });
 

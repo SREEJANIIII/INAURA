@@ -12,6 +12,9 @@ class ProfileBase(BaseModel):
     graduation_year: int = Field(..., ge=2000, le=2035, description="Graduation year")
     career_interests: List[str] = Field(..., min_length=1, max_length=10, description="Areas of interest")
     hours_per_week: int = Field(..., ge=1, le=80, description="Hours available per week")
+    preferred_work_location: Optional[str] = Field(
+        None, max_length=160, description="Optional preferred career location, not physical location"
+    )
 
 
 class ProfileCreate(ProfileBase):
@@ -28,6 +31,8 @@ class ProfileUpdate(ProfileBase):
     graduation_year: Optional[int] = Field(None, ge=2000, le=2035)
     career_interests: Optional[List[str]] = None
     hours_per_week: Optional[int] = Field(None, ge=1, le=80)
+    # Empty string is accepted so a user can explicitly clear the preference.
+    preferred_work_location: Optional[str] = Field(None, max_length=160)
 
 
 class ProfileResponse(ProfileBase):

@@ -1,8 +1,11 @@
-import { useEffect, useRef, useState, useSyncExternalStore } from "react";
+import { useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 import { Link, useNavigate } from "react-router-dom";
 import { useAuth } from "../../context/AuthContext";
-import { profileData, subscribePageData } from "../../lib/pageData";
+import { analysisStateData, evidencePageData, profileData, resultsPageData, subscribePageData } from "../../lib/pageData";
+import { getRoleSync, subscribeRoleSync } from "../../lib/roleSync";
+import { dueCount } from "../../lib/revision/store";
 import { applyTheme, preferredTheme, setTheme, type Theme } from "../../lib/theme";
+import { buildNotices } from "./notices";
 
 type Panel = "none" | "account" | "notifications";
 
@@ -25,6 +28,27 @@ export default function AccountMenu() {
 
   const name = profile?.full_name || user?.email?.split("@")[0] || "Account";
 
+  // The bell reads the same shared data the pages do, so it's never a separate story
+  const results = useSyncExternalStore(subscribePageData, resultsPageData.peek);
+  const analysisState = useSyncExternalStore(subscribePageData, analysisStateData.peek);
+  const evidence = useSyncExternalStore(subscribePageData, evidencePageData.peek);
+  const sync = useSyncExternalStore(subscribeRoleSync, getRoleSync);
+  // Read from this browser's revision record when the menu mounts and whenever the bell opens
+  const [revisionDue, setRevisionDue] = useState(() => (user ? dueCount(user.id, Date.now()) : 0));
+  const notices = useMemo(() => {
+    const state = analysisState ?? evidence?.analysisState;
+    return buildNotices({
+      analysis: results?.analysis,
+      targetRole: state?.target_role,
+      analysedBefore: state?.status === "completed" || !!results?.analysis,
+      evidence: evidence?.evidence,
+      projectCount: evidence?.projects.length,
+      certCount: evidence?.certs.length,
+      sync,
+      revisionDue,
+    });
+  }, [results, analysisState, evidence, sync, revisionDue]);
+
   // Close when clicking elsewhere or pressing Escape
   useEffect(() => {
     if (panel === "none") return;
@@ -42,7 +66,10 @@ export default function AccountMenu() {
     };
   }, [panel]);
 
-  const toggle = (p: Panel) => setPanel((cur) => (cur === p ? "none" : p));
+  const toggle = (p: Panel) => {
+    if (p === "notifications" && user) setRevisionDue(dueCount(user.id, Date.now()));
+    setPanel((cur) => (cur === p ? "none" : p));
+  };
 
   const handleLogout = async () => {
     setPanel("none");
@@ -70,14 +97,20 @@ export default function AccountMenu() {
       <button
         type="button"
         className="acct__bell"
-        aria-label="Notifications"
+        aria-label={notices.length ? `Notifications, ${notices.length} to look at` : "Notifications"}
         aria-expanded={panel === "notifications"}
+        aria-haspopup="true"
         onClick={() => toggle("notifications")}
       >
         <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
           <path d="M6 8a6 6 0 0 1 12 0c0 7 3 9 3 9H3s3-2 3-9" />
           <path d="M10.3 21a1.94 1.94 0 0 0 3.4 0" />
         </svg>
+        {notices.length > 0 && (
+          <span className="acct__bell-count" aria-hidden="true">
+            {notices.length > 9 ? "9+" : notices.length}
+          </span>
+        )}
       </button>
 
       <button
@@ -100,11 +133,28 @@ export default function AccountMenu() {
       </button>
 
       {panel === "notifications" && (
-        <div className="acct__panel acct__panel--notif" role="status">
-          <div className="acct__panel-title">Notifications</div>
-          <p className="acct__empty">You’re all caught up.</p>
+        <div className="acct__panel acct__panel--notif">
+          <div className="acct__panel-title" id="acct-notif-title">Notifications</div>
+          {notices.length === 0 ? (
+            <p className="acct__empty">You’re all caught up. Nothing needs your attention right now.</p>
+          ) : (
+            <ul className="acct__notices" aria-labelledby="acct-notif-title">
+              {notices.map((n) => (
+                <li key={n.id}>
+                  <Link to={n.to} className={`acct__notice acct__notice--${n.tone}`} onClick={() => setPanel("none")}>
+                    <span className="acct__notice-mark" aria-hidden="true" />
+                    <span className="acct__notice-text">
+                      <span className="acct__notice-title">{n.title}</span>
+                      {n.detail && <span className="acct__notice-detail">{n.detail}</span>}
+                    </span>
+                  </Link>
+                </li>
+              ))}
+            </ul>
+          )}
         </div>
       )}
+
 
       {panel === "account" && (
         <div className="acct__panel" role="menu">

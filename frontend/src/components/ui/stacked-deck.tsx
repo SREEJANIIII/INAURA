@@ -40,6 +40,13 @@ export type StackedDeckProps<T> = {
   onReveal: () => void;
   /** left = didn't know, right = got it, down = almost */
   onAnswer: (direction: DeckDirection) => void;
+  /**
+   * Which way the front card leaves. Pass it when answers can also come from outside the deck
+   * (buttons under it), so a card marked "didn't know" is thrown left however it was marked.
+   */
+  exitDirection?: DeckDirection;
+  /** Answer from anywhere on the page with Enter / Space and the arrow keys (default on) */
+  keyboard?: boolean;
   renderCard: (item: T, state: { front: boolean; revealed: boolean }) => React.ReactNode;
   className?: string;
   cardClassName?: string;
@@ -53,13 +60,16 @@ export function StackedDeck<T>({
   revealed,
   onReveal,
   onAnswer,
+  exitDirection,
+  keyboard = true,
   renderCard,
   className,
   cardClassName,
   label = "Revision cards",
 }: StackedDeckProps<T>) {
   // Read by AnimatePresence as the card leaves, so the throw matches the answer given
-  const [direction, setDirection] = React.useState<DeckDirection>("right");
+  const [ownDirection, setDirection] = React.useState<DeckDirection>("right");
+  const direction = exitDirection ?? ownDirection;
   const reduced = useReducedMotion();
 
   const answer = React.useCallback(
@@ -70,22 +80,38 @@ export function StackedDeck<T>({
     [onAnswer]
   );
 
-  const onKeyDown = (e: React.KeyboardEvent) => {
-    if (!items.length) return;
-    if (!revealed) {
-      if (e.key === "Enter" || e.key === " ") {
-        e.preventDefault();
-        onReveal();
+  // The keys work wherever focus is on the page — after pressing "Show answer" the focused
+  // button is gone, and nobody should have to click the deck before the arrows respond
+  const latest = React.useRef({ count: items.length, revealed, onReveal, answer });
+  React.useEffect(() => {
+    latest.current = { count: items.length, revealed, onReveal, answer };
+  });
+  React.useEffect(() => {
+    if (!keyboard) return;
+    const onKey = (e: KeyboardEvent) => {
+      const { count, revealed: open, onReveal: reveal, answer: give } = latest.current;
+      if (!count || e.defaultPrevented || e.metaKey || e.ctrlKey || e.altKey) return;
+      // The page itself can be the target (nothing focused), and it has no .closest()
+      const target = e.target instanceof Element ? e.target : null;
+      // Typing somewhere, or a dialog on top: the keys belong to that
+      if (target?.closest("input, textarea, select, [contenteditable='true'], [role='dialog']")) return;
+      if (!open) {
+        // Enter and Space already press a focused button or link; don't press twice
+        if ((e.key === "Enter" || e.key === " ") && !target?.closest("button, a")) {
+          e.preventDefault();
+          reveal();
+        }
+        return;
       }
-      return;
-    }
-    const byKey: Record<string, DeckDirection> = { ArrowLeft: "left", ArrowDown: "down", ArrowRight: "right" };
-    const dir = byKey[e.key];
-    if (dir) {
-      e.preventDefault();
-      answer(dir);
-    }
-  };
+      const dir = ({ ArrowLeft: "left", ArrowDown: "down", ArrowRight: "right" } as Record<string, DeckDirection>)[e.key];
+      if (dir) {
+        e.preventDefault();
+        give(dir);
+      }
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [keyboard]);
 
   const shown = items.slice(0, depth + 1);
 
@@ -94,10 +120,11 @@ export function StackedDeck<T>({
       className={cn("relative flex w-full items-center justify-center", className)}
       role="group"
       aria-label={label}
-      tabIndex={0}
-      onKeyDown={onKeyDown}
+      aria-roledescription="card stack"
+      tabIndex={-1}
     >
       <AnimatePresence custom={direction} initial={false} mode="popLayout">
+
         {shown
           // Painted back to front so the live card ends up on top without z-index games
           .map((item, i) => ({ item, i }))

@@ -23,6 +23,8 @@ type AuthState = {
   signInWithProvider: (provider: OAuthProvider) => Promise<{ error: string | null }>;
   signOut: () => Promise<void>;
   resetPassword: (email: string) => Promise<{ error: string | null }>;
+  /** Sets a new password for whoever is signed in — including by a reset link */
+  updatePassword: (password: string) => Promise<{ error: string | null }>;
 };
 
 const AuthContext = createContext<AuthState | undefined>(undefined);
@@ -100,9 +102,16 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       },
       resetPassword: async (email) => {
         if (!supabase) return { error: "Supabase not configured" };
+        // The emailed link signs them in on the reset page, where they choose a new password
         const { error } = await supabase.auth.resetPasswordForEmail(email, {
-          redirectTo: `${window.location.origin}/login`,
+          redirectTo: `${window.location.origin}/reset-password`,
         });
+        if (error) return { error: error.message };
+        return { error: null };
+      },
+      updatePassword: async (password) => {
+        if (!supabase) return { error: "Supabase not configured" };
+        const { error } = await supabase.auth.updateUser({ password });
         if (error) return { error: error.message };
         return { error: null };
       },

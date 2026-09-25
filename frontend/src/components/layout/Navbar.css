@@ -231,18 +231,13 @@
   background: rgba(255, 255, 255, 0.4);
 }
 
-/* The main action, sized down to sit inside the pill */
-.nav__cta {
-  height: 40px;
+/* The main action, sized down to sit inside the pill, and rounded to match it */
+.ib.nav__cta {
+  min-height: 40px;
   padding: 0 20px;
+  border-radius: var(--radius-full);
   font-size: 0.86rem;
   letter-spacing: -0.012em;
-}
-
-/* The button's own glass layers follow its pill shape here, so no square corner shows
-   when a dark section passes under the navbar */
-.nav [data-slot="button"] > div {
-  border-radius: inherit;
 }
 
 .nav__link:focus-visible,

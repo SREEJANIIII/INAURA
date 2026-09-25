@@ -50,6 +50,33 @@ def _client() -> Client:
     return c
 
 
+def _roadmap_owner(c: Client, roadmap_id: Optional[str]) -> Optional[str]:
+    """Who owns a roadmap, or None when it can't be found. The service-role client skips
+    row-level security, so every write by row id has to check this itself."""
+    if not roadmap_id:
+        return None
+    try:
+        r = c.table(ROADMAPS).select("user_id").eq("id", roadmap_id).limit(1).execute()
+    except Exception:
+        return None
+    rows = r.data or []
+    return rows[0].get("user_id") if rows else None
+
+
+def _embedded_owner(row: dict, *path: str) -> Optional[str]:
+    """The user_id at the end of an embedded join such as roadmap_weeks → roadmaps, if present."""
+    node: Any = row
+    for key in path:
+        if isinstance(node, list):
+            node = node[0] if node else None
+        if not isinstance(node, dict):
+            return None
+        node = node.get(key)
+    if isinstance(node, list):
+        node = node[0] if node else None
+    return node.get("user_id") if isinstance(node, dict) else None
+
+
 def clamp01(v: float) -> float:
     return max(0.0, min(1.0, v))
 
@@ -894,6 +921,11 @@ def get_roadmap_week(user_id: str, week_id: str) -> dict:
         if not rw.data:
             raise HTTPException(status_code=404, detail="Roadmap week not found")
         week = rw.data
+        owner = _embedded_owner(week, "roadmaps") or _roadmap_owner(c, week.get("roadmap_id"))
+        if owner != user_id:
+            # Same answer as a week that doesn't exist, so ids can't be probed
+            raise HTTPException(status_code=404, detail="Roadmap week not found")
+        week.pop("roadmaps", None)
         rt = c.table(TASKS).select("*").eq("roadmap_week_id", week_id).order("sequence_order").execute()
         week["tasks"] = rt.data or []
         return week
@@ -926,22 +958,14 @@ def update_roadmap_item(user_id: str, item_id: str, payload: dict) -> dict:
             rr = c.table(ITEMS).select("*").eq("id", item_id).single().execute()
             if not rr.data:
                 raise HTTPException(status_code=404, detail="Roadmap item not found")
-            roadmap_id = rr.data.get("roadmap_id")
-            r2 = c.table(ROADMAPS).select("user_id").eq("id", roadmap_id).single().execute()
-            if not r2.data or r2.data.get("user_id") != user_id:
-                raise HTTPException(status_code=403, detail="Not authorized to update this roadmap item")
             item = rr.data
+            owner = _roadmap_owner(c, item.get("roadmap_id"))
         else:
-            row = r.data[0]
-            roadmaps = row.get("roadmaps")
-            owner = None
-            if isinstance(roadmaps, dict):
-                owner = roadmaps.get("user_id")
-            elif isinstance(roadmaps, list) and len(roadmaps) > 0:
-                owner = roadmaps[0].get("user_id")
-            if owner and owner != user_id:
-                raise HTTPException(status_code=403, detail="Not authorized")
-            item = row
+            item = r.data[0]
+            # Fall back to asking directly when the join didn't come back, never to trusting it
+            owner = _embedded_owner(item, "roadmaps") or _roadmap_owner(c, item.get("roadmap_id"))
+        if owner != user_id:
+            raise HTTPException(status_code=403, detail="Not authorized to update this roadmap item")
     except HTTPException:
         raise
     except Exception as e:
@@ -996,25 +1020,25 @@ def update_roadmap_task(user_id: str, task_id: str, payload: dict) -> dict:
     try:
         rt = c.table(TASKS).select("*, roadmap_weeks!inner(roadmap_id, week_number, roadmaps!inner(user_id))").eq("id", task_id).execute()
         if not rt.data or len(rt.data) == 0:
-            # Fallback simple check
             rt2 = c.table(TASKS).select("*").eq("id", task_id).single().execute()
             if not rt2.data:
                 raise HTTPException(status_code=404, detail="Roadmap task not found")
             task = rt2.data
-            week_id = task.get("roadmap_week_id")
-            if week_id:
-                rw = c.table(WEEKS).select("roadmap_id").eq("id", week_id).single().execute()
-                if rw.data:
-                    rm = c.table(ROADMAPS).select("user_id").eq("id", rw.data.get("roadmap_id")).single().execute()
-                    if rm.data and rm.data.get("user_id") != user_id:
-                        raise HTTPException(status_code=403, detail="Not authorized to update this roadmap task")
+            owner = None
         else:
             task = rt.data[0]
-            w_info = task.get("roadmap_weeks", {})
-            r_info = w_info.get("roadmaps", {}) if isinstance(w_info, dict) else {}
-            owner = r_info.get("user_id") if isinstance(r_info, dict) else None
-            if owner and owner != user_id:
-                raise HTTPException(status_code=403, detail="Not authorized")
+            owner = _embedded_owner(task, "roadmap_weeks", "roadmaps")
+        if owner is None:
+            # The join didn't say, so walk task → week → roadmap. A task whose owner can't be
+            # established is refused: the service-role client would otherwise let anyone edit it.
+            week_id = task.get("roadmap_week_id")
+            roadmap_id = None
+            if week_id:
+                rw = c.table(WEEKS).select("roadmap_id").eq("id", week_id).limit(1).execute()
+                roadmap_id = (rw.data or [{}])[0].get("roadmap_id")
+            owner = _roadmap_owner(c, roadmap_id)
+        if owner != user_id:
+            raise HTTPException(status_code=403, detail="Not authorized to update this roadmap task")
     except HTTPException:
         raise
     except Exception:

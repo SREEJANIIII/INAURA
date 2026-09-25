@@ -557,7 +557,81 @@ def _attach_requirement_evidence(item: dict, role: str) -> dict:
     return item
 
 
-async def retrieve(role: str, query: Optional[str] = None, top_k: int = 10) -> dict:
+def _requirements_for_retrieval(role: str, location: Any = None) -> List[dict]:
+    """Merged baseline+dynamic requirements for retrieval (additive).
+
+    Uses the intelligence view's gap-engine projection so unmapped dynamic
+    concepts never enter ranking (taxonomy cannot drift). Falls back to the
+    baseline catalog when intelligence is unavailable. Never raises.
+    """
+    try:
+        from . import industry_intelligence as _intel
+
+        view = _intel.build_role_intelligence(role, location=location, include_dynamics=True)
+        reqs = _intel.to_gap_engine_requirements(view)
+        if reqs:
+            return reqs
+    except Exception:
+        pass
+    try:
+        return industry_service.list_by_role(role)
+    except Exception:
+        return []
+
+
+def _attach_intelligence_metadata(items: List[dict], role: str, location: Any = None) -> None:
+    """Enrich vector-path items with trend/freshness/location from the view.
+
+    RPC values always win for core dimensions; only additive intelligence
+    fields are filled. Never raises; degrades gracefully when unavailable.
+    """
+    try:
+        from . import industry_intelligence as _intel
+
+        view = _intel.build_role_intelligence(role, location=location, include_dynamics=True)
+        by_skill = {str(s.get("skill", "")).lower(): s for s in (view.get("skills") or [])}
+        for it in items or []:
+            ref = by_skill.get(str(it.get("skill", "")).lower())
+            if not ref:
+                continue
+            for key in ("trend", "freshness", "data_origin", "location",
+                        "collected_at", "last_updated", "mapping_status"):
+                if it.get(key) in (None, "") and ref.get(key) not in (None, ""):
+                    it[key] = ref.get(key)
+    except Exception:
+        pass
+
+
+def _append_missing_dynamic_requirements(
+    items: List[dict], role: str, location: Any = None
+) -> None:
+    """Append dynamic-only mapped requirements absent from vector results.
+
+    Vector RPCs only return persisted rows, so dynamic-only skills (e.g. a
+    rising overlay with no DB row yet) would otherwise be invisible on the
+    vector path. Only skills NOT already present are appended, so pgvector
+    ranking for overlapping skills is untouched; unmapped concepts are never
+    appended so the taxonomy cannot drift. Mutates `items`; never raises.
+    """
+    try:
+        from . import industry_intelligence as _intel
+
+        present = set()
+        for it in items or []:
+            canon = normalize_skill(str(it.get("skill", ""))) or str(it.get("skill", ""))
+            present.add(canon.lower())
+        view = _intel.build_role_intelligence(role, location=location, include_dynamics=True)
+        for req in _intel.to_gap_engine_requirements(view):
+            canon = normalize_skill(str(req.get("skill", ""))) or str(req.get("skill", ""))
+            if canon.lower() in present:
+                continue
+            items.append(dict(req))
+            present.add(canon.lower())
+    except Exception:
+        pass
+
+
+async def retrieve(role: str, query: Optional[str] = None, top_k: int = 10, location: Any = None) -> dict:
     """
     Retrieve relevant industry requirements for a target role and query.
     Always returns normalized canonical skills and preserves all 5 industry
@@ -568,6 +642,13 @@ async def retrieve(role: str, query: Optional[str] = None, top_k: int = 10) -> d
     vector cosine similarity when pgvector is available, the deterministic
     keyword-overlap proxy otherwise. Low-quality sources are capped so they
     can never dominate on similarity alone; duplicates collapse to one item.
+
+    Optional `location` enables Dynamic Industry Intelligence overlays
+    (additive): the fallback path ranks merged baseline+dynamic requirements;
+    the vector path keeps pgvector ranking, appends dynamic-only mapped skills
+    missing from RPC coverage, then enriches items with trend/freshness/
+    location metadata. Unmapped dynamic concepts never enter
+    retrieval so the canonical taxonomy cannot drift.
     """
     canonical_role = canonicalize_role_name(role) or role.strip()
     q = (query or f"skills required for {canonical_role}").strip()
@@ -580,8 +661,10 @@ async def retrieve(role: str, query: Optional[str] = None, top_k: int = 10) -> d
     if vec_results:
         catalog_index = _catalog_index_for_role(canonical_role)
         vec_results = [_enrich_with_catalog(dict(it), catalog_index) for it in vec_results]
+        _append_missing_dynamic_requirements(vec_results, canonical_role, location)
         for it in vec_results:
             _attach_requirement_evidence(it, canonical_role)
+        _attach_intelligence_metadata(vec_results, canonical_role, location)
         similarities = {i: max(0.0, min(1.0, float(it.get("similarity", 0.8)))) for i, it in enumerate(vec_results)}
         ranked, duplicates_removed = _rank_items(vec_results, canonical_role, ranking_query, top_k, similarities)
         for it in ranked:
@@ -598,9 +681,10 @@ async def retrieve(role: str, query: Optional[str] = None, top_k: int = 10) -> d
         }
 
     # 2. Deterministic fallback path (embeddings/RPC unavailable): same
-    # fusion ranking over catalog rows, keyword-overlap as the similarity.
+    # fusion ranking over merged baseline+dynamic rows, keyword-overlap as the
+    # similarity. Dynamic overlays feed the EXISTING ranking (no second RAG).
     try:
-        items = industry_service.list_by_role(canonical_role)
+        items = _requirements_for_retrieval(canonical_role, location)
         if not items:
             items = industry_service.get_all(limit=top_k)
             if not items:

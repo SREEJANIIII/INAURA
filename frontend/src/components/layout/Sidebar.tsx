@@ -40,11 +40,11 @@ const items: NavItem[] = [
   },
   {
     label: "Skill Assessment",
-    to: "/analysis/results#skill-assessments",
+    to: "/skill-assessment",
     icon: <Icon><circle cx="12" cy="12" r="8.5" /><path d="m8.5 12.2 2.4 2.3 4.6-4.9" /></Icon>,
     children: [
-      { label: "DSA", to: "/analysis/results#dsa" },
-      { label: "Skills You Know", to: "/analysis/results#skill-assessments" },
+      { label: "Skills You Know", to: "/skill-assessment" },
+      { label: "DSA", to: "/skill-assessment/dsa" },
     ],
   },
   {
@@ -61,7 +61,7 @@ const items: NavItem[] = [
   },
   {
     label: "Resume",
-    to: "/resume/ats-tester",
+    to: "/resume",
     icon: (
       <Icon>
         <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z" />
@@ -71,6 +71,10 @@ const items: NavItem[] = [
         <polyline points="10 9 9 9 8 9" />
       </Icon>
     ),
+    children: [
+      { label: "ATS Tester", to: "/resume/ats-tester" },
+      { label: "Resume Builder", to: "/resume" },
+    ],
   },
   {
     label: "Roadmap",
@@ -126,7 +130,7 @@ const matches = (to: string, pathname: string, hash: string, onScreen: string | 
   if (path === RESULTS_PATH && h && ANALYSIS_SECTION_IDS.includes(h)) return pathname === path && onScreen === h;
   // Career Track stays highlighted on its career and skill pages
   if (path === "/career-track") return pathname === path || pathname.startsWith(`${path}/`);
-  if (path === "/resume/ats-tester") return pathname === path || pathname.startsWith("/resume");
+  if (path === "/resume" || path === "/resume/ats-tester") return pathname === path || pathname.startsWith("/resume");
   return pathname === path && (!h || hash === `#${h}`);
 };
 
@@ -149,17 +153,20 @@ export default function Sidebar({ open, onNavigate }: SidebarProps) {
     analysis: results?.analysis,
     targetRole: (analysisState ?? evidence?.analysisState)?.target_role,
   });
-  const onAnalysisPage = pathname === RESULTS_PATH && !["#dsa", "#skill-assessments"].includes(hash);
+  // The group the current page belongs to: the analysis page (whichever section is showing),
+  // or a group with a sub-page at this address, like Skill Assessment → DSA
+  const pageGroup =
+    pathname === RESULTS_PATH
+      ? "Analysis"
+      : items.find((i) => i.children?.some((c) => !c.to.includes("#") && c.to === pathname))?.label ?? null;
   // Start with the current page's group open, so you can see where you are
-  const [expanded, setExpanded] = useState<string | null>(() =>
-    onAnalysisPage ? "Analysis" : items.find((i) => groupHasPath(i, pathname, hash, onScreen))?.label ?? null
-  );
+  const [expanded, setExpanded] = useState<string | null>(pageGroup);
 
-  // Arriving on the analysis page opens its section list
-  const [wasOnAnalysisPage, setWasOnAnalysisPage] = useState(onAnalysisPage);
-  if (onAnalysisPage !== wasOnAnalysisPage) {
-    setWasOnAnalysisPage(onAnalysisPage);
-    if (onAnalysisPage) setExpanded("Analysis");
+  // Arriving on a page in a group opens that group's list
+  const [lastGroup, setLastGroup] = useState(pageGroup);
+  if (pageGroup !== lastGroup) {
+    setLastGroup(pageGroup);
+    if (pageGroup) setExpanded(pageGroup);
   }
 
   const toggleGroup = (label: string) => setExpanded((cur) => (cur === label ? null : label));
@@ -178,11 +185,13 @@ export default function Sidebar({ open, onNavigate }: SidebarProps) {
 
   const renderLink = (item: NavItem, sub = false) =>
     item.soon ? (
-      <span key={item.label} className="sidebar__link sidebar__link--soon" aria-disabled="true">
+      // Not a link and not focusable: there's nothing to open yet, and it says so
+      <span key={item.label} className="sidebar__link sidebar__link--soon" title={`${item.label} is coming soon`}>
         {item.icon}
         <span className="sidebar__text">{item.label}</span>
         <span className="sidebar__badge">Soon</span>
       </span>
+
     ) : (
       <Link
         key={item.label}
@@ -197,7 +206,7 @@ export default function Sidebar({ open, onNavigate }: SidebarProps) {
     );
 
   return (
-    <aside className={`sidebar${open ? " is-open" : ""}`} aria-label="Main navigation" aria-hidden={!open}>
+    <aside id="app-sidebar" className={`sidebar${open ? " is-open" : ""}`} aria-label="Main navigation" aria-hidden={!open}>
       <nav className="sidebar__nav">
         {items.map((item) =>
           item.children ? (

@@ -1649,6 +1649,24 @@ def _normalize_requirement_row(row: dict) -> dict:
         "Direct canonical technology/profile reference" if canonical_def else "INAURA canonical taxonomy mapping"
     )
 
+    # Dynamic Intelligence passthrough (additive): preserve optional
+    # location/trend/provenance fields when present so dynamic overlays survive
+    # normalization + aggregation. Defaults keep baseline behavior unchanged.
+    _loc = row.get("location")
+    location_val = _loc if isinstance(_loc, dict) else None
+    _trend_raw = str(row.get("trend") or row.get("skill_trend") or "").strip().lower()
+    trend_val = _trend_raw if _trend_raw in (
+        "stable", "rising", "emerging", "declining", "insufficient_data") else (
+        ("stable" if canonical_def else "insufficient_data") if not _trend_raw else _trend_raw)
+    _origin_raw = str(row.get("data_origin") or "").strip().lower()
+    data_origin_val = _origin_raw if _origin_raw in (
+        "source_data", "inaura_derived", "demo_seeded") else (
+        "source_data" if (row.get("source") and "demo" not in str(row.get("source")).lower()) else "demo_seeded")
+    collected_val = row.get("collected_at") or meta.get("collected_at")
+    last_updated_val = row.get("last_updated") or meta.get("last_updated") or collected_val
+    mapping_status_val = row.get("mapping_status") or meta.get("mapping_status") or (
+        "mapped" if canonical_def else "unmapped")
+
     return {
         "id": str(row.get("id", f"req-{slug}")),
         "role": row.get("role", ""),
@@ -1680,6 +1698,12 @@ def _normalize_requirement_row(row: dict) -> dict:
         "description": canonical_def.description if canonical_def else row.get("description", proto_match.get("description", "") if proto_match else ""),
         "version": version,
         "metadata": row.get("metadata", {}) or proto_match.get("metadata", {}) if proto_match else row.get("metadata", {}),
+        "location": location_val,
+        "trend": trend_val,
+        "data_origin": data_origin_val,
+        "collected_at": collected_val,
+        "last_updated": last_updated_val,
+        "mapping_status": mapping_status_val,
     }
 
 
@@ -1951,6 +1975,21 @@ def aggregate_requirements(req_rows: List[dict]) -> List[dict]:
 
         primary = deduped[0]
         max_quality = round(max(it["source_quality"] for it in deduped), 3)
+        # Dynamic Intelligence merge (additive, formula untouched): trend takes the
+        # highest-priority dynamic state; data_origin becomes inaura_derived when
+        # origins mix, with the full list preserved for explainability.
+        _trend_rank = {"insufficient_data": 0, "stable": 1, "declining": 2, "rising": 3, "emerging": 4}
+        _merged_trend = "stable"
+        _merged_rank = -1
+        for it in deduped:
+            _t = str(it.get("trend") or "stable").strip().lower()
+            if _t not in _trend_rank:
+                _t = "stable"
+            if _trend_rank[_t] > _merged_rank:
+                _merged_rank = _trend_rank[_t]
+                _merged_trend = _t
+        _origins = sorted({str(it.get("data_origin") or "source_data") for it in deduped})
+        _merged_origin = _origins[0] if len(_origins) == 1 else "inaura_derived"
         aggregated.append({
             **primary,
             "required_level": round(agg_level, 3),
@@ -1964,6 +2003,9 @@ def aggregate_requirements(req_rows: List[dict]) -> List[dict]:
             "duplicate_sources_collapsed": collapsed,
             "supporting_sources": _supporting_source_entries(deduped),
             "supporting_chunks": supporting_chunk_refs(primary.get("role", ""), skill_name),
+            "trend": _merged_trend,
+            "data_origin": _merged_origin,
+            "data_origins": _origins,
         })
 
     # Sort aggregated by importance descending

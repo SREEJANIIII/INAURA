@@ -19,7 +19,9 @@ import {
 } from "../services/industry";
 import { runAnalysis } from "../services/analysis";
 import Button from "../components/ui/app-button";
+import ConfirmButton from "../components/ui/ConfirmButton";
 import { evidencePageData, refreshPageData } from "../lib/pageData";
+import { friendlyError, statusOf } from "../lib/errors";
 
 type EvidencePageData = NonNullable<ReturnType<typeof evidencePageData.peek>>;
 import NotionIntegrationCard from "../components/integrations/NotionIntegrationCard";
@@ -38,6 +40,13 @@ const urlSources: { type: UrlSource; label: string; placeholder: string; hint: s
   { type: "linkedin", label: "LinkedIn", placeholder: "https://www.linkedin.com/in/username", hint: "LinkedIn profile URL" },
 ];
 
+/** "github.com/me" is what people type; the server wants the scheme, so add it for them */
+const withScheme = (url: string) => {
+  const v = url.trim();
+  if (!v) return null;
+  return /^https?:\/\//i.test(v) ? v : `https://${v.replace(/^\/+/, "")}`;
+};
+
 const fileSources: { type: "resume" | "syllabus"; label: string; desc: string }[] = [
   { type: "resume", label: "Resume", desc: "PDF, DOC or DOCX — your latest resume" },
   { type: "syllabus", label: "College syllabus / coursework", desc: "PDF/DOC — curriculum or key coursework" },
@@ -51,6 +60,10 @@ export default function Analysis() {
   const [loading, setLoading] = useState(() => !evidencePageData.peek());
   const { hash } = useLocation();
   const [error, setError] = useState<string | null>(null);
+  /** Problems with one source, shown on that source's card rather than at the top of the page */
+  const [cardErrors, setCardErrors] = useState<Record<string, string | null>>({});
+  const cardError = (key: string, message: string | null) => setCardErrors((prev) => ({ ...prev, [key]: message }));
+  const [runError, setRunError] = useState<string | null>(null);
   const [saving, setSaving] = useState<string | null>(null);
   const [verifyingId, setVerifyingId] = useState<string | null>(null);
 
@@ -118,15 +131,10 @@ export default function Analysis() {
     try {
       applyData(await evidencePageData.fetch(force));
     } catch (e) {
-      const msg = e instanceof Error ? e.message : "Failed to load";
-      if (msg.includes("401") || msg.toLowerCase().includes("not authenticated")) {
-        setError("Session expired. Please log in again.");
-      } else if (msg.includes("503") || msg.toLowerCase().includes("permission denied") || msg.toLowerCase().includes("not found")) {
-        // For industry/analysis 503, don't block whole page — show inline
-        setError(null);
-      } else {
-        setError("Could not load your evidence. Please refresh.");
-      }
+      const status = statusOf(e);
+      // A missing part (no analysis yet, a table not set up) shouldn't block the whole page
+      if (status === 404 || status === 503) setError(null);
+      else setError(friendlyError(e, "Your evidence couldn’t be loaded. Check your connection and try again."));
     } finally {
       setLoading(false);
     }
@@ -167,25 +175,27 @@ export default function Analysis() {
 
   const findEvidence = (type: string) => evidence.find((e) => e.evidence_type === type);
 
+  const labelOf = (type: UrlSource) => urlSources.find((s) => s.type === type)?.label ?? type;
+
   const handleSaveUrl = async (type: UrlSource) => {
     const val = urlInputs[type].trim();
     if (!val) {
-      setError(`Please enter a ${type} URL or username.`);
+      cardError(type, `Enter your ${labelOf(type)} profile link or username.`);
       return;
     }
-    if (val.includes(" ")) {
-      setError("URL/username must not contain spaces.");
+    if (/\s/.test(val)) {
+      cardError(type, "A link or username can’t contain spaces.");
       return;
     }
     setSaving(type);
-    setError(null);
+    cardError(type, null);
     try {
       const existing = findEvidence(type);
       if (existing) await deleteEvidence(existing.id);
       await createEvidence({ evidence_type: type, source_url: val });
       await loadAll();
     } catch (e) {
-      setError(e instanceof Error ? e.message : "Failed to save");
+      cardError(type, friendlyError(e, `Your ${labelOf(type)} profile couldn’t be saved. Try again.`));
     } finally {
       setSaving(null);
     }
@@ -195,25 +205,26 @@ export default function Analysis() {
     const existing = findEvidence(type);
     if (!existing) return;
     setSaving(type);
+    cardError(type, null);
     try {
       await deleteEvidence(existing.id);
       setUrlInputs((prev) => ({ ...prev, [type]: "" }));
       await loadAll();
     } catch (e) {
-      setError(e instanceof Error ? e.message : "Failed to remove");
+      cardError(type, friendlyError(e, `Your ${labelOf(type)} profile couldn’t be removed. Try again.`));
     } finally {
       setSaving(null);
     }
   };
 
-  const handleVerifyEvidence = async (id: string) => {
+  const handleVerifyEvidence = async (id: string, type: UrlSource) => {
     setVerifyingId(id);
-    setError(null);
+    cardError(type, null);
     try {
       await verifyEvidence(id);
       await loadAll();
     } catch (e) {
-      setError(e instanceof Error ? e.message : "Verification failed");
+      cardError(type, friendlyError(e, `Your ${labelOf(type)} profile couldn’t be checked just now. Try again in a moment.`));
     } finally {
       setVerifyingId(null);
     }
@@ -244,7 +255,7 @@ export default function Analysis() {
       await uploadEvidenceFile(form);
       await loadAll();
     } catch (e) {
-      setFileErrors((prev) => ({ ...prev, [type]: e instanceof Error ? e.message : "Upload failed" }));
+      setFileErrors((prev) => ({ ...prev, [type]: friendlyError(e, "That file couldn’t be uploaded. Try again.") }));
     } finally {
       setSaving(null);
     }
@@ -254,11 +265,12 @@ export default function Analysis() {
     const existing = findEvidence(type);
     if (!existing) return;
     setSaving(type);
+    setFileErrors((prev) => ({ ...prev, [type]: null }));
     try {
       await deleteEvidence(existing.id);
       await loadAll();
     } catch (e) {
-      setError(e instanceof Error ? e.message : "Failed to remove");
+      setFileErrors((prev) => ({ ...prev, [type]: friendlyError(e, "That file couldn’t be removed. Try again.") }));
     } finally {
       setSaving(null);
     }
@@ -266,31 +278,31 @@ export default function Analysis() {
 
   const handleAddProject = async () => {
     if (!projectForm.name.trim() || projectForm.name.trim().length < 2) {
-      setError("Project name must be at least 2 characters.");
+      cardError("project", "Give the project a name (at least 2 characters).");
       return;
     }
     if (!projectForm.description.trim() || projectForm.description.trim().length < 10) {
-      setError("Project description must be at least 10 characters.");
+      cardError("project", "Describe the project in a sentence or two (at least 10 characters).");
       return;
     }
     if (!projectForm.technologies.trim()) {
-      setError("Please list technologies used.");
+      cardError("project", "List the technologies you used, separated by commas.");
       return;
     }
     setSaving("project");
-    setError(null);
+    cardError("project", null);
     try {
       await createProject({
         name: projectForm.name.trim(),
         description: projectForm.description.trim(),
         technologies: projectForm.technologies.split(",").map((s) => s.trim()).filter(Boolean),
-        project_url: projectForm.project_url.trim() || null,
-        github_url: projectForm.github_url.trim() || null,
+        project_url: withScheme(projectForm.project_url),
+        github_url: withScheme(projectForm.github_url),
       });
       setProjectForm({ name: "", description: "", technologies: "", project_url: "", github_url: "" });
       await loadAll();
     } catch (e) {
-      setError(e instanceof Error ? e.message : "Failed to add project");
+      cardError("project", friendlyError(e, "Your project couldn’t be saved. Try again."));
     } finally {
       setSaving(null);
     }
@@ -298,30 +310,44 @@ export default function Analysis() {
 
   const handleAddCert = async () => {
     if (!certForm.name.trim() || certForm.name.trim().length < 2) {
-      setError("Certification name required.");
+      cardError("cert", "Enter the certificate’s name.");
       return;
     }
     if (!certForm.issuing_org.trim()) {
-      setError("Issuing organization required.");
+      cardError("cert", "Enter who issued it — e.g. Coursera or NPTEL.");
       return;
     }
     if (!certForm.completion_year || certForm.completion_year < 2000 || certForm.completion_year > 2035) {
-      setError("Enter a valid year between 2000 and 2035.");
+      cardError("cert", "Enter the year you completed it, between 2000 and 2035.");
       return;
     }
     setSaving("cert");
-    setError(null);
+    cardError("cert", null);
     try {
       await createCert({
         name: certForm.name.trim(),
         issuing_org: certForm.issuing_org.trim(),
         completion_year: Number(certForm.completion_year),
-        certificate_url: certForm.certificate_url.trim() || null,
+        certificate_url: withScheme(certForm.certificate_url),
       });
       setCertForm({ name: "", issuing_org: "", completion_year: new Date().getFullYear(), certificate_url: "" });
       await loadAll();
     } catch (e) {
-      setError(e instanceof Error ? e.message : "Failed to add certification");
+      cardError("cert", friendlyError(e, "Your certificate couldn’t be saved. Try again."));
+    } finally {
+      setSaving(null);
+    }
+  };
+
+  /** Projects and certificates are removed by id, one at a time */
+  const handleRemoveItem = async (kind: "project" | "cert", id: string) => {
+    setSaving(`${kind}:${id}`);
+    cardError(kind, null);
+    try {
+      await (kind === "project" ? deleteProject(id) : deleteCert(id));
+      await loadAll();
+    } catch (e) {
+      cardError(kind, friendlyError(e, `That ${kind === "project" ? "project" : "certificate"} couldn’t be removed. Try again.`));
     } finally {
       setSaving(null);
     }
@@ -340,7 +366,7 @@ export default function Analysis() {
       setAnalysisState(updated);
       evidencePageData.fetch(true).catch(() => undefined);
     } catch (e) {
-      setError(e instanceof Error ? e.message : "Failed to set target role");
+      setError(friendlyError(e, "Your career goal couldn’t be saved. Try again."));
     }
   };
 
@@ -357,22 +383,22 @@ export default function Analysis() {
       setShowCustom(false);
       evidencePageData.fetch(true).catch(() => undefined);
     } catch (e) {
-      setError(e instanceof Error ? e.message : "Failed to set target role");
+      setError(friendlyError(e, "Your career goal couldn’t be saved. Try again."));
     }
   };
 
   const handleStartAnalysis = async () => {
     const roleToUse = showCustom ? customRole.trim() : targetRole.trim();
     if (!roleToUse) {
-      setError("Choose your primary career goal to start analysis.");
+      setRunError("Choose the role you’re aiming for first.");
       return;
     }
     if (evidence.length === 0 && projects.length === 0 && certs.length === 0) {
-      setError("Add at least one evidence source, project or certification to start analysis.");
+      setRunError("Add at least one profile, file, project or certificate first.");
       return;
     }
     setPreparing(true);
-    setError(null);
+    setRunError(null);
     setShowConfirm(false);
     try {
       if (!analysisState || analysisState.target_role !== roleToUse) {
@@ -385,15 +411,15 @@ export default function Analysis() {
       setShowConfirm(true);
       navigate("/analysis/results");
     } catch (e) {
-      const msg = e instanceof Error ? e.message : "Failed to prepare analysis";
-      if (msg.toLowerCase().includes("profile not found")) {
-        setError("Please complete your profile setup first.");
-      } else if (msg.toLowerCase().includes("no evidence")) {
-        setError("Add at least one evidence source before starting analysis.");
-      } else if (msg.includes("503") || msg.toLowerCase().includes("not configured") || msg.toLowerCase().includes("permission denied")) {
-        setError("Analysis tables not configured — run backend/supabase/005_skill_engine.sql and 003/004");
+      const msg = e instanceof Error ? e.message.toLowerCase() : "";
+      if (msg.includes("profile not found")) {
+        setRunError("Finish setting up your profile first — the analysis reads your year and study hours from it.");
+      } else if (msg.includes("no evidence")) {
+        setRunError("Add at least one profile, file, project or certificate first.");
+      } else if (msg.includes("no industry requirements")) {
+        setRunError(`INAURA doesn’t have industry benchmarks for “${roleToUse}” yet. Pick one of the listed roles on Career Track.`);
       } else {
-        setError(msg);
+        setRunError(friendlyError(e, "The analysis couldn’t be run just now. Try again in a moment."));
       }
     } finally {
       setPreparing(false);
@@ -437,7 +463,7 @@ export default function Analysis() {
       id: "file-evidence",
       title: "Files",
       proves: "Your resume and what your course covered",
-      desc: "Stored privately in Supabase Storage. Nothing is read from them yet.",
+      desc: "Stored privately to your account. INAURA reads the text for skills you mention, and weighs them below your code and verified profiles.",
       done: filesAdded.length > 0,
       status: filesAdded.join(", "),
     },
@@ -515,9 +541,15 @@ export default function Analysis() {
 
   if (loading) {
     return (
-      <div className="analysis">
-        <div className="container" style={{ padding: "4rem 0", textAlign: "center", color: "var(--ev-ink-3)" }}>
-          Loading your evidence…
+      <div className="analysis" aria-busy="true">
+        <header className="analysis__header">
+          <div className="container">
+            <h1 className="analysis__title">The case for you</h1>
+          </div>
+        </header>
+        <div className="container analysis__main">
+          <div className="analysis__skeleton" />
+          <span className="sr-only">Loading your evidence</span>
         </div>
       </div>
     );
@@ -536,7 +568,7 @@ export default function Analysis() {
         </div>
       </header>
 
-      <main className="container analysis__main">
+      <div className="container analysis__main">
         {error && (
           <div className="analysis__error" role="alert">
             {error}
@@ -652,6 +684,11 @@ export default function Analysis() {
                       disabled={!!existing}
                     />
                   </div>
+                  {cardErrors[s.type] && (
+                    <div className="analysis__file-error" role="alert">
+                      {cardErrors[s.type]}
+                    </div>
+                  )}
                   {existing && (
                     <div className="analysis__card-details">
                       {detectedSkills && detectedSkills.length > 0 && (
@@ -692,15 +729,18 @@ export default function Analysis() {
                             <Button
                               variant="secondary"
                               size="sm"
-                              onClick={() => handleVerifyEvidence(existing.id)}
+                              onClick={() => handleVerifyEvidence(existing.id, s.type)}
                               disabled={isVerifying || isSaving}
                             >
                               {isVerifying ? "Verifying…" : vStatus === "failed" ? "Retry" : "Verify"}
                             </Button>
                           )}
-                          <Button variant="ghost" size="sm" onClick={() => handleRemoveUrl(s.type)} disabled={isSaving || isVerifying}>
-                            Remove
-                          </Button>
+                          <ConfirmButton
+                            onConfirm={() => handleRemoveUrl(s.type)}
+                            busy={isSaving}
+                            disabled={isVerifying}
+                            label={`Remove your ${s.label} profile`}
+                          />
                         </div>
                       </>
                     ) : (
@@ -729,12 +769,13 @@ export default function Analysis() {
                   </div>
                   <p className="analysis__card-hint">{f.desc}</p>
                   {existing ? (
-                    <div className="analysis__file-saved">
-                      <span>✓ {existing.title || existing.file_path}</span>
-                      <Button variant="secondary" size="sm" onClick={() => handleRemoveFile(f.type)} disabled={isSaving}>
-                        Remove
-                      </Button>
-                    </div>
+                    <>
+                      <div className="analysis__file-saved">
+                        <span>✓ {existing.title || existing.file_path}</span>
+                        <ConfirmButton onConfirm={() => handleRemoveFile(f.type)} busy={isSaving} label={`Remove your ${f.label.toLowerCase()}`} />
+                      </div>
+                      {fileErrors[f.type] && <div className="analysis__file-error" role="alert">{fileErrors[f.type]}</div>}
+                    </>
                   ) : (
                     <>
                       <label className="analysis__file-label">
@@ -751,7 +792,7 @@ export default function Analysis() {
                         <span className="analysis__file-btn">{isSaving ? "Uploading…" : "Choose file"}</span>
                         <span className="analysis__file-hint">PDF, DOC, DOCX — max 10 MB</span>
                       </label>
-                      {fileErrors[f.type] && <div className="analysis__file-error">{fileErrors[f.type]}</div>}
+                      {fileErrors[f.type] && <div className="analysis__file-error" role="alert">{fileErrors[f.type]}</div>}
                     </>
                   )}
                 </div>
@@ -771,12 +812,13 @@ export default function Analysis() {
                   </div>
                   <p className="analysis__card-hint">{desc}</p>
                   {existing ? (
-                    <div className="analysis__file-saved">
-                      <span>✓ {existing.title || existing.file_path}</span>
-                      <Button variant="secondary" size="sm" onClick={() => handleRemoveFile(t)} disabled={isSaving}>
-                        Remove
-                      </Button>
-                    </div>
+                    <>
+                      <div className="analysis__file-saved">
+                        <span>✓ {existing.title || existing.file_path}</span>
+                        <ConfirmButton onConfirm={() => handleRemoveFile(t)} busy={isSaving} label={`Remove this ${label.toLowerCase()}`} />
+                      </div>
+                      {fileErrors[t] && <div className="analysis__file-error" role="alert">{fileErrors[t]}</div>}
+                    </>
                   ) : (
                     <>
                       <label className="analysis__file-label">
@@ -793,7 +835,7 @@ export default function Analysis() {
                         <span className="analysis__file-btn">{isSaving ? "Uploading…" : "Choose file"}</span>
                         <span className="analysis__file-hint">PDF, DOC, DOCX — max 10 MB</span>
                       </label>
-                      {fileErrors[t] && <div className="analysis__file-error">{fileErrors[t]}</div>}
+                      {fileErrors[t] && <div className="analysis__file-error" role="alert">{fileErrors[t]}</div>}
                     </>
                   )}
                 </div>
@@ -831,9 +873,11 @@ export default function Analysis() {
                       </span>
                     )}
                   </div>
-                  <Button variant="ghost" size="sm" onClick={async () => { await deleteProject(p.id); await loadAll(); }}>
-                    Remove
-                  </Button>
+                  <ConfirmButton
+                    onConfirm={() => handleRemoveItem("project", p.id)}
+                    busy={saving === `project:${p.id}`}
+                    label={`Remove the project ${p.name}`}
+                  />
                 </div>
               ))}
             </div>
@@ -875,8 +919,13 @@ export default function Analysis() {
                 onChange={(e) => setProjectForm({ ...projectForm, github_url: e.target.value })}
               />
             </div>
+            {cardErrors.project && (
+              <div className="analysis__file-error" role="alert">
+                {cardErrors.project}
+              </div>
+            )}
             <Button variant="secondary" size="md" onClick={handleAddProject} disabled={saving === "project"}>
-              + Add Project
+              {saving === "project" ? "Adding…" : "+ Add project"}
             </Button>
           </div>
         </EvidenceSection>
@@ -898,9 +947,11 @@ export default function Analysis() {
                       </a>
                     )}
                   </div>
-                  <Button variant="ghost" size="sm" onClick={async () => { await deleteCert(c.id); await loadAll(); }}>
-                    Remove
-                  </Button>
+                  <ConfirmButton
+                    onConfirm={() => handleRemoveItem("cert", c.id)}
+                    busy={saving === `cert:${c.id}`}
+                    label={`Remove the certificate ${c.name}`}
+                  />
                 </div>
               ))}
             </div>
@@ -938,8 +989,13 @@ export default function Analysis() {
                 onChange={(e) => setCertForm({ ...certForm, certificate_url: e.target.value })}
               />
             </div>
+            {cardErrors.cert && (
+              <div className="analysis__file-error" role="alert">
+                {cardErrors.cert}
+              </div>
+            )}
             <Button variant="secondary" size="md" onClick={handleAddCert} disabled={saving === "cert"}>
-              + Add Certification
+              {saving === "cert" ? "Adding…" : "+ Add certificate"}
             </Button>
           </div>
         </EvidenceSection>
@@ -953,6 +1009,8 @@ export default function Analysis() {
             running={preparing}
             onRun={handleStartAnalysis}
             blocked={runBlocked}
+            error={runError}
+
             stale={stale.stale && stale.message && stale.action ? { message: stale.message, action: stale.action } : null}
           />
         </div>
@@ -963,7 +1021,7 @@ export default function Analysis() {
             <p>Opening your results.</p>
           </div>
         )}
-      </main>
+      </div>
     </div>
   );
 }

@@ -45,6 +45,15 @@ export type IndustryRequirement = {
   // Phase 3: contextual employer-outcome annotation. Absent unless the
   // overlay is enabled and the cell meets its threshold. Never a math input.
   outcome_overlay?: OutcomeOverlay | null;
+  // Dynamic Industry Intelligence (all optional for compatibility)
+  required_level?: number;
+  industry_confidence?: number;
+  trend?: string | null;
+  freshness?: string | null;
+  data_origin?: string | null;
+  location?: Record<string, unknown> | null;
+  collected_at?: string | null;
+  last_updated?: string | null;
 };
 
 export type RetrieveItem = {
@@ -60,6 +69,11 @@ export type RetrieveItem = {
   description: string | null;
   version: string;
   similarity: number;
+  // Dynamic Industry Intelligence (all optional for compatibility)
+  trend?: string | null;
+  freshness?: string | null;
+  data_origin?: string | null;
+  location?: Record<string, unknown> | null;
 };
 
 export type RetrieveResponse = {
@@ -110,11 +124,65 @@ export function getEmergingSkills(role: string, location?: string) {
   return apiFetch<EmergingSkill[]>(`/industry/outcomes/emerging${q}`);
 }
 
-export function retrieveIndustry(payload: { role: string; query?: string; top_k?: number }) {
+// export function retrieveIndustry(payload: { role: string; query?: string; top_k?: number }) {
+export function retrieveIndustry(payload: { role: string; query?: string; top_k?: number; location?: string }) {
   return apiFetch<RetrieveResponse>("/industry/retrieve", {
     method: "POST",
     body: JSON.stringify(payload),
   });
+}
+
+export type IntelligenceSkill = {
+  id?: string | null;
+  role: string;
+  skill: string;
+  skill_slug?: string | null;
+  skill_category?: string | null;
+  required_level: number;
+  importance: number;
+  demand: number;
+  interview_relevance: number;
+  industry_confidence: number;
+  trend?: string | null;
+  freshness?: string | null;
+  source: string;
+  source_url?: string | null;
+  evidence_context?: string | null;
+  data_origin?: string | null;
+  data_origins?: string[] | null;
+  location?: { label?: string; scope?: string } | null;
+  location_match?: string | null;
+  mapping_status?: string | null;
+  source_concept?: string | null;
+  canonical_mapping?: string | null;
+  mapping_rationale?: string | null;
+  collected_at?: string | null;
+  last_updated?: string | null;
+  published_at?: string | null;
+  retrieved_at?: string | null;
+};
+
+export type IntelligenceResponse = {
+  role: string;
+  location: { label?: string; scope?: string };
+  location_match: string;
+  last_updated: string | null;
+  skills: IntelligenceSkill[];
+  counts?: Record<string, number> | null;
+  data_origins?: string[] | null;
+  note: string;
+};
+
+export function getRoleIntelligence(role: string, location?: string) {
+  const params = new URLSearchParams({ role });
+  if (location && location.trim()) params.set("location", location.trim());
+  return apiFetch<IntelligenceResponse>(`/industry/intelligence?${params.toString()}`);
+}
+
+export function listDemandProviders() {
+  return apiFetch<
+    { provider_id: string; display_name: string; data_origin: string; is_live: boolean; description: string }[]
+  >("/industry/providers");
 }
 
 export function getAnalysisState() {

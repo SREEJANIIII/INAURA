@@ -143,9 +143,11 @@ export function buildActions(args: {
   weeks: RoadmapWeek[];
   coverage: CoverageItem[];
   assessable: AvailableAssessment[];
+  /** Revision cards that have come round again */
+  revisionDue?: number;
   limit?: number;
 }): NextAction[] {
-  const { analysis, roadmap, weeks, coverage, assessable, limit = 5 } = args;
+  const { analysis, roadmap, weeks, coverage, assessable, revisionDue = 0, limit = 5 } = args;
   const actions: NextAction[] = [];
 
   const week = currentWeek(roadmap, weeks);
@@ -173,9 +175,25 @@ export function buildActions(args: {
     actions.push({ kind: "link", id: `verify-${unverified.key}`, title: `Verify your ${unverified.noun}`, meta: "Unverified profiles count for less", to: unverified.to });
   }
 
-  // Before the first analysis, the dashboard's step tracker already covers role, evidence and running it
+  // Evidence in, no analysis yet: running it is the one step that turns the rest on.
+  // (With no evidence at all, adding some comes first — see the missing sources below.)
+  if (!analysis && coverage.some((c) => c.state !== "missing")) {
+    actions.unshift({ kind: "link", id: "run-analysis", title: "Run your analysis", meta: "See where your evidence puts you", to: "/analysis" });
+  }
+
   if (analysis && !roadmap) {
     actions.push({ kind: "link", id: "roadmap", title: "Generate your roadmap", meta: "A weekly plan built from your gaps", to: "/roadmap" });
+  }
+
+  // Revision is where the roadmap's skills are kept from slipping
+  if (revisionDue > 0) {
+    actions.push({
+      kind: "link",
+      id: "revision",
+      title: `Revise ${revisionDue} card${revisionDue === 1 ? "" : "s"}`,
+      meta: "A few minutes on skills you’re building",
+      to: "/revision",
+    });
   }
 
   const assessment = assessable
@@ -187,7 +205,7 @@ export function buildActions(args: {
       id: `assess-${assessment.skill_key}`,
       title: `Prove your ${assessment.skill} skills`,
       meta: assessment.reason_label || "Short assessment",
-      to: "/analysis/results#skill-assessments",
+      to: "/skill-assessment",
     });
   }
 
@@ -251,11 +269,12 @@ export function buildInsights(signal: ReturnType<typeof buildSignal>, analysis: 
       tone: "neutral",
       title: claimed.length === 1 ? `${claimed[0].name} relies on your word alone` : `${claimed.length} skills rely on your word alone`,
       detail: `${claimed.slice(0, 3).map((s) => s.name).join(", ")} ${claimed.length === 1 ? "appears" : "appear"} in what you’ve told INAURA, but little independent evidence backs ${claimed.length === 1 ? "it" : "them"}. An assessment can confirm ${claimed.length === 1 ? "it" : "them"}.`,
-      to: "/analysis/results#skill-assessments",
+      to: "/skill-assessment",
     });
   }
 
   const strongest = signal.byStage.verified[0];
+
   if (strongest) {
     const sources = strongest.gap.evidence_sources?.map((s) => s.source_label).filter(Boolean).slice(0, 2) ?? [];
     insights.push({

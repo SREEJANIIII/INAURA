@@ -3,6 +3,7 @@ import { Link, useNavigate } from "react-router-dom";
 import { useAuth } from "../context/AuthContext";
 import { supabase } from "../lib/supabase";
 import { AuthComponent, type SignUpResult } from "@/components/ui/sign-up";
+import InauraLogo from "../components/layout/InauraLogo";
 
 export default function Signup() {
   const { signUp, signInWithProvider, isConfigured } = useAuth();
@@ -35,7 +36,7 @@ export default function Signup() {
     // blobs and the loading spinner, and navy muddied the colour field
     <div className="tw-scope" style={{ "--color-primary": "#8b7cf6" } as CSSProperties}>
       <AuthComponent
-        logo={<img src="/logo.png" alt="INAURA" width={1748} height={899} className="h-16 w-auto sm:h-20" decoding="async" />}
+        logo={<InauraLogo alt="INAURA" width={1748} height={899} className="h-16 w-auto sm:h-20" decoding="async" />}
         brandName=""
         title="Join INAURA"
         onSignUp={handleSignUp}

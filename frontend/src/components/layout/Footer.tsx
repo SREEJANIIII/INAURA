@@ -1,4 +1,5 @@
 import "./Footer.css";
+import InauraLogo from "./InauraLogo";
 
 // Every link lands on a section (or card) of the landing page. There's no separate About
 // page yet, so About opens the section that explains why INAURA exists.
@@ -47,8 +48,7 @@ export default function Footer() {
           <div className="footer__brand">
             <a href="/" className="footer__logo-link" aria-label="INAURA — Home">
               <span className="footer__logo-wrap">
-                <img
-                  src="/logo.png"
+                <InauraLogo
                   alt="INAURA"
                   className="footer__logo"
                   width={140}

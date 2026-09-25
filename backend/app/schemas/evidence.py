@@ -117,7 +117,7 @@ class ProjectCreate(BaseModel):
         if v is None or v == "":
             return None
         v = v.strip()
-        if v and not v.startswith("http"):
+        if v and not re.match(r"^https?://[^\s/$.?#][^\s]*$", v, re.IGNORECASE):
             raise ValueError("URL must start with http:// or https://")
         return v
 
@@ -151,7 +151,7 @@ class CertCreate(BaseModel):
         if v is None or v == "":
             return None
         v = v.strip()
-        if v and not v.startswith("http"):
+        if v and not re.match(r"^https?://[^\s/$.?#][^\s]*$", v, re.IGNORECASE):
             raise ValueError("URL must start with http:// or https://")
         return v
 

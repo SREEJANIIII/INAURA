@@ -18,6 +18,8 @@ type SearchBarProps = {
   prefix?: string;
   /** Listen for Ctrl/⌘ + K anywhere on the page */
   enableShortcut?: boolean;
+  /** Some of what can be searched hasn't loaded yet, so "no matches" may not be the last word */
+  pending?: boolean;
   className?: string;
 };
 
@@ -36,6 +38,7 @@ export default function SearchBar({
   words,
   prefix = "Search for",
   enableShortcut = true,
+  pending = false,
   className = "",
 }: SearchBarProps) {
   const inputRef = useRef<HTMLInputElement>(null);
@@ -163,7 +166,7 @@ export default function SearchBar({
               if (!inputRef.current?.value) setExpanded(false);
             }}
             onKeyDown={handleKeyDown}
-            aria-label={`${prefix} ${suggestions.join(", ")}`}
+            aria-label="Search INAURA"
             aria-describedby={hintId}
             autoComplete="off"
             spellCheck={false}
@@ -192,7 +195,9 @@ export default function SearchBar({
       {showResults && (
         <div className="search__panel">
           {results.length === 0 ? (
-            <p className="search__empty">No matches for “{typed}”</p>
+            <p className="search__empty" role="status">
+              {pending ? `Still loading your data — nothing for “${typed}” yet` : `No matches for “${typed}”`}
+            </p>
           ) : (
             <ul className="search__list" id={listId} role="listbox" aria-label="Search results">
               {results.map((result, i) => (

@@ -8,10 +8,41 @@
   min-width: 0;
 }
 
-/* Back to the full analysis — sits above the page heading */
-.an .sa-back {
-  display: inline-block;
-  margin: 14px 0 2px;
+/* Skills you know | DSA — the page's two views, above its heading */
+.an .sa-tabs {
+  display: inline-flex;
+  gap: 2px;
+  margin: 18px 0 4px;
+  padding: 3px;
+  border: 1px solid var(--an-line);
+  border-radius: 10px;
+  background: var(--an-surface);
+}
+
+.an .sa-tabs a {
+  padding: 6px 14px;
+  border-radius: 7px;
+  font-size: 13.5px;
+  font-weight: 500;
+  color: var(--an-ink-2);
+  text-decoration: none;
+  transition: background-color 0.15s, color 0.15s;
+}
+
+.an .sa-tabs a:hover {
+  color: var(--an-ink);
+  background: var(--an-hover);
+}
+
+.an .sa-tabs a.is-active {
+  color: var(--an-accent-deep);
+  background: var(--an-accent-soft);
+  font-weight: 600;
+}
+
+.an .sa-tabs a:focus-visible {
+  outline: 2px solid var(--an-accent);
+  outline-offset: 1px;
 }
 
 /* ---------- Summary ---------- */

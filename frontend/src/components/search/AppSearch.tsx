@@ -72,5 +72,8 @@ export default function AppSearch() {
     if (hash) requestAnimationFrame(() => document.getElementById(hash)?.scrollIntoView({ block: "start" }));
   };
 
-  return <SearchBar onQueryChange={setQuery} results={matches} onSelect={go} />;
+  // Pages are always searchable; your own things arrive as their pages' data does
+  const pending = !catalog || !evidence || !roadmap;
+
+  return <SearchBar onQueryChange={setQuery} results={matches} onSelect={go} pending={pending} />;
 }

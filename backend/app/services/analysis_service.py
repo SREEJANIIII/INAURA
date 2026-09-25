@@ -122,7 +122,9 @@ async def prepare(user_id: str, target_role: Optional[str]) -> dict:
         raise
     # If we reach here, ready to retrieve
     # Do retrieval (RAG)
-    retrieval = await retrieval_service.retrieve(role, None, top_k=10)
+    retrieval = await retrieval_service.retrieve(
+        role, None, top_k=10, location=profile.get("preferred_work_location") or None
+    )
 
     # Update state to ready (not processing, since we don't do heavy LLM now)
     # For Phase 4B, we set status to "ready" with last_retrieval

@@ -15,6 +15,7 @@ import {
   type StartInterviewResponse,
 } from "../services/interview";
 import "./Interview.css";
+import { friendlyError } from "../lib/errors";
 
 type Stage =
   | "setup"
@@ -66,7 +67,7 @@ export default function Interview() {
   // Past interview history & review
   const [activeTab, setActiveTab] = useState<"interview" | "history">("interview");
   const [historySessions, setHistorySessions] = useState<InterviewHistorySession[]>([]);
-  const [loadingHistory, setLoadingHistory] = useState(false);
+  const [loadingHistory, setLoadingHistory] = useState(true);
   const [expandedSessionId, setExpandedSessionId] = useState<string | null>(null);
 
   const fetchHistory = useCallback(async () => {
@@ -81,9 +82,17 @@ export default function Interview() {
     }
   }, []);
 
+  // Past sessions, once when the page opens (fetchHistory refreshes them after an interview)
   useEffect(() => {
-    void fetchHistory();
-  }, [fetchHistory]);
+    let alive = true;
+    getInterviewHistory()
+      .then((res) => alive && setHistorySessions(res.sessions || []))
+      .catch(() => undefined)
+      .finally(() => alive && setLoadingHistory(false));
+    return () => {
+      alive = false;
+    };
+  }, []);
 
   // Camera / mic
   const [camState, setCamState] = useState<CamState>("idle");
@@ -218,7 +227,7 @@ export default function Interview() {
       setCurrent(res.current_question);
       setStage("permissions");
     } catch (e) {
-      setError(e instanceof Error ? e.message : "Could not start the interview");
+      setError(friendlyError(e, "Could not start the interview"));
     } finally {
       setBusy(false);
     }
@@ -242,7 +251,7 @@ export default function Interview() {
         setStage("feedback");
       }
     } catch (e) {
-      setError(e instanceof Error ? e.message : "Could not submit your answer");
+      setError(friendlyError(e, "Could not submit your answer"));
       setStage("question");
     }
   };
@@ -270,7 +279,7 @@ export default function Interview() {
       stopTracks();
       void fetchHistory();
     } catch (e) {
-      setError(e instanceof Error ? e.message : "Could not complete the interview");
+      setError(friendlyError(e, "Could not complete the interview"));
       setStage("feedback");
     }
   };
@@ -331,12 +340,12 @@ export default function Interview() {
     <div className="iv">
       <header className="iv__header">
         <div className="container iv__header-inner">
-          <Link to="/dashboard" className="iv__brand">← Dashboard</Link>
+          <Link to="/career-track" className="iv__brand">← Career Track</Link>
           <span className="iv__badge">AI Mock Interview · Evidence source</span>
         </div>
       </header>
 
-      <main className="container iv__main">
+      <div className="container iv__main">
         <div className="iv__tabs">
           <button
             type="button"
@@ -851,16 +860,16 @@ export default function Interview() {
                 existing gap calculation → existing roadmap generation on your next analysis run.
               </p>
               <div className="iv__row">
-                <Link to="/analysis"><Button variant="primary" size="md">Re-run analysis</Button></Link>
-                <Link to="/roadmap"><Button variant="secondary" size="md">View roadmap</Button></Link>
-                <Link to="/dashboard"><Button variant="secondary" size="md">Dashboard</Button></Link>
+                <Button asChild variant="primary" size="md"><Link to="/analysis">Re-run analysis</Link></Button>
+                <Button asChild variant="secondary" size="md"><Link to="/roadmap">View roadmap</Link></Button>
+                <Button asChild variant="secondary" size="md"><Link to="/career-track">Back to Career Track</Link></Button>
               </div>
             </div>
           </section>
         )}
         </>
       )}
-      </main>
+      </div>
 
       {liveInterviewSkill && (
         <InterviewModal

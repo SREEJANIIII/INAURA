@@ -3,6 +3,7 @@ import { useNavigate } from "react-router-dom";
 import { useAuth } from "../context/AuthContext";
 import { createProfile, getProfile, type ProfilePayload } from "../services/profile";
 import Button from "../components/ui/app-button";
+import InauraLogo from "../components/layout/InauraLogo";
 import { branches, degrees, interestOptions, years } from "../lib/profileOptions";
 import "./Auth.css";
 
@@ -24,6 +25,7 @@ export default function ProfileSetup() {
     graduation_year: new Date().getFullYear() + 1,
     career_interests: [],
     hours_per_week: 10,
+    preferred_work_location: "",
   });
 
   // Prefill if profile exists
@@ -44,6 +46,7 @@ export default function ProfileSetup() {
           graduation_year: p.graduation_year,
           career_interests: p.career_interests,
           hours_per_week: p.hours_per_week,
+          preferred_work_location: p.preferred_work_location ?? "",
         });
         if (p.profile_completed) {
           // Already completed — allow editing but show indicator
@@ -127,7 +130,7 @@ export default function ProfileSetup() {
     try {
       await createProfile(form);
       setSuccess(true);
-      setTimeout(() => nav("/dashboard", { replace: true }), 1200);
+      setTimeout(() => nav("/career-track", { replace: true }), 1200);
     } catch (e) {
       const msg = e instanceof Error ? e.message : "Failed to save profile";
       if (msg.includes("401") || msg.toLowerCase().includes("not authenticated")) {
@@ -171,7 +174,7 @@ export default function ProfileSetup() {
     <div className="auth">
       <div className="auth__card auth__card--wide">
         <div className="auth__header" style={{ textAlign: "left", marginBottom: 16 }}>
-          <img src="/logo.png" alt="INAURA" className="auth__logo" style={{ margin: "0 0 14px 0" }} width={120} height={30} />
+          <InauraLogo alt="INAURA" className="auth__logo" style={{ margin: "0 0 14px 0" }} width={120} height={30} />
           <h1 className="auth__title" style={{ fontSize: "1.4rem" }}>
             Set up your INAURA profile
           </h1>
@@ -203,6 +206,22 @@ export default function ProfileSetup() {
 
         {step === 1 && (
           <div className="auth__form">
+            <div className="auth__field">
+              <label className="auth__label" htmlFor="preferred_work_location">Preferred Work Location <span style={{ fontWeight: 400 }}>(optional)</span></label>
+              <input
+                id="preferred_work_location"
+                className="auth__input"
+                list="preferred-work-locations"
+                placeholder="e.g. Bengaluru, Karnataka, India"
+                value={form.preferred_work_location ?? ""}
+                onChange={(e) => setForm({ ...form, preferred_work_location: e.target.value })}
+                maxLength={160}
+              />
+              <datalist id="preferred-work-locations">
+                <option value="Bengaluru, Karnataka, India" /><option value="Hyderabad, Telangana, India" /><option value="Mumbai, Maharashtra, India" /><option value="Delhi NCR, India" /><option value="Pune, Maharashtra, India" /><option value="Chennai, Tamil Nadu, India" /><option value="Remote" /><option value="Anywhere in India" /><option value="Other" />
+              </datalist>
+              <div className="auth__hint">Used to tailor industry demand and role requirements to where you want to work.</div>
+            </div>
             <div className="auth__field">
               <label className="auth__label" htmlFor="full_name">
                 Full name

@@ -291,7 +291,7 @@ export default function AIReviewTest() {
     <div className="airev">
       <header className="airev-header">
         <div className="container">
-          <Link to="/dashboard" className="airev-back">← Back to Dashboard</Link>
+          <Link to="/career-track" className="airev-back">← Back to Career Track</Link>
           <div className="airev-badge">EXPERIMENTAL — ONE LLM CALL</div>
           <h1 className="airev-title">AI Career Intelligence</h1>
           <p className="airev-subtitle">
@@ -305,7 +305,7 @@ export default function AIReviewTest() {
         </div>
       </header>
 
-      <main className="container airev-main">
+      <div className="container airev-main">
         {error && (
           <div className="airev-error" role="alert">{error}</div>
         )}
@@ -496,7 +496,7 @@ export default function AIReviewTest() {
             </section>
           </>
         )}
-      </main>
+      </div>
     </div>
   );
 }

@@ -1,7 +1,8 @@
 .sidebar {
   width: 236px;
   flex-shrink: 0;
-  background: rgba(255, 255, 255, 0.42);
+  /* On a computer the sidebar is part of the page, divided off by a hairline, not a panel */
+  background: transparent;
   border-right: 1px solid var(--glass-edge);
   padding: 16px 10px;
   position: sticky;
@@ -10,8 +11,6 @@
   overflow-y: auto;
   display: none;
   flex-direction: column;
-  backdrop-filter: var(--glass-blur);
-  -webkit-backdrop-filter: var(--glass-blur);
 }
 
 .sidebar.is-open {
@@ -204,7 +203,7 @@
 }
 
 .sidebar__link--logout:hover {
-  background: #f6e5e2;
+  background: #f8e9e6;
   color: #8c3a30;
 }
 

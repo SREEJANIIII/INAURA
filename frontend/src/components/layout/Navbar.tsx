@@ -3,6 +3,7 @@ import { Link, useNavigate } from "react-router-dom";
 import { animate, motion, useMotionValue, useReducedMotion, useTransform, useVelocity } from "framer-motion";
 import Button from "../ui/app-button";
 import { useAuth } from "../../context/AuthContext";
+import InauraLogo from "./InauraLogo";
 import "./Navbar.css";
 
 const navLinks = [
@@ -87,7 +88,7 @@ export default function Navbar() {
   const reduce = useReducedMotion();
 
   const handleGetStarted = () => {
-    if (user) navigate("/dashboard");
+    if (user) navigate("/career-track");
     else navigate("/signup");
   };
 
@@ -154,8 +155,7 @@ export default function Navbar() {
     <header className="nav" data-scrolled={scrolled || undefined}>
       <div className="nav__pill">
         <Link to="/" className="nav__brand" aria-label="INAURA — Home">
-          <img
-            src="/logo.png"
+          <InauraLogo
             alt="INAURA"
             className="nav__logo"
             width={1748}
@@ -189,8 +189,8 @@ export default function Navbar() {
         <div className="nav__actions">
           {user ? (
             <>
-              <Link to="/dashboard" className="nav__login">
-                Dashboard
+              <Link to="/career-track" className="nav__login">
+                My Career Track
               </Link>
               <Button variant="primary" size="md" className="nav__cta" onClick={handleLogout}>
                 Logout
@@ -248,11 +248,11 @@ export default function Navbar() {
             {user ? (
               <>
                 <Link
-                  to="/dashboard"
+                  to="/career-track"
                   className="nav__mobile-login"
                   onClick={() => setOpen(false)}
                 >
-                  Dashboard
+                  My Career Track
                 </Link>
                 <Button
                   variant="primary"

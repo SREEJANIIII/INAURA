@@ -33,6 +33,8 @@ import HomeAside from "../components/career-track/HomeAside";
 import CareerSwitcher from "../components/career-track/CareerSwitcher";
 import "../components/career-track/CareerTrack.css";
 import Button from "@/components/ui/app-button";
+import { friendlyError, statusOf } from "../lib/errors";
+import { dueCount } from "../lib/revision/store";
 
 const messageOf = (e: unknown) => (e instanceof Error ? e.message : "");
 const isNotFound = (msg: string) => msg.includes("404") || msg.toLowerCase().includes("not found") || msg.toLowerCase().includes("no analysis");
@@ -65,6 +67,8 @@ export default function CareerTrack() {
   const [busyRole, setBusyRole] = useState<string | null>(null);
   const [switchError, setSwitchError] = useState<string | null>(null);
   const [noAnalysis, setNoAnalysis] = useState(false);
+  // Revision cards waiting, so "Next up" can include a few minutes of revision
+  const [revisionDue] = useState(() => (user ? dueCount(user.id, Date.now()) : 0));
 
   const targetTitle = (analysisState ?? evidence?.analysisState)?.target_role ?? null;
   const stateKnown = !!analysisState || !!evidence;
@@ -83,7 +87,7 @@ export default function CareerTrack() {
       profileData.fetch(force).catch((e) => {
         const msg = messageOf(e);
         const lower = msg.toLowerCase();
-        if (isNotFound(msg)) {
+        if (statusOf(e) === 404 || isNotFound(msg)) {
           navigate("/profile/setup", { replace: true });
         } else if (msg.includes("401") || lower.includes("not authenticated") || lower.includes("invalid token")) {
           setFatal("Your session has expired. Log in again to continue.");
@@ -133,9 +137,10 @@ export default function CareerTrack() {
         weeks: roadmap?.weeks ?? [],
         coverage: coverage.items,
         assessable: analysis ? results?.assessable ?? [] : [],
+        revisionDue,
         limit: 4,
       }),
-    [analysis, roadmap, coverage.items, results]
+    [analysis, roadmap, coverage.items, results, revisionDue]
   );
   const insights = useMemo(() => buildInsights(signal, analysis), [signal, analysis]);
   const activity = useMemo(
@@ -176,8 +181,9 @@ export default function CareerTrack() {
       setSwitching(false);
       navigateWithTransition(navigate, `/career-track/${roleId(next)}`);
     } catch (e) {
-      setSwitchError(e instanceof Error ? `Your target role couldn’t be changed: ${e.message}` : "Your target role couldn’t be changed.");
+      setSwitchError(friendlyError(e, "Your target role couldn’t be changed. Try again in a moment."));
     } finally {
+
       setBusyRole(null);
     }
   };
@@ -308,13 +314,13 @@ export default function CareerTrack() {
             <RoleSyncNotice />
 
             <div className="ct-home">
-              <main className="ct-home__path" aria-labelledby="ct-path-title">
+              <section className="ct-home__path" aria-labelledby="ct-path-title">
                 <div className="ct-sec__head">
                   <h2 id="ct-path-title">Your path</h2>
                   <p>Every skill {track.title} roles ask for, in the order that builds on itself. Open one to see its topics and next steps.</p>
                 </div>
                 <CareerPath phases={track.phases} careerId={track.id} current={current} />
-              </main>
+              </section>
 
               <HomeAside
                 weekNumber={week?.week_number}

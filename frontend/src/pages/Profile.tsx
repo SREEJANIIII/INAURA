@@ -19,6 +19,7 @@ const toForm = (p: ProfileData): ProfilePayload => ({
   graduation_year: p.graduation_year,
   career_interests: p.career_interests,
   hours_per_week: p.hours_per_week,
+  preferred_work_location: p.preferred_work_location ?? "",
 });
 
 const initials = (name: string) =>
@@ -204,7 +205,7 @@ export default function Profile() {
 
   return (
     <div className="prof">
-      <main className="container prof__main">
+      <div className="container prof__main">
         {/* Identity */}
         <section className="prof__hero">
           <div className="prof__avatar" aria-hidden="true">
@@ -362,6 +363,12 @@ export default function Profile() {
                   onChange={(e) => update("hours_per_week", Number(e.target.value))}
                 />
               </label>
+              <label className="prof__field">
+                <span className="prof__label">Preferred Work Location (optional)</span>
+                <input className="prof__input" list="preferred-work-locations-edit" maxLength={160} value={form.preferred_work_location ?? ""} onChange={(e) => update("preferred_work_location", e.target.value)} placeholder="e.g. Bengaluru, Karnataka, India" />
+                <datalist id="preferred-work-locations-edit"><option value="Bengaluru, Karnataka, India" /><option value="Hyderabad, Telangana, India" /><option value="Mumbai, Maharashtra, India" /><option value="Delhi NCR, India" /><option value="Pune, Maharashtra, India" /><option value="Chennai, Tamil Nadu, India" /><option value="Remote" /><option value="Anywhere in India" /><option value="Other" /></datalist>
+                <span className="prof__muted">Used to tailor industry demand and role requirements to where you want to work.</span>
+              </label>
             </section>
 
             {formError && (
@@ -422,6 +429,7 @@ export default function Profile() {
                 <strong>{profile.hours_per_week}</strong>
                 <span>hours a week for learning — your roadmap is paced to this.</span>
               </div>
+              <div style={{ marginTop: 14 }}><span className="prof__label">Preferred work location</span><strong>{profile.preferred_work_location || "Not specified"}</strong></div>
             </section>
           </div>
 
@@ -441,7 +449,7 @@ export default function Profile() {
             </section>
           </>
         )}
-      </main>
+      </div>
     </div>
   );
 }

@@ -1,5 +1,5 @@
 from fastapi import APIRouter, Depends, Query, HTTPException
-from typing import List, Optional
+from typing import Any, List, Optional
 from ....schemas.industry import (
     IndustryRequirementResponse,
     RoleSummaryResponse,
@@ -8,6 +8,8 @@ from ....schemas.industry import (
     CustomRoleResponse,
     RetrieveRequest,
     RetrieveResponse,
+    IndustryIntelligenceResponse,
+    DemandProviderInfo,
 )
 from ....schemas.industry_outcomes import EmergingSkillOut
 from ....services import industry_service, retrieval_service
@@ -67,7 +69,7 @@ async def retrieve_requirements(
     payload: RetrieveRequest, current_user: CurrentUser = Depends(get_current_user)
 ):
     """Retrieve relevant industry requirements via vector search or semantic fallback."""
-    result = await retrieval_service.retrieve(payload.role, payload.query, payload.top_k)
+    result = await retrieval_service.retrieve(payload.role, payload.query, payload.top_k, location=payload.location)
     items = [
         {
             "id": str(r.get("id", "")),
@@ -97,6 +99,12 @@ async def retrieve_requirements(
             "evidence_strength": r.get("evidence_strength"),
             "supporting_chunks": r.get("supporting_chunks"),
             "outcome_overlay": r.get("outcome_overlay"),
+            "trend": r.get("trend"),
+            "freshness": r.get("freshness"),
+            "data_origin": r.get("data_origin"),
+            "location": r.get("location"),
+            "collected_at": r.get("collected_at"),
+            "last_updated": r.get("last_updated"),
         }
         for r in result["items"]
     ]
@@ -125,3 +133,66 @@ def get_emerging_skills(
         for r in industry_service.list_by_role(role)
     }
     return outcome_obs.get_emerging(role, location, curated)
+@router.get("/intelligence", response_model=IndustryIntelligenceResponse)
+def get_role_intelligence(
+    role: str = Query(..., description="Role name e.g., Software Engineer"),
+    location: Optional[str] = Query(None, description="Optional location label e.g., Bengaluru; omit for global"),
+    country: Optional[str] = Query(None),
+    region: Optional[str] = Query(None),
+    city: Optional[str] = Query(None),
+    include_dynamics: bool = Query(True),
+    current_user: CurrentUser = Depends(get_current_user),
+):
+    """Role + location industry intelligence view over baseline + dynamic overlays."""
+    from ....services import industry_intelligence as _intel
+
+    loc: Any = {"country": country, "region": region, "city": city} if any([country, region, city]) else location
+    view = _intel.build_role_intelligence(role, location=loc, include_dynamics=include_dynamics)
+    return {
+        "role": view["role"],
+        "location": view["location"],
+        "location_match": view.get("location_match", "global"),
+        "last_updated": view.get("last_updated"),
+        "skills": [
+            {
+                "id": str(s.get("id", "")),
+                "role": s.get("role", view["role"]),
+                "skill": s.get("skill", ""),
+                "skill_slug": s.get("skill_slug"),
+                "skill_category": s.get("skill_category", "General"),
+                "required_level": float(s.get("required_level", 0.75)),
+                "importance": float(s.get("importance", 0.5)),
+                "demand": float(s.get("demand", 0.5)),
+                "interview_relevance": float(s.get("interview_relevance", 0.5)),
+                "industry_confidence": float(s.get("industry_confidence", 0.85)),
+                "trend": s.get("trend"),
+                "freshness": s.get("freshness"),
+                "source": s.get("source", ""),
+                "source_url": s.get("source_url"),
+                "evidence_context": s.get("evidence_context", ""),
+                "data_origin": s.get("data_origin"),
+                "data_origins": s.get("data_origins"),
+                "location": s.get("location"),
+                "location_match": s.get("location_match"),
+                "mapping_status": s.get("mapping_status"),
+                "source_concept": s.get("source_concept"),
+                "canonical_mapping": s.get("canonical_mapping", s.get("skill")),
+                "collected_at": s.get("collected_at"),
+                "last_updated": s.get("last_updated"),
+                "published_at": s.get("published_at"),
+                "retrieved_at": s.get("retrieved_at"),
+            }
+            for s in view.get("skills", [])
+        ],
+        "counts": view.get("counts", {}),
+        "data_origins": view.get("data_origins", []),
+        "note": view.get("note", ""),
+    }
+
+
+@router.get("/providers", response_model=List[DemandProviderInfo])
+def list_demand_providers(current_user: CurrentUser = Depends(get_current_user)):
+    """List registered industry-demand providers (pluggable; demo seed by default)."""
+    from ....services import industry_intelligence as _intel
+
+    return _intel.list_providers()
