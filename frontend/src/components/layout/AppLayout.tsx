@@ -1,5 +1,5 @@
 import { Suspense, useEffect, useState } from "react";
-import { Link, Outlet } from "react-router-dom";
+import { Link, Outlet, useLocation } from "react-router-dom";
 import Sidebar from "./Sidebar";
 import AccountMenu from "./AccountMenu";
 import InauraLogo from "./InauraLogo";
@@ -24,8 +24,18 @@ function PageLoading() {
 
 // Shared frame for logged-in pages: top bar with menu button + sidebar that stays across pages
 export default function AppLayout() {
+  const location = useLocation();
   // Open by default on computers, closed on phones so it doesn't cover the page
   const [open, setOpen] = useState(() => !isSmallScreen());
+  const [deniedBanner, setDeniedBanner] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (location.state?.deniedEmployer) {
+      setDeniedBanner(
+        location.state?.message || "Employer access required. You have been redirected to the Student Portal."
+      );
+    }
+  }, [location.state]);
 
   // Start loading every sidebar page's data now, so the first click on each is quick too
   useEffect(() => {
@@ -76,6 +86,17 @@ export default function AppLayout() {
           <AppSearch />
         </div>
         <div className="app__actions">
+          <Link
+            to="/employer/dashboard"
+            className="app__portal-switch"
+            title="Switch to Employer Portal"
+          >
+            <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+              <rect x="2" y="7" width="20" height="14" rx="2" ry="2" />
+              <path d="M16 21V5a2 2 0 0 0-2-2h-4a2 2 0 0 0-2 2v16" />
+            </svg>
+            <span>Employer Portal</span>
+          </Link>
           <AccountMenu />
         </div>
       </header>
@@ -89,6 +110,32 @@ export default function AppLayout() {
           }}
         />
         <main id="main-content" className="app__content" tabIndex={-1}>
+          {deniedBanner && (
+            <div
+              style={{
+                background: "#fffbeb",
+                color: "#b45309",
+                border: "1px solid #fde68a",
+                borderRadius: "8px",
+                padding: "0.75rem 1rem",
+                marginBottom: "1rem",
+                display: "flex",
+                justifyContent: "space-between",
+                alignItems: "center",
+                fontSize: "0.875rem",
+              }}
+              role="alert"
+            >
+              <span>{deniedBanner}</span>
+              <button
+                type="button"
+                style={{ background: "transparent", border: "none", cursor: "pointer", color: "inherit", fontWeight: 700 }}
+                onClick={() => setDeniedBanner(null)}
+              >
+                ✕
+              </button>
+            </div>
+          )}
           {/* Only the very first page waits on this; after that, the page you're on stays up
               until the next one has loaded */}
           <Suspense fallback={<PageLoading />}>

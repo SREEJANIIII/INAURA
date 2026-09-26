@@ -198,6 +198,21 @@
   border-top: 1px solid var(--shell-line);
 }
 
+.sidebar__link--portal-switch {
+  color: #0d9488;
+  font-weight: 600;
+  margin-bottom: 4px;
+}
+
+.sidebar__link--portal-switch:hover {
+  background: rgba(13, 148, 136, 0.08);
+  color: #0f766e;
+}
+
+.sidebar__link--portal-switch .sidebar__icon {
+  color: #0d9488;
+}
+
 .sidebar__link--logout {
   color: var(--shell-ink-3);
 }

@@ -100,7 +100,38 @@
   justify-self: end;
   display: flex;
   align-items: center;
-  gap: 4px;
+  gap: 10px;
+}
+
+.app__portal-switch {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 12px;
+  font-size: 0.8rem;
+  font-weight: 600;
+  color: #0d9488;
+  background: rgba(13, 148, 136, 0.08);
+  border: 1px solid rgba(13, 148, 136, 0.22);
+  border-radius: 8px;
+  text-decoration: none;
+  transition: all 0.15s ease;
+  white-space: nowrap;
+}
+
+.app__portal-switch:hover {
+  background: rgba(13, 148, 136, 0.15);
+  border-color: rgba(13, 148, 136, 0.4);
+  color: #0f766e;
+}
+
+@media (max-width: 640px) {
+  .app__portal-switch span {
+    display: none;
+  }
+  .app__portal-switch {
+    padding: 6px 8px;
+  }
 }
 
 /* Account menu (bell + avatar dropdown) */

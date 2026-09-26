@@ -20,6 +20,31 @@ export type ApplicationEvent = {
   created_at: string;
 };
 
+export type CandidateProfile = {
+  full_name: string;
+  college?: string | null;
+  degree?: string | null;
+  branch?: string | null;
+  graduation_year?: number | null;
+};
+
+export type CandidateSkillMatch = {
+  skill_id: string;
+  skill_name?: string | null;
+  importance?: string | null;
+  required_level?: number | null;
+  observed_level?: number | null;
+  status?: "met" | "gap" | "unassessed" | string | null;
+};
+
+export type CandidateEvidenceItem = {
+  id: string;
+  type: string;
+  title?: string | null;
+  url?: string | null;
+  description?: string | null;
+};
+
 export type Application = {
   id: string;
   student_id: string;
@@ -33,9 +58,15 @@ export type Application = {
   updated_at: string;
   requirement_title?: string | null;
   employer_name?: string | null;
+  candidate_name?: string | null;
 };
 
-export type ApplicationDetail = Application & { events: ApplicationEvent[] };
+export type ApplicationDetail = Application & {
+  events: ApplicationEvent[];
+  candidate_profile?: CandidateProfile | null;
+  candidate_skills?: CandidateSkillMatch[];
+  candidate_evidence?: CandidateEvidenceItem[];
+};
 
 
 export type SkillFeedback = {

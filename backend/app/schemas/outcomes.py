@@ -46,13 +46,34 @@ class ApplicationOut(BaseModel):
     updated_at: datetime
     requirement_title: Optional[str] = None
     employer_name: Optional[str] = None
+    candidate_name: Optional[str] = None
 
     class Config:
         from_attributes = True
 
 
+class CandidateSkillMatch(BaseModel):
+    skill_id: str
+    skill_name: Optional[str] = None
+    importance: Optional[str] = None
+    required_level: Optional[float] = None
+    observed_level: Optional[float] = None
+    status: Optional[str] = None
+
+
+class CandidateEvidenceItem(BaseModel):
+    id: str
+    type: str
+    title: Optional[str] = None
+    url: Optional[str] = None
+    description: Optional[str] = None
+
+
 class ApplicationDetailOut(ApplicationOut):
     events: List[ApplicationEventOut] = []
+    candidate_profile: Optional[dict] = None
+    candidate_skills: List[CandidateSkillMatch] = []
+    candidate_evidence: List[CandidateEvidenceItem] = []
 
 
 

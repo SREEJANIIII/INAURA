@@ -5,6 +5,8 @@ import { getProfile } from "../services/profile";
 import { returnPath } from "../lib/authRedirect";
 import { statusOf } from "../lib/errors";
 import { AuthComponent, type SignUpResult } from "@/components/ui/sign-up";
+import { listEmployers } from "../services/employers";
+import { supabase } from "../lib/supabase";
 import InauraLogo from "../components/layout/InauraLogo";
 
 function validateEmail(v: string) {
@@ -34,7 +36,33 @@ export default function Login() {
       return { error: authErr };
     }
 
+    // Check if the user is an employer vs student based on employer memberships and profile
     try {
+      const fromPath = (location.state as { from?: Location } | null)?.from?.pathname;
+      const employers = await listEmployers().catch(() => []);
+      const sessionUser = (await supabase?.auth.getUser())?.data?.user;
+      const isEmployer = employers.length > 0 || sessionUser?.user_metadata?.role === "employer";
+
+      // If user was heading to a specific authorized destination, send them there
+      if (fromPath && !["/login", "/signup", "/reset-password"].includes(fromPath)) {
+        if (fromPath.startsWith("/employer")) {
+          if (isEmployer) {
+            nav(returnPath(location.state), { replace: true });
+            return { error: null, message: "Welcome back to Employer Portal!" };
+          }
+        } else {
+          nav(returnPath(location.state), { replace: true });
+          return { error: null, message: "Welcome back!" };
+        }
+      }
+
+      // Default portal routing:
+      if (isEmployer) {
+        nav("/employer/dashboard", { replace: true });
+        return { error: null, message: "Welcome back to Employer Portal!" };
+      }
+
+      // Student flow
       await getProfile();
       nav(returnPath(location.state), { replace: true });
       return { error: null, message: "Welcome back!" };

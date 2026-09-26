@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 import { Link, useNavigate } from "react-router-dom";
 import { useAuth } from "../../context/AuthContext";
+import { useEmployer } from "../../context/EmployerContext";
 import { analysisStateData, evidencePageData, profileData, resultsPageData, subscribePageData } from "../../lib/pageData";
 import { getRoleSync, subscribeRoleSync } from "../../lib/roleSync";
 import { dueCount } from "../../lib/revision/store";
@@ -20,6 +21,7 @@ const initials = (name: string) =>
 // Top-right of the app bar: notifications bell + avatar, name and a dropdown with Profile / Log out
 export default function AccountMenu() {
   const { user, signOut } = useAuth();
+  const { hasEmployerAccess } = useEmployer();
   const nav = useNavigate();
   const profile = useSyncExternalStore(subscribePageData, profileData.peek);
   const [panel, setPanel] = useState<Panel>("none");
@@ -164,6 +166,15 @@ export default function AccountMenu() {
           </div>
           <Link to="/profile" className="acct__item" role="menuitem" onClick={() => setPanel("none")}>
             My profile
+          </Link>
+          <Link
+            to="/employer/dashboard"
+            className="acct__item"
+            style={{ color: "#0d9488", fontWeight: 600 }}
+            role="menuitem"
+            onClick={() => setPanel("none")}
+          >
+            {hasEmployerAccess ? "Switch to Employer Portal →" : "Access Employer Portal →"}
           </Link>
           <button
             type="button"

@@ -17,7 +17,7 @@ type AuthState = {
   session: Session | null;
   loading: boolean;
   isConfigured: boolean;
-  signUp: (email: string, password: string) => Promise<{ error: string | null }>;
+  signUp: (email: string, password: string, role?: "student" | "employer") => Promise<{ error: string | null }>;
   signIn: (email: string, password: string) => Promise<{ error: string | null }>;
   /** Google/GitHub sign-in: leaves the page for the provider, then comes back signed in */
   signInWithProvider: (provider: OAuthProvider) => Promise<{ error: string | null }>;
@@ -66,9 +66,17 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       session,
       loading,
       isConfigured: isSupabaseConfigured,
-      signUp: async (email, password) => {
+      signUp: async (email, password, role = "student") => {
         if (!supabase) return { error: "Supabase not configured" };
-        const { error } = await supabase.auth.signUp({ email, password });
+        const { error } = await supabase.auth.signUp({
+          email,
+          password,
+          options: {
+            data: {
+              role,
+            },
+          },
+        });
         if (error) return { error: error.message };
         return { error: null };
       },

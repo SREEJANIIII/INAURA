@@ -13,13 +13,12 @@ import { Navigate, Routes, Route } from "react-router-dom";
 // import Interview from "./pages/Interview";
 // import AtsTester from "./pages/AtsTester";
 // import Revision from "./pages/Revision";
-import Employers from "./pages/Employers";
-import Applications from "./pages/Applications";
-import Outcomes from "./pages/Outcomes";
-import Resume from "./pages/Resume";
 import { ProtectedRoute, GuestOnly } from "./components/auth/ProtectedRoute";
+import { EmployerRoute } from "./components/auth/EmployerRoute";
 import AppLayout from "./components/layout/AppLayout";
 import NotFound from "./pages/NotFound";
+import Applications from "./pages/Applications";
+import Resume from "./pages/Resume";
 
 // Every page is its own download, so a student opening Career Track on a phone doesn't wait
 // for the interview recorder, the ATS tester or the landing page's 3D hero.
@@ -41,6 +40,17 @@ const AIReviewTest = lazy(() => import("./pages/AIReviewTest"));
 const Interview = lazy(() => import("./pages/Interview"));
 const AtsTester = lazy(() => import("./pages/AtsTester"));
 const Revision = lazy(() => import("./pages/Revision"));
+
+// Employer Portal (completely separated experience, layout, and role guard)
+const EmployerLayout = lazy(() => import("./components/employer/EmployerLayout"));
+const EmployerDashboard = lazy(() => import("./pages/employer/EmployerDashboard"));
+const EmployerCompany = lazy(() => import("./pages/employer/EmployerCompany"));
+const EmployerRequirements = lazy(() => import("./pages/employer/EmployerRequirements"));
+const EmployerCandidates = lazy(() => import("./pages/employer/EmployerCandidates"));
+const EmployerApplications = lazy(() => import("./pages/employer/EmployerApplications"));
+const EmployerPlacements = lazy(() => import("./pages/employer/EmployerPlacements"));
+const EmployerAnalytics = lazy(() => import("./pages/employer/EmployerAnalytics"));
+const EmployerAccount = lazy(() => import("./pages/employer/EmployerAccount"));
 
 /** Pages outside the app frame load without a placeholder: they're quick and full-screen */
 const Bare = ({ children }: { children: ReactNode }) => <Suspense fallback={null}>{children}</Suspense>;
@@ -85,10 +95,10 @@ export default function App() {
         <Route path="/skill-assessment/dsa" element={<SkillAssessment view="dsa" />} />
         <Route path="/roadmap" element={<Roadmap />} />
         <Route path="/revision" element={<Revision />} />
-        {/* Person 2: employer & outcomes (additive, isolated module) */}
-        <Route path="/employers" element={<Employers />} />
+        {/* Legacy redirects for employer pages */}
+        <Route path="/employers" element={<Navigate to="/employer/dashboard" replace />} />
         <Route path="/applications" element={<Applications />} />
-        <Route path="/outcomes" element={<Outcomes />} />
+        <Route path="/outcomes" element={<Navigate to="/employer/analytics" replace />} />
         {/* Career Track: one page per career and one per skill, rendered from the role's data */}
         <Route path="/career-track" element={<CareerTrack />} />
         <Route path="/career-track/:careerId" element={<CareerTrack />} />
@@ -100,6 +110,26 @@ export default function App() {
         <Route path="/resume/ats-tester" element={<AtsTester />} />
         {/* EXPERIMENTAL side feature — isolated, no impact on other routes */}
         <Route path="/ai-review-test" element={<AIReviewTest />} />
+      </Route>
+
+      {/* EMPLOYER PORTAL — Separate layout, navigation, role guard and experience */}
+      <Route
+        path="/employer"
+        element={
+          <EmployerRoute>
+            <EmployerLayout />
+          </EmployerRoute>
+        }
+      >
+        <Route index element={<Navigate to="/employer/dashboard" replace />} />
+        <Route path="dashboard" element={<EmployerDashboard />} />
+        <Route path="company" element={<EmployerCompany />} />
+        <Route path="requirements" element={<EmployerRequirements />} />
+        <Route path="candidates" element={<EmployerCandidates />} />
+        <Route path="applications" element={<EmployerApplications />} />
+        <Route path="placements" element={<EmployerPlacements />} />
+        <Route path="analytics" element={<EmployerAnalytics />} />
+        <Route path="account" element={<EmployerAccount />} />
       </Route>
 
       <Route path="*" element={<NotFound />} />

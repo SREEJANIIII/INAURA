@@ -197,6 +197,15 @@ def list_applications_for_employer(user_id: str, employer_id: str) -> list:
         for r in rows:
             r["employer_id"] = employer_id
             r["requirement_title"] = req_map.get(r["hiring_requirement_id"])
+        student_ids = list({r["student_id"] for r in rows if r.get("student_id")})
+        if student_ids:
+            try:
+                presp = client.table("profiles").select("user_id,full_name").in_("user_id", student_ids).execute()
+                name_map = {p["user_id"]: p.get("full_name") for p in (presp.data or [])}
+                for r in rows:
+                    r["candidate_name"] = name_map.get(r["student_id"])
+            except Exception:
+                pass
         return rows
     except Exception:
         raise HTTPException(status_code=500, detail="Failed to list employer applications")
@@ -212,6 +221,15 @@ def list_applications_for_requirement(user_id: str, requirement_id: str) -> list
         for r in rows:
             r["employer_id"] = req["employer_id"]
             r["requirement_title"] = req.get("title")
+        student_ids = list({r["student_id"] for r in rows if r.get("student_id")})
+        if student_ids:
+            try:
+                presp = client.table("profiles").select("user_id,full_name").in_("user_id", student_ids).execute()
+                name_map = {p["user_id"]: p.get("full_name") for p in (presp.data or [])}
+                for r in rows:
+                    r["candidate_name"] = name_map.get(r["student_id"])
+            except Exception:
+                pass
         return rows
     except Exception:
         raise HTTPException(status_code=500, detail="Failed to list requirement applications")
@@ -231,7 +249,87 @@ def get_application_detail(user_id: str, app_id: str) -> dict:
     app["employer_id"] = req["employer_id"]
     app["requirement_title"] = req.get("title")
     app["events"] = (eresp.data if eresp else []) or []
+
+    if actor == "employer":
+        try:
+            presp = client.table("profiles").select("full_name,college,degree,branch,graduation_year").eq("user_id", app["student_id"]).execute()
+            pdata = (presp.data or [None])[0]
+            if pdata:
+                app["candidate_name"] = pdata.get("full_name")
+                app["candidate_profile"] = pdata
+        except Exception:
+            pass
+
+        # Requirement skills & candidate skills alignment
+        try:
+            rsresp = client.table("hiring_requirement_skills").select("skill_id,importance,required_level").eq("hiring_requirement_id", app["hiring_requirement_id"]).execute()
+            r_skills = rsresp.data or []
+            sids = [rs["skill_id"] for rs in r_skills if rs.get("skill_id")]
+            sk_meta = {}
+            cand_skills_map = {}
+            if sids:
+                try:
+                    sk_names_resp = client.table("skills").select("id,display_name,category").in_("id", sids).execute()
+                    sk_meta = {s["id"]: s for s in (sk_names_resp.data or [])}
+                except Exception:
+                    pass
+                try:
+                    sa_resp = client.table("skill_assessments").select("skill_id,proficiency").eq("user_id", app["student_id"]).in_("skill_id", sids).execute()
+                    for sa in (sa_resp.data or []):
+                        cand_skills_map[sa["skill_id"]] = sa.get("proficiency")
+                except Exception:
+                    pass
+            skill_matches = []
+            for rs in r_skills:
+                sid = rs.get("skill_id")
+                req_lvl = rs.get("required_level")
+                cand_lvl = cand_skills_map.get(sid)
+                meta = sk_meta.get(sid, {})
+                status = "unassessed"
+                if cand_lvl is not None and req_lvl is not None:
+                    status = "met" if cand_lvl >= req_lvl else "gap"
+                skill_matches.append({
+                    "skill_id": sid,
+                    "skill_name": meta.get("display_name") or sid,
+                    "importance": rs.get("importance"),
+                    "required_level": req_lvl,
+                    "observed_level": cand_lvl,
+                    "status": status,
+                })
+            app["candidate_skills"] = skill_matches
+        except Exception:
+            app["candidate_skills"] = []
+
+        # Candidate evidence: projects & certifications
+        evidence_items = []
+        try:
+            pj_resp = client.table("projects").select("id,name,description,project_url,github_url").eq("user_id", app["student_id"]).execute()
+            for pj in (pj_resp.data or []):
+                evidence_items.append({
+                    "id": pj["id"],
+                    "type": "project",
+                    "title": pj.get("name"),
+                    "description": pj.get("description"),
+                    "url": pj.get("project_url") or pj.get("github_url"),
+                })
+        except Exception:
+            pass
+        try:
+            ct_resp = client.table("certifications").select("id,name,issuing_org,certificate_url").eq("user_id", app["student_id"]).execute()
+            for ct in (ct_resp.data or []):
+                evidence_items.append({
+                    "id": ct["id"],
+                    "type": "certification",
+                    "title": f"{ct.get('name')} ({ct.get('issuing_org')})",
+                    "url": ct.get("certificate_url"),
+                    "description": None,
+                })
+        except Exception:
+            pass
+        app["candidate_evidence"] = evidence_items
+
     return app
+
 
 
 
