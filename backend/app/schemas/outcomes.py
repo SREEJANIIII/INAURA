@@ -9,6 +9,8 @@ APP_STATUSES = ("saved", "applied", "screening", "interview", "offer_received", 
 
 class ApplicationCreate(BaseModel):
     hiring_requirement_id: UUID
+    initial_status: Optional[str] = Field("applied", pattern="^(saved|applied)$")
+    note: Optional[str] = Field(None, max_length=1000)
 
 
 class StatusTransitionIn(BaseModel):
@@ -42,6 +44,8 @@ class ApplicationOut(BaseModel):
     applied_at: Optional[datetime] = None
     created_at: datetime
     updated_at: datetime
+    requirement_title: Optional[str] = None
+    employer_name: Optional[str] = None
 
     class Config:
         from_attributes = True
@@ -49,6 +53,7 @@ class ApplicationOut(BaseModel):
 
 class ApplicationDetailOut(ApplicationOut):
     events: List[ApplicationEventOut] = []
+
 
 
 class SkillFeedbackIn(BaseModel):

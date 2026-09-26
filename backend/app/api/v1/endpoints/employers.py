@@ -16,7 +16,9 @@ from ....schemas.employers import (
     RequirementSkillOut,
     CanonicalSkillOut,
 )
+from ....schemas.outcomes import ApplicationOut
 from ....services import employer_service as svc
+from ....services import outcome_service as out_svc
 
 router = APIRouter(prefix="/employers", tags=["employers"])
 
@@ -106,4 +108,15 @@ def set_employer_requirement_skills(employer_id: str, requirement_id: str, paylo
     return svc.set_requirement_skills(
         current_user.id, requirement_id, [s.model_dump() for s in payload.skills]
     )
+
+
+@router.get("/{employer_id}/applications", response_model=list[ApplicationOut])
+def list_employer_applications(employer_id: str, current_user: CurrentUser = Depends(get_current_user)):
+    return out_svc.list_applications_for_employer(current_user.id, employer_id)
+
+
+@router.get("/{employer_id}/requirements/{requirement_id}/applications", response_model=list[ApplicationOut])
+def list_requirement_applications(employer_id: str, requirement_id: str, current_user: CurrentUser = Depends(get_current_user)):
+    return out_svc.list_applications_for_requirement(current_user.id, requirement_id)
+
 

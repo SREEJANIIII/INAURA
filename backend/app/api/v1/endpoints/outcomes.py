@@ -68,9 +68,19 @@ def set_requirement_skills(requirement_id: str, payload: RequirementSkillsBulk, 
     )
 
 
+@requirements_router.get("/{requirement_id}/applications", response_model=list[ApplicationOut])
+def list_requirement_applications(requirement_id: str, current_user: CurrentUser = Depends(get_current_user)):
+    return svc.list_applications_for_requirement(current_user.id, requirement_id)
+
+
 @router.post("/applications", response_model=ApplicationOut, status_code=201)
 def create_application(payload: ApplicationCreate, current_user: CurrentUser = Depends(get_current_user)):
-    return svc.create_application(current_user.id, str(payload.hiring_requirement_id))
+    return svc.create_application(
+        current_user.id,
+        str(payload.hiring_requirement_id),
+        getattr(payload, "initial_status", "applied") or "applied",
+        payload.note,
+    )
 
 
 @router.get("/applications", response_model=list[ApplicationOut])
@@ -78,6 +88,12 @@ def list_applications(status: Optional[str] = None, current_user: CurrentUser = 
     if status and status not in ("saved", "applied", "screening", "interview", "offer_received", "selected", "rejected", "withdrawn"):
         raise HTTPException(status_code=400, detail="Invalid status filter")
     return svc.list_applications(current_user.id, status)
+
+
+@router.get("/employers/{employer_id}/applications", response_model=list[ApplicationOut])
+def list_employer_applications(employer_id: str, current_user: CurrentUser = Depends(get_current_user)):
+    return svc.list_applications_for_employer(current_user.id, employer_id)
+
 
 
 @router.get("/applications/{app_id}", response_model=ApplicationDetailOut)

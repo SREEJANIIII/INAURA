@@ -21,6 +21,19 @@ import {
   type RequirementSkill,
   type CanonicalSkill,
 } from "../services/employers";
+import {
+  listApplicationsForRequirement,
+  getApplication,
+  transitionApplication,
+  type Application,
+  type ApplicationDetail,
+  type ApplicationStatus,
+} from "../services/outcomes";
+import {
+  formatStatusLabel,
+  getAllowedEmployerTransitions,
+  isTerminalStatus,
+} from "../lib/applicationsModel";
 
 const messageOf = (e: unknown) => (e instanceof Error ? e.message : String(e));
 
@@ -32,6 +45,12 @@ export default function Employers() {
   const [selectedReq, setSelectedReq] = useState<Requirement | null>(null);
   const [reqSkills, setReqSkills] = useState<RequirementSkill[]>([]);
   const [catalog, setCatalog] = useState<CanonicalSkill[]>([]);
+
+  // Applications under selected requirement
+  const [reqApps, setReqApps] = useState<Application[]>([]);
+  const [selectedAppDetail, setSelectedAppDetail] = useState<ApplicationDetail | null>(null);
+  const [transitionNote, setTransitionNote] = useState("");
+  const [appActionSaving, setAppActionSaving] = useState(false);
 
   // Employer creation form
   const [empName, setEmpName] = useState("");
@@ -124,19 +143,74 @@ export default function Employers() {
       .catch((e) => setError(messageOf(e)));
   }, [selected]);
 
-  // When selected requirement changes: load requirement skills
+  // When selected requirement changes: load requirement skills and candidate applications
   useEffect(() => {
     if (!selectedReq) {
       setReqSkills([]);
+      setReqApps([]);
+      setSelectedAppDetail(null);
       setEditingReq(false);
       return;
     }
     setError(null);
     setEditingReq(false);
+    setSelectedAppDetail(null);
     listRequirementSkills(selectedReq.id)
       .then(setReqSkills)
       .catch((e) => setError(messageOf(e)));
+
+    listApplicationsForRequirement(selectedReq.id)
+      .then(setReqApps)
+      .catch(() => setReqApps([]));
   }, [selectedReq]);
+
+  const refreshReqApps = async () => {
+    if (!selectedReq) return;
+    try {
+      const apps = await listApplicationsForRequirement(selectedReq.id);
+      setReqApps(apps);
+      if (selectedAppDetail) {
+        const still = apps.find((a) => a.id === selectedAppDetail.id);
+        if (still) {
+          setSelectedAppDetail(await getApplication(still.id));
+        } else {
+          setSelectedAppDetail(null);
+        }
+      }
+    } catch {
+      // ignore
+    }
+  };
+
+  const openAppDetail = async (appId: string) => {
+    setError(null);
+    setTransitionNote("");
+    try {
+      setSelectedAppDetail(await getApplication(appId));
+    } catch (e) {
+      setError(messageOf(e));
+    }
+  };
+
+  const handleEmployerTransition = async (toStatus: ApplicationStatus) => {
+    if (!selectedAppDetail) return;
+    setAppActionSaving(true);
+    setError(null);
+    try {
+      const updated = await transitionApplication(
+        selectedAppDetail.id,
+        toStatus,
+        transitionNote.trim() || undefined
+      );
+      setTransitionNote("");
+      setSelectedAppDetail(await getApplication(updated.id));
+      await refreshReqApps();
+    } catch (e) {
+      setError(messageOf(e));
+    } finally {
+      setAppActionSaving(false);
+    }
+  };
 
   // Employer Actions
   const handleAddEmployer = async () => {
@@ -847,6 +921,169 @@ export default function Employers() {
                         Add / Update Skill
                       </button>
                     </div>
+                  </div>
+
+                  {/* Candidate Pipeline & Applications */}
+                  <div style={{ marginTop: "1.5rem", borderTop: "1px solid color-mix(in srgb, currentColor 12%, transparent)", paddingTop: "1rem" }}>
+                    <h4>Candidate Pipeline &amp; Applications ({reqApps.length})</h4>
+                    <p className="p2__hint">
+                      Applications submitted for this role. Progress candidates through screening, interviews, offers, and decisions.
+                    </p>
+
+                    <ul className="p2__list" style={{ marginTop: "0.5rem" }}>
+                      {reqApps.map((a) => (
+                        <li key={a.id}>
+                          <button
+                            type="button"
+                            className={`p2__pick${selectedAppDetail?.id === a.id ? " is-active" : ""}`}
+                            onClick={() => openAppDetail(a.id)}
+                          >
+                            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+                              <div>
+                                <strong>Candidate: {a.student_id ? `${a.student_id.slice(0, 8)}…` : `${a.id.slice(0, 8)}…`}</strong>
+                                {a.applied_at && (
+                                  <span className="p2__hint" style={{ marginLeft: "0.5rem" }}>
+                                    Applied: {new Date(a.applied_at).toLocaleDateString()}
+                                  </span>
+                                )}
+                              </div>
+                              <span className={`p2__badge p2__badge--${a.status}`}>
+                                {formatStatusLabel(a.status)}
+                              </span>
+                            </div>
+                          </button>
+                        </li>
+                      ))}
+                      {reqApps.length === 0 && (
+                        <li className="p2__hint">No applications received yet for this requirement.</li>
+                      )}
+                    </ul>
+
+                    {/* Candidate Application Detail */}
+                    {selectedAppDetail && (
+                      <div className="p2__detail" style={{ marginTop: "0.75rem", background: "color-mix(in srgb, currentColor 2%, transparent)" }}>
+                        <div className="p2__detail-header">
+                          <div>
+                            <h5>Candidate Application ({selectedAppDetail.id.slice(0, 8)}…)</h5>
+                            <span className="p2__hint">Applicant Student ID: <code>{selectedAppDetail.student_id}</code></span>
+                          </div>
+                          <span className={`p2__badge p2__badge--${selectedAppDetail.status}`}>
+                            {formatStatusLabel(selectedAppDetail.status)}
+                          </span>
+                        </div>
+
+                        {/* Transition Actions */}
+                        {(() => {
+                          const allowed = getAllowedEmployerTransitions(selectedAppDetail.status);
+                          if (allowed.length === 0) {
+                            return (
+                              <p className="p2__hint" style={{ margin: "0.5rem 0" }}>
+                                {isTerminalStatus(selectedAppDetail.status)
+                                  ? `This application reached a final status (${formatStatusLabel(selectedAppDetail.status)}). No further changes are permitted.`
+                                  : "No employer actions available for this application state (waiting on candidate or initial state)."}
+                              </p>
+                            );
+                          }
+                          return (
+                            <div style={{ marginTop: "0.5rem" }}>
+                              <input
+                                className="p2__input"
+                                style={{ width: "100%", marginBottom: "0.5rem" }}
+                                placeholder="Decision note or reason for the candidate / team (optional)"
+                                value={transitionNote}
+                                onChange={(e) => setTransitionNote(e.target.value)}
+                              />
+                              <div className="p2__row" style={{ flexWrap: "wrap", marginTop: 0 }}>
+                                {allowed.includes("screening") && (
+                                  <button
+                                    type="button"
+                                    className="p2__btn"
+                                    onClick={() => handleEmployerTransition("screening")}
+                                    disabled={appActionSaving}
+                                  >
+                                    Move to Screening
+                                  </button>
+                                )}
+                                {allowed.includes("interview") && (
+                                  <button
+                                    type="button"
+                                    className="p2__btn"
+                                    onClick={() => handleEmployerTransition("interview")}
+                                    disabled={appActionSaving}
+                                  >
+                                    Advance to Interview
+                                  </button>
+                                )}
+                                {allowed.includes("offer_received") && (
+                                  <button
+                                    type="button"
+                                    className="p2__btn"
+                                    style={{ background: "#0d9488" }}
+                                    onClick={() => handleEmployerTransition("offer_received")}
+                                    disabled={appActionSaving}
+                                  >
+                                    Extend Offer
+                                  </button>
+                                )}
+                                {allowed.includes("selected") && (
+                                  <button
+                                    type="button"
+                                    className="p2__btn"
+                                    style={{ background: "#16a34a" }}
+                                    onClick={() => handleEmployerTransition("selected")}
+                                    disabled={appActionSaving}
+                                  >
+                                    Select / Hire
+                                  </button>
+                                )}
+                                {allowed.includes("rejected") && (
+                                  <button
+                                    type="button"
+                                    className="p2__btn p2__btn--danger"
+                                    onClick={() => handleEmployerTransition("rejected")}
+                                    disabled={appActionSaving}
+                                  >
+                                    Reject Application
+                                  </button>
+                                )}
+                              </div>
+                            </div>
+                          );
+                        })()}
+
+                        {/* Audit Timeline */}
+                        <div style={{ marginTop: "0.75rem" }}>
+                          <h6>Candidate Audit Timeline ({selectedAppDetail.events.length})</h6>
+                          <div style={{ display: "flex", flexDirection: "column", gap: "0.4rem", marginTop: "0.25rem" }}>
+                            {selectedAppDetail.events.map((ev) => (
+                              <div key={ev.id} className="p2__timeline-item">
+                                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+                                  <div>
+                                    {ev.from_status ? (
+                                      <span>
+                                        {formatStatusLabel(ev.from_status)} → <strong>{formatStatusLabel(ev.to_status)}</strong>
+                                      </span>
+                                    ) : (
+                                      <span>Created as <strong>{formatStatusLabel(ev.to_status)}</strong></span>
+                                    )}
+                                  </div>
+                                  <span className="p2__badge" style={{ fontSize: "0.7rem" }}>
+                                    {ev.actor}
+                                  </span>
+                                </div>
+                                {ev.note && <div style={{ fontSize: "0.85rem", opacity: 0.9 }}>{ev.note}</div>}
+                                <div className="p2__timeline-meta">
+                                  <span>{new Date(ev.created_at).toLocaleString()}</span>
+                                </div>
+                              </div>
+                            ))}
+                            {selectedAppDetail.events.length === 0 && (
+                              <p className="p2__hint">No events logged.</p>
+                            )}
+                          </div>
+                        </div>
+                      </div>
+                    )}
                   </div>
                 </div>
               )}

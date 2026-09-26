@@ -31,9 +31,12 @@ export type Application = {
   applied_at: string | null;
   created_at: string;
   updated_at: string;
+  requirement_title?: string | null;
+  employer_name?: string | null;
 };
 
 export type ApplicationDetail = Application & { events: ApplicationEvent[] };
+
 
 export type SkillFeedback = {
   id: string;
@@ -110,10 +113,23 @@ export type Dashboard = {
   window: { from: string | null; to: string | null };
 };
 
-export function createApplication(hiring_requirement_id: string) {
+export function createApplication(
+  hiring_requirement_id: string,
+  optionsOrStatus?: "saved" | "applied" | { initial_status?: "saved" | "applied"; note?: string },
+  noteParam?: string
+) {
+  let initial_status: "saved" | "applied" = "applied";
+  let note: string | undefined = undefined;
+  if (typeof optionsOrStatus === "string") {
+    initial_status = optionsOrStatus;
+    note = noteParam;
+  } else if (typeof optionsOrStatus === "object" && optionsOrStatus !== null) {
+    if (optionsOrStatus.initial_status) initial_status = optionsOrStatus.initial_status;
+    note = optionsOrStatus.note;
+  }
   return apiFetch<Application>("/outcomes/applications", {
     method: "POST",
-    body: JSON.stringify({ hiring_requirement_id }),
+    body: JSON.stringify({ hiring_requirement_id, initial_status, note }),
   });
 }
 
@@ -123,9 +139,18 @@ export function listApplications(status?: string) {
   });
 }
 
+export function listApplicationsForEmployer(employerId: string) {
+  return apiFetch<Application[]>(`/outcomes/employers/${employerId}/applications`);
+}
+
+export function listApplicationsForRequirement(requirementId: string) {
+  return apiFetch<Application[]>(`/requirements/${requirementId}/applications`);
+}
+
 export function getApplication(id: string) {
   return apiFetch<ApplicationDetail>(`/outcomes/applications/${id}`);
 }
+
 
 export function transitionApplication(id: string, to_status: ApplicationStatus, note?: string) {
   return apiFetch<Application>(`/outcomes/applications/${id}/status`, {

@@ -94,12 +94,25 @@ def _attach_employer_ids(apps: list) -> list:
     client = _ensure_client()
     req_ids = list({a["hiring_requirement_id"] for a in apps})
     try:
-        rresp = client.table("hiring_requirements").select("id,employer_id").in_("id", req_ids).execute()
+        rresp = client.table("hiring_requirements").select("id,employer_id,title").in_("id", req_ids).execute()
     except Exception:
         return apps
-    emp_by_req = {r["id"]: r["employer_id"] for r in (rresp.data or [])}
+    req_map = {r["id"]: r for r in (rresp.data or [])}
+    emp_ids = list({r["employer_id"] for r in (rresp.data or []) if r.get("employer_id")})
+    emp_name_map = {}
+    if emp_ids:
+        try:
+            eresp = client.table("employers").select("id,name").in_("id", emp_ids).execute()
+            emp_name_map = {e["id"]: e["name"] for e in (eresp.data or [])}
+        except Exception:
+            pass
     for a in apps:
-        a["employer_id"] = emp_by_req.get(a["hiring_requirement_id"])
+        r = req_map.get(a["hiring_requirement_id"])
+        if r:
+            a["employer_id"] = r.get("employer_id")
+            a["requirement_title"] = r.get("title")
+            if r.get("employer_id"):
+                a["employer_name"] = emp_name_map.get(r["employer_id"])
     return apps
 
 
@@ -107,22 +120,29 @@ def _attach_employer_ids(apps: list) -> list:
 # Applications
 # ---------------------------------------------------------------------------
 
-def create_application(student_id: str, hiring_requirement_id: str) -> dict:
+def create_application(student_id: str, hiring_requirement_id: str, initial_status: str = "applied", note: str | None = None) -> dict:
     client = _ensure_client()
     req = emp._requirement_employer(hiring_requirement_id)
     if req.get("status") != "open":
         raise HTTPException(status_code=400, detail="Requirement is not open for applications")
+    if initial_status not in ("saved", "applied"):
+        raise HTTPException(status_code=400, detail="initial_status must be 'saved' or 'applied'")
     now = datetime.now(timezone.utc).isoformat()
     try:
         existing = client.table("applications").select("*").eq("student_id", student_id).eq(
             "hiring_requirement_id", hiring_requirement_id).execute()
         if existing.data:
+            existing_row = existing.data[0]
+            if existing_row.get("status") == "saved" and initial_status == "applied":
+                return transition_status(existing_row["id"], student_id, "applied", note=note or "Applied")
             raise HTTPException(status_code=400, detail="Already applied to this requirement")
+        is_applied = (initial_status == "applied")
         resp = client.table("applications").insert({
             "student_id": student_id,
             "hiring_requirement_id": hiring_requirement_id,
-            "status": "saved",
-            "outcome": None,
+            "status": initial_status,
+            "outcome": "pending" if is_applied else None,
+            "applied_at": now if is_applied else None,
             "created_at": now,
             "updated_at": now,
         }).execute()
@@ -136,13 +156,15 @@ def create_application(student_id: str, hiring_requirement_id: str) -> dict:
     if not row:
         raise HTTPException(status_code=500, detail="Failed to create application")
     try:
+        ev_note = note or ("Applied" if initial_status == "applied" else "Saved")
         client.table("application_events").insert({
             "application_id": row["id"], "from_status": None,
-            "to_status": "saved", "actor": student_id, "note": "Saved",
+            "to_status": initial_status, "actor": student_id, "note": ev_note,
         }).execute()
     except Exception:
         pass
     row["employer_id"] = req["employer_id"]
+    row["requirement_title"] = req.get("title")
     return row
 
 
@@ -164,17 +186,35 @@ def list_applications_for_employer(user_id: str, employer_id: str) -> list:
     emp.require_employer_access(user_id, employer_id, roles=("owner", "member"))
     client = _ensure_client()
     try:
-        rresp = client.table("hiring_requirements").select("id").eq("employer_id", employer_id).execute()
-        req_ids = [r["id"] for r in (rresp.data or [])]
-        if not req_ids:
+        rresp = client.table("hiring_requirements").select("id,title").eq("employer_id", employer_id).execute()
+        reqs = rresp.data or []
+        if not reqs:
             return []
+        req_map = {r["id"]: r.get("title") for r in reqs}
+        req_ids = list(req_map.keys())
         aresp = client.table("applications").select("*").in_("hiring_requirement_id", req_ids).execute()
         rows = aresp.data or []
         for r in rows:
             r["employer_id"] = employer_id
+            r["requirement_title"] = req_map.get(r["hiring_requirement_id"])
         return rows
     except Exception:
         raise HTTPException(status_code=500, detail="Failed to list employer applications")
+
+
+def list_applications_for_requirement(user_id: str, requirement_id: str) -> list:
+    req = emp._requirement_employer(requirement_id)
+    emp.require_employer_access(user_id, req["employer_id"], roles=("owner", "member"))
+    client = _ensure_client()
+    try:
+        aresp = client.table("applications").select("*").eq("hiring_requirement_id", requirement_id).execute()
+        rows = aresp.data or []
+        for r in rows:
+            r["employer_id"] = req["employer_id"]
+            r["requirement_title"] = req.get("title")
+        return rows
+    except Exception:
+        raise HTTPException(status_code=500, detail="Failed to list requirement applications")
 
 
 def get_application_detail(user_id: str, app_id: str) -> dict:
@@ -189,8 +229,10 @@ def get_application_detail(user_id: str, app_id: str) -> dict:
         eresp = None
     req = emp._requirement_employer(app["hiring_requirement_id"])
     app["employer_id"] = req["employer_id"]
+    app["requirement_title"] = req.get("title")
     app["events"] = (eresp.data if eresp else []) or []
     return app
+
 
 
 def transition_status(app_id: str, actor_id: str, to_status: str, note: str | None = None) -> dict:
