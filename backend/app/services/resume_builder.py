@@ -736,6 +736,208 @@ def _skill_groups(skills: list[dict]) -> dict:
     return groups
 
 
+# ---------------------------------------------------------------------------
+# Resume skill selector (Phase 2.5): curated PRESENTATION of the verified
+# skill profile. The canonical skill profile (taxonomy, assessments, evidence
+# scoring) is never modified here: selection only decides which verified
+# skills appear on the resume and under which display headings. Excluded
+# skills stay verified in the profile and remain user-selectable.
+# ---------------------------------------------------------------------------
+
+MAX_RESUME_SKILL_GROUPS = 7
+MAX_SKILLS_PER_GROUP = 6
+
+RESUME_DISPLAY_ORDER = (
+    "Languages", "Frontend", "Backend", "Databases", "DevOps & Tools",
+    "Data & ML", "Core CS", "Mobile", "Security",
+)
+
+# Internal taxonomy/legacy categories -> resume display headings. Categories
+# are INAURA analysis metadata (stable, enumerable); user skills themselves
+# are never hard-coded here.
+_CATEGORY_DISPLAY = {
+    "Programming": "Languages",
+    "Frontend": "Frontend",
+    "Backend": "Backend",
+    "Databases": "Databases",
+    "Database": "Databases",
+    "DevOps": "DevOps & Tools",
+    "DevOps/Cloud": "DevOps & Tools",
+    "Tools": "DevOps & Tools",
+    "Ops": "DevOps & Tools",
+    "MLOps": "DevOps & Tools",
+    "AI/ML": "Data & ML",
+    "Data": "Data & ML",
+    "Machine Learning": "Data & ML",
+    "Computer Science": "Core CS",
+    "Core CS": "Core CS",
+    "Architecture": "Core CS",
+    "Quality": "Core CS",
+    "Mobile": "Mobile",
+    "Cybersecurity": "Security",
+}
+# Soft skills stay verified but off the technical resume by default.
+_NON_TECHNICAL_CATEGORIES = frozenset({"Soft Skills"})
+
+# Keyword fallback ONLY for unmapped raw resume technologies (no canonical
+# category exists). Technology-class keywords, never user-specific content.
+_RAW_FRONTEND_HINTS = frozenset({
+    "ejs", "tailwind", "bootstrap", "sass", "scss", "jquery", "mui", "chakra",
+    "antd", "redux", "htmx", "alpine", "svelte", "vue", "angular", "ember",
+    "styled", "emotion",
+})
+_RAW_DEVTOOLS_HINTS = frozenset({
+    "postman", "insomnia", "vscode", "intellij", "eclipse", "jira",
+    "confluence", "figma", "gitlab", "bitbucket", "jenkins", "circleci",
+    "travis", "vercel", "netlify", "render", "heroku",
+})
+
+
+def _resume_requirement_map(requirements: List[dict]) -> Dict[str, dict]:
+    """Canonical skill -> existing role signals (importance, interview, demand)."""
+    req_map: Dict[str, dict] = {}
+    for req in requirements or []:
+        canonical = normalize_skill(str(req.get("skill") or ""))
+        if not canonical:
+            continue
+        key = canonical.lower()
+        if key in req_map:
+            continue
+        try:
+            req_map[key] = {
+                "importance": max(0.0, min(1.0, float(req.get("importance", 0.5)))),
+                "interview": max(0.0, min(1.0, float(req.get("interview_relevance", 0.5)))),
+                "demand": max(0.0, min(1.0, float(req.get("demand", 0.5)))),
+            }
+        except (TypeError, ValueError):
+            continue
+    return req_map
+
+
+def _display_group_for(item: dict) -> Optional[str]:
+    """Resume display heading for one skill item, or None when it belongs in
+    the available pool (soft skills, unclassifiable leftovers)."""
+    category = str(item.get("category") or "")
+    if category in _NON_TECHNICAL_CATEGORIES:
+        return None
+    if category in _CATEGORY_DISPLAY:
+        return _CATEGORY_DISPLAY[category]
+    name = str(item.get("name") or "")
+    definition = get_canonical_skill(name)
+    if definition and definition.category not in _NON_TECHNICAL_CATEGORIES:
+        mapped = _CATEGORY_DISPLAY.get(definition.category)
+        if mapped:
+            return mapped
+    low = name.lower()
+    if any(hint in low for hint in _RAW_FRONTEND_HINTS):
+        return "Frontend"
+    if any(hint in low for hint in _RAW_DEVTOOLS_HINTS):
+        return "DevOps & Tools"
+    return None
+
+
+def _score_resume_skill(item: dict, req: Optional[dict]) -> tuple[float, bool, float]:
+    """Deterministic (total, role_relevant, proficiency) for ranking.
+
+    role score reuses existing requirement signals:
+      0.60 * importance + 0.25 * interview_relevance + 0.15 * demand
+    evidence score blends demonstrated proficiency, confidence, and count.
+    total = 0.65 * role + 0.35 * evidence (role-relevant verified skills win).
+    """
+    try:
+        prof = item.get("proficiency")
+        if prof is None:
+            prof = item.get("signal_strength")
+        if prof is None:
+            prof = 0.25 if (item.get("evidence_count") or 0) > 0 else 0.0
+        prof = max(0.0, min(1.0, float(prof)))
+    except (TypeError, ValueError):
+        prof = 0.0
+    try:
+        conf = max(0.0, min(1.0, float(item.get("confidence") or 0.0)))
+    except (TypeError, ValueError):
+        conf = 0.0
+    try:
+        count = max(int(item.get("evidence_count") or 0), 0)
+    except (TypeError, ValueError):
+        count = 0
+    if req:
+        role = req["importance"] * 0.60 + req["interview"] * 0.25 + req["demand"] * 0.15
+    else:
+        role = 0.0
+    evidence = prof * 0.60 + conf * 0.30 + min(count, 3) / 3.0 * 0.10
+    return round(role * 0.65 + evidence * 0.35, 4), bool(req), prof
+
+
+def select_resume_skills(
+    skills: List[dict],
+    requirements: List[dict],
+    max_groups: int = MAX_RESUME_SKILL_GROUPS,
+    max_per_group: int = MAX_SKILLS_PER_GROUP,
+) -> tuple[dict, dict, dict]:
+    """Select compact resume skill groups from the verified skill list.
+
+    Pure + deterministic: input list is never mutated; output skills are a
+    subset of the input (canonical names preserved). Returns
+    (selected, available, stats) where both mappings are
+    {display_label: [skill names]} and available holds every verified skill
+    not selected (overflow, cut groups, soft skills, leftovers).
+    """
+    req_map = _resume_requirement_map(requirements)
+    buckets: Dict[str, list[dict]] = {}
+    leftovers: Dict[str, list[str]] = {}
+    seen: set[str] = set()
+    for item in skills or []:
+        name = str((item or {}).get("name") or "").strip()
+        if not name:
+            continue
+        key = (normalize_skill(name) or name).lower()
+        if key in seen:
+            continue
+        seen.add(key)
+        total, role_relevant, _ = _score_resume_skill(item, req_map.get(key))
+        entry = {"name": (normalize_skill(name) or name), "total": total,
+                 "role_relevant": role_relevant}
+        label = _display_group_for(item)
+        if label is None:
+            leftovers.setdefault("Other", []).append(entry["name"])
+        else:
+            buckets.setdefault(label, []).append(entry)
+
+    for entries in buckets.values():
+        entries.sort(key=lambda e: (not e["role_relevant"], -e["total"], e["name"].lower()))
+
+    def _group_rank(label: str) -> tuple[float, int]:
+        best = max((e["total"] for e in buckets[label]), default=0.0)
+        try:
+            order = RESUME_DISPLAY_ORDER.index(label)
+        except ValueError:
+            order = len(RESUME_DISPLAY_ORDER)
+        return (-best, order)
+
+    ordered_labels = sorted(buckets, key=_group_rank)
+    selected: dict[str, list[str]] = {}
+    available: dict[str, list[str]] = {}
+    for label in ordered_labels:
+        names = [e["name"] for e in buckets[label]]
+        if len(selected) < max(1, int(max_groups)):
+            selected[label] = names[:max(1, int(max_per_group))]
+            overflow = names[max(1, int(max_per_group)):]
+            if overflow:
+                available[label] = overflow
+        else:
+            available[label] = names
+    for label, names in leftovers.items():
+        available.setdefault(label, []).extend(n for n in names if n not in available.setdefault(label, []))
+    stats = {
+        "groups_selected": len(selected),
+        "skills_selected": sum(len(v) for v in selected.values()),
+        "skills_available": sum(len(v) for v in available.values()),
+        "skills_considered": len(seen),
+    }
+    return selected, available, stats
+
+
 def _manual_project_bullets(project: dict, matched: list[str]) -> list[str]:
     """Evidence-backed bullets: description, personal contribution, tech stack."""
     bullets = []
@@ -953,8 +1155,12 @@ def deterministic_content(snapshot: dict, contact_email: str | None = None) -> t
         "experience": [], "achievements": [],
         "_diagnostics": dict(snapshot.get("diagnostics") or {}),
     }
-    content["skills"] = [str(item.get("name")) for item in snapshot["skills"]]
-    content["skill_groups"] = _skill_groups(snapshot["skills"])
+    selected_groups, available_groups, skill_stats = select_resume_skills(
+        snapshot.get("skills") or [], snapshot.get("requirements") or [])
+    content["skills"] = [name for group in selected_groups.values() for name in group]
+    content["skill_groups"] = selected_groups
+    content["available_skills"] = available_groups
+    content["_diagnostics"]["resume_skill_groups"] = skill_stats
     claims = []
     filtered_bullets: List[dict] = []
 
