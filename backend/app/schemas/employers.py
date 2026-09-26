@@ -114,10 +114,23 @@ class RequirementSkillOut(BaseModel):
     required_level: Optional[float] = None
     note: Optional[str] = None
     created_at: datetime
+    skill_name: Optional[str] = None
+    skill_category: Optional[str] = None
 
     class Config:
         from_attributes = True
 
 
 class RequirementSkillsBulk(BaseModel):
-    skills: List[RequirementSkillIn] = Field(..., min_length=1, max_length=50)
+    skills: List[RequirementSkillIn] = Field(..., min_length=0, max_length=50)
+
+
+class CanonicalSkillOut(BaseModel):
+    id: UUID
+    canonical_name: str
+    display_name: str
+    category: Optional[str] = None
+
+    class Config:
+        from_attributes = True
+

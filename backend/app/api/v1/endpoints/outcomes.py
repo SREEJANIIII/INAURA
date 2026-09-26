@@ -39,10 +39,21 @@ router = APIRouter(prefix="/outcomes", tags=["outcomes"])
 requirements_router = APIRouter(prefix="/requirements", tags=["requirements"])
 
 
+@requirements_router.get("/{requirement_id}", response_model=RequirementOut)
+def get_requirement(requirement_id: str, current_user: CurrentUser = Depends(get_current_user)):
+    return empsvc.get_requirement(current_user.id, requirement_id)
+
+
 @requirements_router.patch("/{requirement_id}", response_model=RequirementOut)
 def update_requirement(requirement_id: str, payload: RequirementUpdate, current_user: CurrentUser = Depends(get_current_user)):
     clean = {k: v for k, v in payload.model_dump().items() if v is not None}
     return empsvc.update_requirement(current_user.id, requirement_id, clean)
+
+
+@requirements_router.delete("/{requirement_id}", status_code=204)
+def delete_requirement(requirement_id: str, current_user: CurrentUser = Depends(get_current_user)):
+    empsvc.delete_requirement(current_user.id, requirement_id)
+    return None
 
 
 @requirements_router.get("/{requirement_id}/skills", response_model=list[RequirementSkillOut])

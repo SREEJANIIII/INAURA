@@ -48,10 +48,12 @@ def get_membership(user_id: str, employer_id: str) -> dict | None:
 
 
 def require_employer_access(user_id: str, employer_id: str, roles=("owner", "member")) -> dict:
-    """404 (not 403) for non-members to avoid employer enumeration."""
+    """404 for non-members to avoid employer enumeration; 403 for members with insufficient role."""
     m = get_membership(user_id, employer_id)
-    if not m or m.get("role") not in roles:
+    if not m:
         raise HTTPException(status_code=404, detail="Employer not found")
+    if m.get("role") not in roles:
+        raise HTTPException(status_code=403, detail="Forbidden — insufficient employer role")
     return m
 
 
@@ -279,6 +281,21 @@ def _requirement_employer(requirement_id: str) -> dict:
     return rows[0]
 
 
+def get_requirement(user_id: str, requirement_id: str) -> dict:
+    req = _requirement_employer(requirement_id)
+    m = get_membership(user_id, req["employer_id"])
+    if not m:
+        client = _ensure_client()
+        try:
+            aresp = client.table("applications").select("id").eq("student_id", user_id).eq(
+                "hiring_requirement_id", requirement_id).execute()
+        except Exception:
+            raise HTTPException(status_code=404, detail="Requirement not found")
+        if not (aresp.data or []):
+            raise HTTPException(status_code=404, detail="Requirement not found")
+    return req
+
+
 def list_requirements(user_id: str, employer_id: str) -> list:
     require_employer_access(user_id, employer_id, roles=("owner", "member"))
     client = _ensure_client()
@@ -308,6 +325,27 @@ def update_requirement(user_id: str, requirement_id: str, payload: dict) -> dict
     return rows[0]
 
 
+def delete_requirement(user_id: str, requirement_id: str) -> None:
+    req = _requirement_employer(requirement_id)
+    require_employer_access(user_id, req["employer_id"], roles=("owner", "member"))
+    client = _ensure_client()
+    try:
+        client.table("hiring_requirements").delete().eq("id", requirement_id).execute()
+    except Exception:
+        raise HTTPException(status_code=500, detail="Failed to delete requirement")
+
+
+def list_canonical_skills() -> list:
+    client = _ensure_client()
+    try:
+        resp = client.table("skills").select("id,canonical_name,display_name,category").order("display_name").execute()
+        return resp.data or []
+    except Exception as e:
+        if _table_missing_msg(e):
+            raise HTTPException(status_code=503, detail="Skills table missing — run canonical taxonomy migrations")
+        raise HTTPException(status_code=500, detail="Failed to list canonical skills")
+
+
 def _assert_skill_exists(skill_id: str) -> None:
     client = _ensure_client()
     try:
@@ -318,6 +356,25 @@ def _assert_skill_exists(skill_id: str) -> None:
         raise HTTPException(status_code=500, detail="Failed to validate skill")
     if not (resp.data or []):
         raise HTTPException(status_code=400, detail=f"Unknown skill_id: {skill_id}")
+
+
+def _enrich_skills_with_metadata(client: Client, rows: list) -> list:
+    if not rows:
+        return rows
+    skill_ids = [str(r["skill_id"]) for r in rows if r.get("skill_id")]
+    if not skill_ids:
+        return rows
+    try:
+        sresp = client.table("skills").select("id,canonical_name,display_name,category").in_("id", skill_ids).execute()
+        smap = {str(s.get("id")): s for s in (sresp.data or [])}
+        for r in rows:
+            sk = smap.get(str(r.get("skill_id")))
+            if sk:
+                r["skill_name"] = sk.get("display_name") or sk.get("canonical_name")
+                r["skill_category"] = sk.get("category")
+    except Exception:
+        pass
+    return rows
 
 
 def set_requirement_skills(user_id: str, requirement_id: str, skills: list) -> list:
@@ -341,7 +398,8 @@ def set_requirement_skills(user_id: str, requirement_id: str, skills: list) -> l
         if not rows:
             return []
         resp = client.table("hiring_requirement_skills").insert(rows).execute()
-        return resp.data or []
+        inserted = resp.data or []
+        return _enrich_skills_with_metadata(client, inserted)
     except HTTPException:
         raise
     except Exception as e:
@@ -369,4 +427,6 @@ def list_requirement_skills(user_id: str, requirement_id: str) -> list:
             "hiring_requirement_id", requirement_id).execute()
     except Exception:
         raise HTTPException(status_code=500, detail="Failed to list requirement skills")
-    return resp.data or []
+    rows = resp.data or []
+    return _enrich_skills_with_metadata(client, rows)
+

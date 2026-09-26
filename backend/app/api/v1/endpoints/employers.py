@@ -14,10 +14,16 @@ from ....schemas.employers import (
     RequirementOut,
     RequirementSkillsBulk,
     RequirementSkillOut,
+    CanonicalSkillOut,
 )
 from ....services import employer_service as svc
 
 router = APIRouter(prefix="/employers", tags=["employers"])
+
+
+@router.get("/skills/catalog", response_model=list[CanonicalSkillOut])
+def list_canonical_skills(current_user: CurrentUser = Depends(get_current_user)):
+    return svc.list_canonical_skills()
 
 
 @router.post("", response_model=EmployerOut, status_code=201)
@@ -71,3 +77,33 @@ def create_requirement(employer_id: str, payload: RequirementCreate, current_use
 @router.get("/{employer_id}/requirements", response_model=list[RequirementOut])
 def list_requirements(employer_id: str, current_user: CurrentUser = Depends(get_current_user)):
     return svc.list_requirements(current_user.id, employer_id)
+
+
+@router.get("/{employer_id}/requirements/{requirement_id}", response_model=RequirementOut)
+def get_employer_requirement(employer_id: str, requirement_id: str, current_user: CurrentUser = Depends(get_current_user)):
+    return svc.get_requirement(current_user.id, requirement_id)
+
+
+@router.patch("/{employer_id}/requirements/{requirement_id}", response_model=RequirementOut)
+def update_employer_requirement(employer_id: str, requirement_id: str, payload: RequirementUpdate, current_user: CurrentUser = Depends(get_current_user)):
+    clean = {k: v for k, v in payload.model_dump().items() if v is not None}
+    return svc.update_requirement(current_user.id, requirement_id, clean)
+
+
+@router.delete("/{employer_id}/requirements/{requirement_id}", status_code=204)
+def delete_employer_requirement(employer_id: str, requirement_id: str, current_user: CurrentUser = Depends(get_current_user)):
+    svc.delete_requirement(current_user.id, requirement_id)
+    return None
+
+
+@router.get("/{employer_id}/requirements/{requirement_id}/skills", response_model=list[RequirementSkillOut])
+def list_employer_requirement_skills(employer_id: str, requirement_id: str, current_user: CurrentUser = Depends(get_current_user)):
+    return svc.list_requirement_skills(current_user.id, requirement_id)
+
+
+@router.put("/{employer_id}/requirements/{requirement_id}/skills", response_model=list[RequirementSkillOut])
+def set_employer_requirement_skills(employer_id: str, requirement_id: str, payload: RequirementSkillsBulk, current_user: CurrentUser = Depends(get_current_user)):
+    return svc.set_requirement_skills(
+        current_user.id, requirement_id, [s.model_dump() for s in payload.skills]
+    )
+
