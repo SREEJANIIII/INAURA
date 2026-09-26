@@ -83,6 +83,7 @@ class SkillFeedbackOut(BaseModel):
     observed_level: Optional[float] = None
     skill_gap: Optional[float] = None
     comment: Optional[str] = None
+    skill_name: Optional[str] = None
     created_at: datetime
 
     class Config:

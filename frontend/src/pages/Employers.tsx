@@ -25,9 +25,12 @@ import {
   listApplicationsForRequirement,
   getApplication,
   transitionApplication,
+  getFeedback,
+  submitFeedback,
   type Application,
   type ApplicationDetail,
   type ApplicationStatus,
+  type EmployerFeedback,
 } from "../services/outcomes";
 import {
   formatStatusLabel,
@@ -51,6 +54,35 @@ export default function Employers() {
   const [selectedAppDetail, setSelectedAppDetail] = useState<ApplicationDetail | null>(null);
   const [transitionNote, setTransitionNote] = useState("");
   const [appActionSaving, setAppActionSaving] = useState(false);
+
+  // Feedback state for selected candidate application
+  const [appFeedback, setAppFeedback] = useState<EmployerFeedback | null>(null);
+  const [loadingFeedback, setLoadingFeedback] = useState(false);
+  const [showFeedbackForm, setShowFeedbackForm] = useState(false);
+  const [feedbackSubmitting, setFeedbackSubmitting] = useState(false);
+
+  // Feedback form fields
+  const [fbTech, setFbTech] = useState<number | "">("");
+  const [fbComm, setFbComm] = useState<number | "">("");
+  const [fbProblem, setFbProblem] = useState<number | "">("");
+  const [fbProject, setFbProject] = useState<number | "">("");
+  const [fbRole, setFbRole] = useState<number | "">("");
+  const [fbOverall, setFbOverall] = useState<number | "">("");
+  const [fbInterviewSummary, setFbInterviewSummary] = useState("");
+  const [fbOverallComment, setFbOverallComment] = useState("");
+
+  // Feedback skills list
+  const [fbSkills, setFbSkills] = useState<{
+    skill_id: string;
+    skill_name?: string;
+    expected_level?: number;
+    observed_level?: number;
+    comment?: string;
+  }[]>([]);
+  const [fbSelectedSkillId, setFbSelectedSkillId] = useState("");
+  const [fbExpectedLevel, setFbExpectedLevel] = useState("0.7");
+  const [fbObservedLevel, setFbObservedLevel] = useState("0.7");
+  const [fbSkillComment, setFbSkillComment] = useState("");
 
   // Employer creation form
   const [empName, setEmpName] = useState("");
@@ -182,13 +214,112 @@ export default function Employers() {
     }
   };
 
+  const resetFeedbackForm = () => {
+    setFbTech("");
+    setFbComm("");
+    setFbProblem("");
+    setFbProject("");
+    setFbRole("");
+    setFbOverall("");
+    setFbInterviewSummary("");
+    setFbOverallComment("");
+    setFbSkills([]);
+    setFbSelectedSkillId("");
+    setFbExpectedLevel("0.7");
+    setFbObservedLevel("0.7");
+    setFbSkillComment("");
+  };
+
+  const loadCandidateFeedback = async (appId: string) => {
+    setLoadingFeedback(true);
+    setAppFeedback(null);
+    try {
+      const fb = await getFeedback(appId);
+      setAppFeedback(fb);
+    } catch {
+      // 404 indicates no feedback has been submitted yet
+      setAppFeedback(null);
+    } finally {
+      setLoadingFeedback(false);
+    }
+  };
+
   const openAppDetail = async (appId: string) => {
     setError(null);
     setTransitionNote("");
+    setShowFeedbackForm(false);
+    resetFeedbackForm();
     try {
       setSelectedAppDetail(await getApplication(appId));
+      void loadCandidateFeedback(appId);
     } catch (e) {
       setError(messageOf(e));
+    }
+  };
+
+  const handleAddSkillToFeedback = () => {
+    if (!fbSelectedSkillId) return;
+    const existingIdx = fbSkills.findIndex((s) => s.skill_id === fbSelectedSkillId);
+    const expNum = parseFloat(fbExpectedLevel);
+    const obsNum = parseFloat(fbObservedLevel);
+    const foundSkill =
+      reqSkills.find((s) => s.skill_id === fbSelectedSkillId)?.skill_name ||
+      catalog.find((c) => c.id === fbSelectedSkillId)?.display_name ||
+      fbSelectedSkillId;
+
+    const newItem = {
+      skill_id: fbSelectedSkillId,
+      skill_name: foundSkill,
+      expected_level: isNaN(expNum) ? 0.7 : Math.max(0, Math.min(1, expNum)),
+      observed_level: isNaN(obsNum) ? 0.7 : Math.max(0, Math.min(1, obsNum)),
+      comment: fbSkillComment.trim() || undefined,
+    };
+
+    if (existingIdx >= 0) {
+      const copy = [...fbSkills];
+      copy[existingIdx] = newItem;
+      setFbSkills(copy);
+    } else {
+      setFbSkills([...fbSkills, newItem]);
+    }
+    setFbSelectedSkillId("");
+    setFbSkillComment("");
+  };
+
+  const handleRemoveSkillFromFeedback = (skillId: string) => {
+    setFbSkills(fbSkills.filter((s) => s.skill_id !== skillId));
+  };
+
+  const handleSubmitFeedback = async () => {
+    if (!selectedAppDetail) return;
+    setFeedbackSubmitting(true);
+    setError(null);
+    try {
+      const payload = {
+        technical_ability: fbTech ? Number(fbTech) : null,
+        communication: fbComm ? Number(fbComm) : null,
+        problem_solving: fbProblem ? Number(fbProblem) : null,
+        project_readiness: fbProject ? Number(fbProject) : null,
+        role_readiness: fbRole ? Number(fbRole) : null,
+        overall_rating: fbOverall ? Number(fbOverall) : null,
+        interview_summary: fbInterviewSummary.trim() || null,
+        overall_comment: fbOverallComment.trim() || null,
+        skills: fbSkills.map((s) => ({
+          skill_id: s.skill_id,
+          expected_level: s.expected_level != null ? s.expected_level : null,
+          observed_level: s.observed_level != null ? s.observed_level : null,
+          comment: s.comment || null,
+        })),
+      };
+      const created = await submitFeedback(selectedAppDetail.id, payload);
+      setAppFeedback(created);
+      setShowFeedbackForm(false);
+      resetFeedbackForm();
+      setSelectedAppDetail(await getApplication(selectedAppDetail.id));
+    } catch (e) {
+      setError(messageOf(e));
+    } finally {
+      setFeedbackSubmitting(false);
     }
   };
 
@@ -1081,6 +1212,327 @@ export default function Employers() {
                               <p className="p2__hint">No events logged.</p>
                             )}
                           </div>
+                        </div>
+
+                        {/* Employer Feedback Section */}
+                        <div style={{ marginTop: "1rem", borderTop: "1px solid color-mix(in srgb, currentColor 10%, transparent)", paddingTop: "0.75rem" }}>
+                          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+                            <h6>Employer Feedback &amp; Skill Observations</h6>
+                            {appFeedback && (
+                              <span className="p2__badge p2__badge--open" style={{ fontSize: "0.7rem" }}>
+                                Final Feedback Submitted
+                              </span>
+                            )}
+                          </div>
+
+                          {loadingFeedback && (
+                            <p className="p2__hint">Checking application feedback...</p>
+                          )}
+
+                          {/* Existing Submitted Feedback */}
+                          {!loadingFeedback && appFeedback && (
+                            <div style={{ marginTop: "0.5rem", background: "color-mix(in srgb, currentColor 3%, transparent)", padding: "0.75rem", borderRadius: "0.5rem" }}>
+                              <div style={{ display: "flex", flexWrap: "wrap", gap: "1rem", marginBottom: "0.5rem" }}>
+                                {appFeedback.overall_rating != null && (
+                                  <div>Overall: <strong>{appFeedback.overall_rating}/5</strong></div>
+                                )}
+                                {appFeedback.technical_ability != null && (
+                                  <div>Technical: <strong>{appFeedback.technical_ability}/5</strong></div>
+                                )}
+                                {appFeedback.communication != null && (
+                                  <div>Communication: <strong>{appFeedback.communication}/5</strong></div>
+                                )}
+                                {appFeedback.problem_solving != null && (
+                                  <div>Problem Solving: <strong>{appFeedback.problem_solving}/5</strong></div>
+                                )}
+                                {appFeedback.project_readiness != null && (
+                                  <div>Project Readiness: <strong>{appFeedback.project_readiness}/5</strong></div>
+                                )}
+                                {appFeedback.role_readiness != null && (
+                                  <div>Role Readiness: <strong>{appFeedback.role_readiness}/5</strong></div>
+                                )}
+                              </div>
+
+                              {appFeedback.interview_summary && (
+                                <p style={{ margin: "0.35rem 0", fontSize: "0.85rem" }}>
+                                  <strong>Interview Summary:</strong> {appFeedback.interview_summary}
+                                </p>
+                              )}
+                              {appFeedback.overall_comment && (
+                                <p style={{ margin: "0.35rem 0", fontStyle: "italic", fontSize: "0.85rem" }}>
+                                  &ldquo;{appFeedback.overall_comment}&rdquo;
+                                </p>
+                              )}
+
+                              {appFeedback.skills && appFeedback.skills.length > 0 && (
+                                <div style={{ marginTop: "0.5rem" }}>
+                                  <strong style={{ fontSize: "0.8rem" }}>Skill Evaluations:</strong>
+                                  <ul className="p2__list" style={{ marginTop: "0.25rem" }}>
+                                    {appFeedback.skills.map((s) => (
+                                      <li key={s.id} className="p2__skill-row" style={{ fontSize: "0.8rem" }}>
+                                        <div>
+                                          <strong>{s.skill_name || s.skill_id}</strong>
+                                          {s.expected_level != null && (
+                                            <span className="p2__hint" style={{ marginLeft: "0.5rem" }}>
+                                              Expected: {(s.expected_level * 100).toFixed(0)}%
+                                            </span>
+                                          )}
+                                          {s.observed_level != null && (
+                                            <span className="p2__hint" style={{ marginLeft: "0.5rem" }}>
+                                              Observed: {(s.observed_level * 100).toFixed(0)}%
+                                            </span>
+                                          )}
+                                          {s.skill_gap != null && (
+                                            <span style={{ marginLeft: "0.5rem", fontWeight: 600 }}>
+                                              Gap: {(s.skill_gap * 100).toFixed(0)}pp
+                                            </span>
+                                          )}
+                                          {s.comment && <div className="p2__hint">{s.comment}</div>}
+                                        </div>
+                                      </li>
+                                    ))}
+                                  </ul>
+                                </div>
+                              )}
+                              <p className="p2__hint" style={{ marginTop: "0.5rem", fontSize: "0.75rem" }}>
+                                Submitted on {new Date(appFeedback.created_at).toLocaleDateString()}. Final summative feedback is immutable.
+                              </p>
+                            </div>
+                          )}
+
+                          {/* Not yet submitted */}
+                          {!loadingFeedback && !appFeedback && (
+                            <div style={{ marginTop: "0.5rem" }}>
+                              {!["interview", "offer_received", "selected", "rejected"].includes(selectedAppDetail.status) ? (
+                                <p className="p2__hint">
+                                  Employer feedback becomes available once candidate advances to interview stage.
+                                </p>
+                              ) : !showFeedbackForm ? (
+                                <button
+                                  type="button"
+                                  className="p2__btn p2__btn--ghost"
+                                  onClick={() => setShowFeedbackForm(true)}
+                                >
+                                  + Submit Summative Feedback &amp; Skill Observations
+                                </button>
+                              ) : (
+                                <div className="p2__form" style={{ marginTop: "0.5rem" }}>
+                                  <h5>Candidate Evaluation Form</h5>
+                                  <p className="p2__hint">
+                                    Provide structured observations and ratings. This is the single final feedback record for this application.
+                                  </p>
+
+                                  <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(140px, 1fr))", gap: "0.5rem" }}>
+                                    <div>
+                                      <label style={{ fontSize: "0.75rem", display: "block" }}>Overall (1-5)</label>
+                                      <input
+                                        type="number"
+                                        min="1"
+                                        max="5"
+                                        placeholder="1-5"
+                                        value={fbOverall}
+                                        onChange={(e) => setFbOverall(e.target.value ? Number(e.target.value) : "")}
+                                      />
+                                    </div>
+                                    <div>
+                                      <label style={{ fontSize: "0.75rem", display: "block" }}>Technical (1-5)</label>
+                                      <input
+                                        type="number"
+                                        min="1"
+                                        max="5"
+                                        placeholder="1-5"
+                                        value={fbTech}
+                                        onChange={(e) => setFbTech(e.target.value ? Number(e.target.value) : "")}
+                                      />
+                                    </div>
+                                    <div>
+                                      <label style={{ fontSize: "0.75rem", display: "block" }}>Communication (1-5)</label>
+                                      <input
+                                        type="number"
+                                        min="1"
+                                        max="5"
+                                        placeholder="1-5"
+                                        value={fbComm}
+                                        onChange={(e) => setFbComm(e.target.value ? Number(e.target.value) : "")}
+                                      />
+                                    </div>
+                                    <div>
+                                      <label style={{ fontSize: "0.75rem", display: "block" }}>Problem Solving (1-5)</label>
+                                      <input
+                                        type="number"
+                                        min="1"
+                                        max="5"
+                                        placeholder="1-5"
+                                        value={fbProblem}
+                                        onChange={(e) => setFbProblem(e.target.value ? Number(e.target.value) : "")}
+                                      />
+                                    </div>
+                                    <div>
+                                      <label style={{ fontSize: "0.75rem", display: "block" }}>Project Ready (1-5)</label>
+                                      <input
+                                        type="number"
+                                        min="1"
+                                        max="5"
+                                        placeholder="1-5"
+                                        value={fbProject}
+                                        onChange={(e) => setFbProject(e.target.value ? Number(e.target.value) : "")}
+                                      />
+                                    </div>
+                                    <div>
+                                      <label style={{ fontSize: "0.75rem", display: "block" }}>Role Ready (1-5)</label>
+                                      <input
+                                        type="number"
+                                        min="1"
+                                        max="5"
+                                        placeholder="1-5"
+                                        value={fbRole}
+                                        onChange={(e) => setFbRole(e.target.value ? Number(e.target.value) : "")}
+                                      />
+                                    </div>
+                                  </div>
+
+                                  <textarea
+                                    className="p2__textarea"
+                                    placeholder="Interview summary (e.g. Completed technical round, solved graph problem)"
+                                    value={fbInterviewSummary}
+                                    onChange={(e) => setFbInterviewSummary(e.target.value)}
+                                  />
+                                  <textarea
+                                    className="p2__textarea"
+                                    placeholder="Overall candidate feedback or rationale"
+                                    value={fbOverallComment}
+                                    onChange={(e) => setFbOverallComment(e.target.value)}
+                                  />
+
+                                  {/* Skill evaluations builder */}
+                                  <div style={{ marginTop: "0.5rem", borderTop: "1px dashed color-mix(in srgb, currentColor 15%, transparent)", paddingTop: "0.5rem" }}>
+                                    <label style={{ fontSize: "0.8rem", fontWeight: 600, display: "block" }}>
+                                      Evaluate Candidate Skills ({fbSkills.length})
+                                    </label>
+                                    <div style={{ display: "grid", gridTemplateColumns: "1fr", gap: "0.5rem", marginTop: "0.35rem" }}>
+                                      <select
+                                        className="p2__select"
+                                        value={fbSelectedSkillId}
+                                        onChange={(e) => setFbSelectedSkillId(e.target.value)}
+                                      >
+                                        <option value="">-- Choose Skill to Evaluate --</option>
+                                        {reqSkills.length > 0 && (
+                                          <optgroup label="Requirement Attached Skills">
+                                            {reqSkills.map((s) => (
+                                              <option key={s.skill_id} value={s.skill_id}>
+                                                {s.skill_name || s.skill_id} ({s.importance})
+                                              </option>
+                                            ))}
+                                          </optgroup>
+                                        )}
+                                        <optgroup label="Canonical Skills Catalog">
+                                          {catalog.map((c) => (
+                                            <option key={c.id} value={c.id}>
+                                              {c.display_name} ({c.canonical_name})
+                                            </option>
+                                          ))}
+                                        </optgroup>
+                                      </select>
+                                    </div>
+
+                                    <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "0.75rem", marginTop: "0.35rem" }}>
+                                      <div>
+                                        <label style={{ fontSize: "0.75rem" }}>
+                                          Expected: {(parseFloat(fbExpectedLevel || "0") * 100).toFixed(0)}%
+                                        </label>
+                                        <input
+                                          type="range"
+                                          min="0"
+                                          max="1"
+                                          step="0.05"
+                                          value={fbExpectedLevel}
+                                          onChange={(e) => setFbExpectedLevel(e.target.value)}
+                                          style={{ width: "100%" }}
+                                        />
+                                      </div>
+                                      <div>
+                                        <label style={{ fontSize: "0.75rem" }}>
+                                          Observed: {(parseFloat(fbObservedLevel || "0") * 100).toFixed(0)}%
+                                        </label>
+                                        <input
+                                          type="range"
+                                          min="0"
+                                          max="1"
+                                          step="0.05"
+                                          value={fbObservedLevel}
+                                          onChange={(e) => setFbObservedLevel(e.target.value)}
+                                          style={{ width: "100%" }}
+                                        />
+                                      </div>
+                                    </div>
+
+                                    <div style={{ display: "flex", gap: "0.5rem", marginTop: "0.35rem" }}>
+                                      <input
+                                        style={{ flex: 1 }}
+                                        placeholder="Skill observation comment (optional)"
+                                        value={fbSkillComment}
+                                        onChange={(e) => setFbSkillComment(e.target.value)}
+                                      />
+                                      <button
+                                        type="button"
+                                        className="p2__btn p2__btn--ghost"
+                                        onClick={handleAddSkillToFeedback}
+                                        disabled={!fbSelectedSkillId}
+                                      >
+                                        Attach Skill
+                                      </button>
+                                    </div>
+
+                                    {/* Added skills list */}
+                                    {fbSkills.length > 0 && (
+                                      <ul className="p2__list" style={{ marginTop: "0.5rem" }}>
+                                        {fbSkills.map((s) => (
+                                          <li key={s.skill_id} className="p2__skill-row">
+                                            <div>
+                                              <strong>{s.skill_name || s.skill_id}</strong>
+                                              <span className="p2__hint" style={{ marginLeft: "0.5rem" }}>
+                                                Exp: {((s.expected_level ?? 0) * 100).toFixed(0)}% | Obs: {((s.observed_level ?? 0) * 100).toFixed(0)}%
+                                              </span>
+                                              {s.comment && <div className="p2__hint">{s.comment}</div>}
+                                            </div>
+                                            <button
+                                              type="button"
+                                              className="p2__btn p2__btn--danger-ghost"
+                                              style={{ padding: "0.2rem 0.5rem", fontSize: "0.75rem" }}
+                                              onClick={() => handleRemoveSkillFromFeedback(s.skill_id)}
+                                            >
+                                              Remove
+                                            </button>
+                                          </li>
+                                        ))}
+                                      </ul>
+                                    )}
+                                  </div>
+
+                                  <div className="p2__row" style={{ marginTop: "0.75rem" }}>
+                                    <button
+                                      type="button"
+                                      className="p2__btn"
+                                      onClick={handleSubmitFeedback}
+                                      disabled={feedbackSubmitting}
+                                    >
+                                      {feedbackSubmitting ? "Submitting…" : "Submit Final Feedback"}
+                                    </button>
+                                    <button
+                                      type="button"
+                                      className="p2__btn p2__btn--ghost"
+                                      onClick={() => {
+                                        setShowFeedbackForm(false);
+                                        resetFeedbackForm();
+                                      }}
+                                    >
+                                      Cancel
+                                    </button>
+                                  </div>
+                                </div>
+                              )}
+                            </div>
+                          )}
                         </div>
                       </div>
                     )}

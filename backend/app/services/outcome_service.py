@@ -310,10 +310,34 @@ def submit_feedback(user_id: str, app_id: str, payload: dict) -> dict:
         erecheck = client.table("employer_feedback").select("id").eq("application_id", app_id).execute()
         if erecheck.data:
             raise HTTPException(status_code=400, detail="Feedback already submitted for this application")
+        # Proficiency validation
         for s in skills:
-            sresp = client.table("skills").select("id").eq("id", str(s["skill_id"])).execute()
-            if not (sresp.data or []):
+            exp = s.get("expected_level")
+            obs = s.get("observed_level")
+            if exp is not None and not (0.0 <= float(exp) <= 1.0):
+                raise HTTPException(status_code=400, detail="expected_level must be between 0.0 and 1.0")
+            if obs is not None and not (0.0 <= float(obs) <= 1.0):
+                raise HTTPException(status_code=400, detail="observed_level must be between 0.0 and 1.0")
+        # Canonical skills validation & skill name mapping
+        skill_name_map = {}
+        for s in skills:
+            sresp = client.table("skills").select("id,display_name,canonical_name").eq("id", str(s["skill_id"])).execute()
+            sdata = sresp.data or []
+            if not sdata:
                 raise HTTPException(status_code=400, detail=f"Unknown skill_id: {s['skill_id']}")
+            skill_name_map[str(s["skill_id"])] = sdata[0].get("display_name") or sdata[0].get("canonical_name") or str(s["skill_id"])
+        # Requirement-skills linkage: if requirement has specific attached skills, validate linkage
+        try:
+            req_skills_resp = client.table("hiring_requirement_skills").select("skill_id").eq("hiring_requirement_id", app["hiring_requirement_id"]).execute()
+            req_skill_ids = {str(r["skill_id"]) for r in (req_skills_resp.data or []) if r.get("skill_id")}
+            if req_skill_ids:
+                for s in skills:
+                    if str(s["skill_id"]) not in req_skill_ids:
+                        raise HTTPException(status_code=400, detail=f"Skill {s['skill_id']} is not linked to this hiring requirement")
+        except HTTPException:
+            raise
+        except Exception:
+            pass
         now = datetime.now(timezone.utc).isoformat()
         fresp = client.table("employer_feedback").insert({
             "employer_id": req["employer_id"],
@@ -359,6 +383,7 @@ def submit_feedback(user_id: str, app_id: str, payload: dict) -> dict:
     for r in skill_rows:
         exp, obs = r.get("expected_level"), r.get("observed_level")
         r["skill_gap"] = (exp - obs) if exp is not None and obs is not None else None
+        r["skill_name"] = skill_name_map.get(str(r.get("skill_id")))
     fb["skills"] = skill_rows
     return fb
 
@@ -380,9 +405,19 @@ def get_feedback(user_id: str, app_id: str) -> dict:
         skill_rows = sresp.data or []
     except Exception:
         skill_rows = []
+    skill_ids = list({str(r["skill_id"]) for r in skill_rows if r.get("skill_id")})
+    skill_name_map = {}
+    if skill_ids:
+        try:
+            snames = client.table("skills").select("id,display_name,canonical_name").in_("id", skill_ids).execute()
+            for s in (snames.data or []):
+                skill_name_map[str(s["id"])] = s.get("display_name") or s.get("canonical_name") or str(s["id"])
+        except Exception:
+            pass
     for r in skill_rows:
         exp, obs = r.get("expected_level"), r.get("observed_level")
         r["skill_gap"] = (exp - obs) if exp is not None and obs is not None else None
+        r["skill_name"] = skill_name_map.get(str(r.get("skill_id")))
     fb["skills"] = skill_rows
     return fb
 

@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import "./Person2.css";
+import FeedbackLoopPanel from "../components/outcomes/FeedbackLoopPanel";
 import {
   createApplication,
   getApplication,
@@ -351,6 +352,9 @@ export default function Applications() {
                 ))}
                 {detail.events.length === 0 && <p className="p2__hint">No events logged.</p>}
               </div>
+
+              {/* Feedback Loop Panel */}
+              <FeedbackLoopPanel applicationId={detail.id} />
             </div>
           )}
         </section>

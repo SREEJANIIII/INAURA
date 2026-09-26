@@ -42,6 +42,7 @@ export type SkillFeedback = {
   id: string;
   employer_feedback_id: string;
   skill_id: string;
+  skill_name?: string | null;
   expected_level: number | null;
   observed_level: number | null;
   skill_gap: number | null;
@@ -161,6 +162,31 @@ export function transitionApplication(id: string, to_status: ApplicationStatus, 
 
 export function getFeedback(appId: string) {
   return apiFetch<EmployerFeedback>(`/outcomes/applications/${appId}/feedback`);
+}
+
+export function submitFeedback(
+  appId: string,
+  payload: {
+    technical_ability?: number | null;
+    communication?: number | null;
+    problem_solving?: number | null;
+    project_readiness?: number | null;
+    role_readiness?: number | null;
+    overall_rating?: number | null;
+    interview_summary?: string | null;
+    overall_comment?: string | null;
+    skills?: {
+      skill_id: string;
+      expected_level?: number | null;
+      observed_level?: number | null;
+      comment?: string | null;
+    }[];
+  }
+) {
+  return apiFetch<EmployerFeedback>(`/outcomes/applications/${appId}/feedback`, {
+    method: "POST",
+    body: JSON.stringify(payload),
+  });
 }
 
 export function listPlacements() {

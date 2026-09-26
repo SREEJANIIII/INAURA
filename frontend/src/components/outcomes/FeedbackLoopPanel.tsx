@@ -77,7 +77,7 @@ export default function FeedbackLoopPanel({ applicationId }: { applicationId: st
                 <ul className="fbloop__list">
                   {feedback.skills.map((s) => (
                     <li key={s.id}>
-                      Skill <code>{s.skill_id.slice(0, 8)}…</code>
+                      <strong>{s.skill_name || `Skill ${s.skill_id.slice(0, 8)}…`}</strong>
                       {s.expected_level != null && s.observed_level != null && (
                         <>
                           : expected {Math.round(s.expected_level * 100)}%, observed{" "}
