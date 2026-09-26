@@ -87,6 +87,11 @@ const items: NavItem[] = [
     icon: <Icon><path d="M4 5.5A2.5 2.5 0 0 1 6.5 3H20v16H6.5A2.5 2.5 0 0 0 4 21.5z" /><path d="M4 5.5v16" /><path d="M8 7h8M8 11h8" /></Icon>,
   },
   {
+    label: "Applications",
+    to: "/applications",
+    icon: <Icon><rect x="3.5" y="7.5" width="17" height="12" rx="2" /><path d="M9 7.5V6a2 2 0 0 1 2-2h2a2 2 0 0 1 2 2v1.5" /><path d="M3.5 12.5h17" /><path d="m10.5 15 1.5 1.5 3-3" /></Icon>,
+  },
+  {
     label: "Profile",
     to: "/profile",
     icon: <Icon><path d="M19 21v-2a4 4 0 0 0-4-4H9a4 4 0 0 0-4 4v2" /><circle cx="12" cy="7" r="4" /></Icon>,

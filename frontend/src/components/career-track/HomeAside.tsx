@@ -10,6 +10,7 @@ import {
 } from "../home/homeModel";
 import type { TrackSkill } from "./careerTrackModel";
 import { useSkillNavigation } from "./motion";
+import CareerActivity from "../outcomes/CareerActivity";
 
 type Props = {
   weekNumber?: number;
@@ -176,6 +177,8 @@ export default function HomeAside({ weekNumber, actions, priority, careerId, cov
           )}
         </section>
       )}
+
+      <CareerActivity />
     </aside>
   );
 }

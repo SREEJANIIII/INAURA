@@ -76,6 +76,35 @@ class ApplicationDetailOut(ApplicationOut):
     candidate_evidence: List[CandidateEvidenceItem] = []
 
 
+class OpenRoleSkill(BaseModel):
+    skill_id: str
+    skill_name: Optional[str] = None
+    importance: Optional[str] = None
+    required_level: Optional[float] = None
+
+
+class OpenRoleApplication(BaseModel):
+    id: UUID
+    status: str
+
+
+class OpenRoleOut(BaseModel):
+    id: UUID
+    title: str
+    role_key: Optional[str] = None
+    employer_id: UUID
+    employer_name: Optional[str] = None
+    location: Optional[str] = None
+    employment_type: Optional[str] = None
+    description: Optional[str] = None
+    created_at: Optional[datetime] = None
+    skills: List[OpenRoleSkill] = []
+    application: Optional[OpenRoleApplication] = None
+
+    class Config:
+        from_attributes = True
+
+
 
 class SkillFeedbackIn(BaseModel):
     skill_id: UUID

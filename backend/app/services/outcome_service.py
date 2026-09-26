@@ -235,6 +235,82 @@ def list_applications_for_requirement(user_id: str, requirement_id: str) -> list
         raise HTTPException(status_code=500, detail="Failed to list requirement applications")
 
 
+def list_open_roles(user_id: str, search: str | None = None, limit: int = 50) -> list:
+    """Student role discovery: open hiring requirements with employer + skills.
+
+    Read-only. Any authenticated user may browse; returns only public hiring
+    fields (no member lists, no other students' data, no contact PII).
+    Includes the caller's own application (if any) per requirement so the UI
+    can render Apply/Save state without exposing raw IDs.
+    """
+    client = _ensure_client()
+    try:
+        q = client.table("hiring_requirements").select(
+            "id,employer_id,title,role_key,location,employment_type,description,created_at"
+        ).eq("status", "open").order("created_at", desc=True).limit(max(1, min(int(limit or 50), 100)))
+        resp = q.execute()
+    except Exception as e:
+        if _missing(e):
+            raise HTTPException(status_code=503, detail="Person 2 tables missing — run backend/supabase/027_outcomes.sql")
+        raise HTTPException(status_code=500, detail="Failed to list open roles")
+    reqs = resp.data or []
+    if not reqs:
+        return []
+    if search and search.strip():
+        needle = search.strip().lower()
+        reqs = [r for r in reqs if needle in str(r.get("title") or "").lower()
+                or needle in str(r.get("role_key") or "").lower()
+                or needle in str(r.get("location") or "").lower()
+                or needle in str(r.get("description") or "").lower()]
+    try:
+        ereq = client.table("employers").select("id,name").in_(
+            "id", list({r["employer_id"] for r in reqs if r.get("employer_id")})).execute()
+        enames = {e["id"]: e.get("name") for e in (ereq.data or [])}
+    except Exception:
+        enames = {}
+    req_ids = [r["id"] for r in reqs]
+    skills_by_req: dict = {rid: [] for rid in req_ids}
+    try:
+        sresp = client.table("hiring_requirement_skills").select(
+            "hiring_requirement_id,skill_id,importance,required_level").in_(
+            "hiring_requirement_id", req_ids).execute()
+        srows = sresp.data or []
+        emp._enrich_skills_with_metadata(client, srows)
+        for s in srows:
+            skills_by_req.setdefault(s["hiring_requirement_id"], []).append({
+                "skill_id": str(s.get("skill_id")),
+                "skill_name": s.get("skill_name"),
+                "importance": s.get("importance"),
+                "required_level": s.get("required_level"),
+            })
+    except Exception:
+        pass
+    mine: dict = {}
+    try:
+        aresp = client.table("applications").select("id,hiring_requirement_id,status").eq(
+            "student_id", user_id).in_("hiring_requirement_id", req_ids).execute()
+        for a in (aresp.data or []):
+            mine[a["hiring_requirement_id"]] = {"id": a["id"], "status": a.get("status")}
+    except Exception:
+        pass
+    out = []
+    for r in reqs:
+        out.append({
+            "id": r["id"],
+            "title": r.get("title"),
+            "role_key": r.get("role_key"),
+            "employer_id": r.get("employer_id"),
+            "employer_name": enames.get(r.get("employer_id")),
+            "location": r.get("location"),
+            "employment_type": r.get("employment_type"),
+            "description": r.get("description"),
+            "created_at": r.get("created_at"),
+            "skills": skills_by_req.get(r["id"], []),
+            "application": mine.get(r["id"]),
+        })
+    return out
+
+
 def get_application_detail(user_id: str, app_id: str) -> dict:
     app = _get_application(app_id)
     actor = _actor_type_for(app, user_id)

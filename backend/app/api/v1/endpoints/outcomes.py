@@ -15,6 +15,7 @@ from ....schemas.outcomes import (
     ApplicationCreate,
     ApplicationOut,
     ApplicationDetailOut,
+    OpenRoleOut,
     StatusTransitionIn,
     EmployerFeedbackCreate,
     EmployerFeedbackOut,
@@ -71,6 +72,16 @@ def set_requirement_skills(requirement_id: str, payload: RequirementSkillsBulk, 
 @requirements_router.get("/{requirement_id}/applications", response_model=list[ApplicationOut])
 def list_requirement_applications(requirement_id: str, current_user: CurrentUser = Depends(get_current_user)):
     return svc.list_applications_for_requirement(current_user.id, requirement_id)
+
+
+@router.get("/open-roles", response_model=list[OpenRoleOut])
+def list_open_roles(
+    search: Optional[str] = None,
+    limit: int = 50,
+    current_user: CurrentUser = Depends(get_current_user),
+):
+    """Student discovery: browse open hiring requirements (no IDs needed)."""
+    return svc.list_open_roles(current_user.id, search=search, limit=limit)
 
 
 @router.post("/applications", response_model=ApplicationOut, status_code=201)

@@ -1,10 +1,12 @@
 import { useEffect, useState } from "react";
+import { Link } from "react-router-dom";
 import "./Person2.css";
 import FeedbackLoopPanel from "../components/outcomes/FeedbackLoopPanel";
 import {
   createApplication,
   getApplication,
   listApplications,
+  listOpenRoles,
   transitionApplication,
   listPlacements,
   createPlacement,
@@ -12,13 +14,17 @@ import {
   type Application,
   type ApplicationDetail,
   type ApplicationStatus,
+  type OpenRole,
   type Placement,
 } from "../services/outcomes";
+import { getRolesCatalog, type RoleSummary } from "../services/industry";
+import { findRole, roleId, toId } from "../components/career-track/careerTrackModel";
 import {
   formatStatusLabel,
   formatOutcomeLabel,
   getAllowedStudentTransitions,
   isTerminalStatus,
+  deriveTimeline,
 } from "../lib/applicationsModel";
 
 const messageOf = (e: unknown) => (e instanceof Error ? e.message : String(e));
@@ -28,7 +34,10 @@ type FilterTab = "all" | "saved" | "active" | "resolved";
 export default function Applications() {
   const [apps, setApps] = useState<Application[]>([]);
   const [detail, setDetail] = useState<ApplicationDetail | null>(null);
-  const [requirementId, setRequirementId] = useState("");
+  const [roleSearch, setRoleSearch] = useState("");
+  const [openRoles, setOpenRoles] = useState<OpenRole[]>([]);
+  const [rolesLoading, setRolesLoading] = useState(false);
+  const [roleCatalog, setRoleCatalog] = useState<RoleSummary[]>([]);
   const [applyNote, setApplyNote] = useState("");
   const [error, setError] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
@@ -58,23 +67,29 @@ export default function Applications() {
 
   useEffect(() => {
     void refresh();
+    void loadOpenRoles();
+    getRolesCatalog().then(setRoleCatalog).catch(() => {});
   }, []);
 
-  const handleCreate = async (initialStatus: "saved" | "applied") => {
-    if (!requirementId.trim()) {
-      setError("Please enter a hiring requirement ID");
-      return;
-    }
+  const loadOpenRoles = (query?: string) => {
+    setRolesLoading(true);
+    listOpenRoles(query)
+      .then(setOpenRoles)
+      .catch(() => {})
+      .finally(() => setRolesLoading(false));
+  };
+
+  const handleCreate = async (requirementId: string, initialStatus: "saved" | "applied") => {
     setSaving(true);
     setError(null);
     try {
-      const created = await createApplication(requirementId.trim(), {
+      const created = await createApplication(requirementId, {
         initial_status: initialStatus,
         note: applyNote.trim() || undefined,
       });
-      setRequirementId("");
       setApplyNote("");
       await refresh();
+      void loadOpenRoles(roleSearch || undefined);
       await open(created.id);
     } catch (e) {
       setError(messageOf(e));
@@ -164,6 +179,31 @@ export default function Applications() {
     }
   };
 
+  const handleAcceptOffer = async () => {
+    if (!detail) return;
+    setSavingPlacement(true);
+    setError(null);
+    try {
+      await createPlacement({
+        application_id: detail.id,
+        role_title: detail.requirement_title || "Selected Candidate",
+        status: "offer_accepted",
+      });
+      await refresh();
+      await open(detail.id);
+    } catch (e) {
+      setError(messageOf(e));
+    } finally {
+      setSavingPlacement(false);
+    }
+  };
+
+  const trackPathForTitle = (title?: string | null): string | null => {
+    if (!title) return null;
+    const found = findRole(roleCatalog, toId(title));
+    return found ? `/career-track/${roleId(found)}` : null;
+  };
+
   const filteredApps = apps.filter((a) => {
     if (tab === "saved") return a.status === "saved";
     if (tab === "active") return ["applied", "screening", "interview", "offer_received"].includes(a.status);
@@ -228,7 +268,7 @@ export default function Applications() {
                 >
                   <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", gap: "0.5rem" }}>
                     <div>
-                      <strong>{a.requirement_title || `Role (${a.hiring_requirement_id.slice(0, 8)}…)`}</strong>
+                      <strong>{a.requirement_title || "Role"}</strong>
                       {a.employer_name && <div className="p2__hint">{a.employer_name}</div>}
                     </div>
                     <span className={`p2__badge p2__badge--${a.status}`}>
@@ -249,39 +289,93 @@ export default function Applications() {
             )}
           </ul>
 
-          {/* New Application Form */}
+          {/* Open Role Discovery — no IDs needed */}
           <div className="p2__form" style={{ marginTop: "1.5rem" }}>
-            <h3>Save or Apply to a Role</h3>
-            <input
-              aria-label="Hiring requirement ID"
-              placeholder="Hiring requirement ID (from open roles) *"
-              value={requirementId}
-              onChange={(e) => setRequirementId(e.target.value)}
-            />
+            <h3>Apply to a Role</h3>
+            <p className="p2__hint">Browse open roles from employers on INAURA and apply directly.</p>
+            <div className="p2__row">
+              <input
+                aria-label="Search open roles"
+                placeholder="Search open roles…"
+                value={roleSearch}
+                onChange={(e) => setRoleSearch(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter") loadOpenRoles(roleSearch || undefined);
+                }}
+              />
+              <button
+                type="button"
+                className="p2__btn p2__btn--ghost"
+                onClick={() => loadOpenRoles(roleSearch || undefined)}
+                disabled={rolesLoading}
+              >
+                {rolesLoading ? "Searching…" : "Search"}
+              </button>
+            </div>
             <input
               aria-label="Optional note"
               placeholder="Application note or candidate message (optional)"
               value={applyNote}
               onChange={(e) => setApplyNote(e.target.value)}
             />
-            <div className="p2__row" style={{ marginTop: "0.25rem" }}>
-              <button
-                type="button"
-                className="p2__btn"
-                onClick={() => handleCreate("applied")}
-                disabled={saving || !requirementId.trim()}
-              >
-                {saving ? "Processing…" : "Apply Directly"}
-              </button>
-              <button
-                type="button"
-                className="p2__btn p2__btn--ghost"
-                onClick={() => handleCreate("saved")}
-                disabled={saving || !requirementId.trim()}
-              >
-                Save for Later
-              </button>
-            </div>
+            <ul className="p2__list" style={{ marginTop: "0.75rem" }}>
+              {openRoles.map((role) => (
+                <li key={role.id} className="p2__card">
+                  <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", gap: "0.5rem" }}>
+                    <div>
+                      <strong>{role.title}</strong>
+                      {role.employer_name && <div className="p2__hint">{role.employer_name}</div>}
+                      <div className="p2__meta" style={{ marginTop: "0.25rem" }}>
+                        {[role.location, role.employment_type].filter(Boolean).join(" · ")}
+                      </div>
+                    </div>
+                    {role.application && (
+                      <span className={`p2__badge p2__badge--${role.application.status}`}>
+                        {formatStatusLabel(role.application.status as ApplicationStatus)}
+                      </span>
+                    )}
+                  </div>
+                  {role.skills.length > 0 && (
+                    <div className="p2__hint" style={{ marginTop: "0.35rem" }}>
+                      Required skills: {role.skills.map((s) => s.skill_name || "Skill").join(" · ")}
+                    </div>
+                  )}
+                  <div className="p2__row" style={{ marginTop: "0.5rem" }}>
+                    {role.application ? (
+                      <button
+                        type="button"
+                        className="p2__btn p2__btn--ghost"
+                        onClick={() => open(role.application!.id)}
+                      >
+                        View application
+                      </button>
+                    ) : (
+                      <>
+                        <button
+                          type="button"
+                          className="p2__btn"
+                          onClick={() => handleCreate(role.id, "applied")}
+                          disabled={saving}
+                        >
+                          {saving ? "Processing…" : "Apply"}
+                        </button>
+                        <button
+                          type="button"
+                          className="p2__btn p2__btn--ghost"
+                          onClick={() => handleCreate(role.id, "saved")}
+                          disabled={saving}
+                        >
+                          Save for Later
+                        </button>
+                      </>
+                    )}
+                  </div>
+                </li>
+              ))}
+              {!rolesLoading && openRoles.length === 0 && (
+                <li className="p2__hint">No open roles right now. Try a different search.</li>
+              )}
+            </ul>
           </div>
         </section>
 
@@ -295,7 +389,7 @@ export default function Applications() {
               <div className="p2__detail-header">
                 <div>
                   <h3 style={{ margin: 0 }}>
-                    {detail.requirement_title || `Requirement ${detail.hiring_requirement_id.slice(0, 8)}…`}
+                    {detail.requirement_title || "Role"}
                   </h3>
                   {detail.employer_name && (
                     <div className="p2__hint" style={{ fontSize: "0.95rem", marginTop: "0.15rem" }}>
@@ -316,8 +410,55 @@ export default function Applications() {
                 {detail.applied_at && (
                   <span><strong>Applied:</strong> {new Date(detail.applied_at).toLocaleDateString()}</span>
                 )}
-                <span><strong>ID:</strong> <code>{detail.id.slice(0, 8)}…</code></span>
+                {(() => {
+                  const trackPath = trackPathForTitle(detail.requirement_title);
+                  return trackPath ? (
+                    <span><Link to={trackPath}>Related Career Track</Link></span>
+                  ) : null;
+                })()}
+                <span>
+                  <button
+                    type="button"
+                    className="p2__btn p2__btn--ghost"
+                    style={{ padding: "0.15rem 0.6rem", fontSize: "0.8rem" }}
+                    onClick={() => open(detail.id)}
+                  >
+                    Refresh
+                  </button>
+                </span>
               </div>
+
+              {/* Career timeline — derived from immutable application_events */}
+              {(() => {
+                const placement = placements.find((p) => p.application_id === detail.id);
+                const stages = deriveTimeline(
+                  detail.events,
+                  placement?.joining_date,
+                  placement?.status === "joined"
+                );
+                return (
+                  <div style={{ marginTop: "0.75rem" }} aria-label="Application progress">
+                    {stages.map((s) => (
+                      <div key={s.key} style={{ display: "flex", gap: "0.6rem", alignItems: "flex-start" }}>
+                        <span aria-hidden="true" style={{ color: s.done ? "#10b981" : "#cbd5e1", fontWeight: 700 }}>
+                          {s.done ? "●" : "○"}
+                        </span>
+                        <div style={{ paddingBottom: "0.45rem" }}>
+                          <div style={{ fontWeight: s.done ? 600 : 400 }}>
+                            {s.label}
+                            {detail.status === s.key && !isTerminalStatus(detail.status) && (
+                              <span className="p2__hint"> — current status</span>
+                            )}
+                          </div>
+                          <div className="p2__hint">
+                            {s.at ? new Date(s.at).toLocaleDateString() : "Pending"}
+                          </div>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                );
+              })()}
 
               {/* Action Controls for Student */}
               {studentAllowed.length > 0 && (
@@ -382,6 +523,37 @@ export default function Applications() {
                   This application has concluded with status <strong>{formatStatusLabel(detail.status)}</strong>.
                 </p>
               )}
+
+              {/* Offer decision — student accepts or declines an offer */}
+              {detail.status === "offer_received" &&
+                !placements.some((p) => p.application_id === detail.id) && (
+                  <div className="p2__card" style={{ marginTop: "1rem" }}>
+                    <h4 style={{ margin: "0 0 0.5rem 0" }}>Offer Received</h4>
+                    <p className="p2__hint" style={{ marginBottom: "0.5rem" }}>
+                      {detail.employer_name || "The employer"} has made you an offer for{" "}
+                      {detail.requirement_title || "this role"}. Accept to record the
+                      placement, or decline it.
+                    </p>
+                    <div className="p2__row">
+                      <button
+                        type="button"
+                        className="p2__btn"
+                        disabled={savingPlacement}
+                        onClick={handleAcceptOffer}
+                      >
+                        Accept Offer
+                      </button>
+                      <button
+                        type="button"
+                        className="p2__btn p2__btn--ghost"
+                        disabled={savingPlacement}
+                        onClick={() => handleDeclineOffer()}
+                      >
+                        Decline Offer
+                      </button>
+                    </div>
+                  </div>
+                )}
 
               {/* Placement & Joining Tracking */}
               {(detail.status === "selected" || placements.some((p) => p.application_id === detail.id)) && (() => {
@@ -448,7 +620,24 @@ export default function Applications() {
 
                     {currentPlacement?.status === "joined" && (
                       <p className="p2__hint" style={{ color: "#10b981", fontWeight: 500, marginTop: "0.5rem" }}>
-                        ✓ You have joined this role on {new Date(currentPlacement.joining_date || "").toLocaleDateString()}. Status is {currentPlacement.verification_status}.
+                        ✓ Selected
+                        <br />✓ Joined
+                        {currentPlacement.joining_date && (
+                          <>
+                            <br />Joining date:{" "}
+                            {new Date(currentPlacement.joining_date).toLocaleDateString(undefined, {
+                              day: "numeric",
+                              month: "long",
+                              year: "numeric",
+                            })}
+                          </>
+                        )}
+                        <br />Verification:{" "}
+                        {currentPlacement.verification_status === "verified"
+                          ? "Employer verified"
+                          : currentPlacement.verification_status === "disputed"
+                            ? "Disputed — awaiting employer review"
+                            : "Awaiting employer verification"}
                       </p>
                     )}
 

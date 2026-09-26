@@ -49,3 +49,50 @@ export function formatOutcomeLabel(outcome: string | null | undefined): string {
   if (outcome === "declined_offer") return "Declined Offer";
   return outcome.charAt(0).toUpperCase() + outcome.slice(1).toLowerCase();
 }
+
+export type TimelineEvent = {
+  to_status: string;
+  created_at: string;
+};
+
+export type TimelineStage = {
+  key: string;
+  label: string;
+  at?: string;
+  done: boolean;
+};
+
+const TIMELINE_STAGES: ApplicationStatus[] = [
+  "applied",
+  "screening",
+  "interview",
+  "offer_received",
+  "selected",
+];
+
+/**
+ * Derive career-timeline stages from immutable application_events.
+ * Pure derivation — no dates or events are fabricated; unreached stages
+ * stay pending. The optional joining date comes from a placement record.
+ */
+export function deriveTimeline(
+  events: TimelineEvent[],
+  joiningDate?: string | null,
+  joined = false
+): TimelineStage[] {
+  const reached = new Set((events ?? []).map((e) => e.to_status));
+  const dateFor = (stage: string) => events.find((e) => e.to_status === stage)?.created_at;
+  const stages: TimelineStage[] = TIMELINE_STAGES.map((s) => ({
+    key: s,
+    label: formatStatusLabel(s),
+    at: dateFor(s),
+    done: reached.has(s),
+  }));
+  stages.push({
+    key: "joined",
+    label: "Joining",
+    at: joiningDate || undefined,
+    done: joined,
+  });
+  return stages;
+}

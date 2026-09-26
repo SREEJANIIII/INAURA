@@ -6,6 +6,7 @@ import {
   isTerminalStatus,
   formatStatusLabel,
   formatOutcomeLabel,
+  deriveTimeline,
 } from "../src/lib/applicationsModel.ts";
 
 describe("getAllowedStudentTransitions", () => {
@@ -67,5 +68,41 @@ describe("formatStatusLabel & formatOutcomeLabel", () => {
     assert.strictEqual(formatOutcomeLabel("declined_offer"), "Declined Offer");
     assert.strictEqual(formatOutcomeLabel("selected"), "Selected");
     assert.strictEqual(formatOutcomeLabel(null), "");
+  });
+});
+
+describe("deriveTimeline", () => {
+  const ev = (to_status: string, created_at: string) => ({ to_status, created_at });
+
+  it("marks event-backed stages done with their dates, rest pending", () => {
+    const stages = deriveTimeline(
+      [ev("applied", "2026-09-24T00:00:00Z"), ev("screening", "2026-09-25T00:00:00Z")],
+      null,
+      false
+    );
+    assert.deepStrictEqual(
+      stages.map((s) => s.key),
+      ["applied", "screening", "interview", "offer_received", "selected", "joined"]
+    );
+    assert.strictEqual(stages[0].done, true);
+    assert.strictEqual(stages[0].at, "2026-09-24T00:00:00Z");
+    assert.strictEqual(stages[1].done, true);
+    assert.strictEqual(stages[2].done, false);
+    assert.strictEqual(stages[2].at, undefined);
+    assert.strictEqual(stages[5].done, false);
+  });
+
+  it("marks joining done only from a joined placement", () => {
+    const done = deriveTimeline([ev("applied", "2026-09-24T00:00:00Z")], "2026-09-30", true);
+    assert.strictEqual(done[5].done, true);
+    assert.strictEqual(done[5].at, "2026-09-30");
+    const pending = deriveTimeline([ev("applied", "2026-09-24T00:00:00Z")], null, false);
+    assert.strictEqual(pending[5].done, false);
+  });
+
+  it("never fabricates stages for empty event history", () => {
+    const stages = deriveTimeline([], null, false);
+    assert.ok(stages.every((s) => s.done === false));
+    assert.ok(stages.every((s) => s.at === undefined));
   });
 });

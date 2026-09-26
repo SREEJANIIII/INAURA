@@ -347,9 +347,18 @@ export default function CandidateDetailModal({
                                 <td>{sk.required_level != null ? `${Math.round(sk.required_level * 100)}%` : "Not specified"}</td>
                                 <td>
                                   {sk.observed_level != null ? (
-                                    <span>{Math.round(sk.observed_level * 100)}%</span>
+                                    <span>
+                                      {Math.round(sk.observed_level * 100)}%{" "}
+                                      <span
+                                        className="emp-badge emp-badge--open"
+                                        style={{ fontSize: "0.68rem" }}
+                                        title="Level comes from the candidate's INAURA skill assessment record"
+                                      >
+                                        INAURA-assessed
+                                      </span>
+                                    </span>
                                   ) : (
-                                    <span style={{ color: "var(--muted)" }}>Self-learning</span>
+                                    <span style={{ color: "var(--muted)" }}>Not assessed</span>
                                   )}
                                 </td>
                                 <td>
@@ -385,9 +394,18 @@ export default function CandidateDetailModal({
                     <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(280px, 1fr))", gap: "0.75rem" }}>
                       {detail.candidate_evidence.map((ev) => (
                         <div key={ev.id} style={{ background: "var(--paper-2, #f8fafc)", padding: "0.75rem", borderRadius: "8px", border: "1px solid var(--line)" }}>
-                          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+                          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: "0.5rem" }}>
                             <strong style={{ fontSize: "0.85rem" }}>{ev.title || "Evidence Artifact"}</strong>
-                            <span className="emp-badge emp-badge--applied" style={{ fontSize: "0.7rem" }}>{ev.type}</span>
+                            <span style={{ display: "flex", gap: "0.3rem", alignItems: "center" }}>
+                              <span className="emp-badge emp-badge--applied" style={{ fontSize: "0.7rem" }}>{ev.type}</span>
+                              <span
+                                className="emp-badge emp-badge--applied"
+                                style={{ fontSize: "0.68rem" }}
+                                title="Submitted by the candidate; review the linked artifact before relying on it"
+                              >
+                                Student-provided
+                              </span>
+                            </span>
                           </div>
                           {ev.description && (
                             <p style={{ fontSize: "0.8rem", color: "var(--muted)", margin: "0.35rem 0" }}>

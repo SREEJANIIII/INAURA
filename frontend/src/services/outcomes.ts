@@ -167,6 +167,33 @@ export function createApplication(
   });
 }
 
+export type OpenRoleSkill = {
+  skill_id: string;
+  skill_name?: string | null;
+  importance?: string | null;
+  required_level?: number | null;
+};
+
+export type OpenRole = {
+  id: string;
+  title: string;
+  role_key?: string | null;
+  employer_id: string;
+  employer_name?: string | null;
+  location?: string | null;
+  employment_type?: string | null;
+  description?: string | null;
+  created_at?: string | null;
+  skills: OpenRoleSkill[];
+  application?: { id: string; status: ApplicationStatus } | null;
+};
+
+export function listOpenRoles(search?: string) {
+  return apiFetch<OpenRole[]>("/outcomes/open-roles", {
+    params: search?.trim() ? { search: search.trim() } : undefined,
+  });
+}
+
 export function listApplications(status?: string) {
   return apiFetch<Application[]>("/outcomes/applications", {
     params: status ? { status } : undefined,

@@ -50,6 +50,21 @@ export default function FeedbackLoopPanel({ applicationId }: { applicationId: st
         assessments — use them together to decide what to practise next.
       </p>
       {error && <p className="fbloop__error">{error}</p>}
+      {feedback && feedback.skills.some((s) => (s.skill_gap ?? 0) > 0.05) && (
+        <p className="fbloop__note" role="note">
+          Career development context: your employer feedback suggests deeper{" "}
+          <strong>
+            {feedback.skills
+              .filter((s) => (s.skill_gap ?? 0) > 0.05)
+              .sort((a, b) => (b.skill_gap ?? 0) - (a.skill_gap ?? 0))
+              .slice(0, 2)
+              .map((s) => s.skill_name || "skill")
+              .join(", ")}
+          </strong>{" "}
+          practice may be useful. Compare with your INAURA-verified gaps — no roadmap task is
+          created automatically.
+        </p>
+      )}
       <div className="fbloop__cols">
         <div>
           <h4>Employer-observed</h4>
