@@ -795,9 +795,17 @@ def list_alignments(user_id: str, hiring_requirement_id: str | None = None) -> l
 
 def _parse_window(from_s: str | None, to_s: str | None) -> tuple[datetime | None, datetime | None]:
     try:
-        f = datetime.fromisoformat(from_s) if from_s else None
-        t = datetime.fromisoformat(to_s) if to_s else None
+        f = datetime.fromisoformat(from_s.replace("Z", "+00:00")) if from_s else None
+        t = datetime.fromisoformat(to_s.replace("Z", "+00:00")) if to_s else None
+        if f and f.tzinfo is None:
+            f = f.replace(tzinfo=timezone.utc)
+        if t and t.tzinfo is None:
+            t = t.replace(tzinfo=timezone.utc)
+        if f and t and f > t:
+            raise HTTPException(status_code=400, detail="Invalid time window: from_date cannot be after to_date")
         return f, t
+    except HTTPException:
+        raise
     except Exception:
         raise HTTPException(status_code=400, detail="Invalid time window (use ISO dates)")
 
@@ -806,7 +814,9 @@ def _in_window(ts: str | None, f: datetime | None, t: datetime | None) -> bool:
     if not ts:
         return False
     try:
-        d = datetime.fromisoformat(ts.replace("Z", "+00:00"))
+        d = datetime.fromisoformat(str(ts).replace("Z", "+00:00"))
+        if d.tzinfo is None:
+            d = d.replace(tzinfo=timezone.utc)
         if f and d < f:
             return False
         if t and d > t:
@@ -814,6 +824,7 @@ def _in_window(ts: str | None, f: datetime | None, t: datetime | None) -> bool:
         return True
     except Exception:
         return False
+
 
 
 def get_dashboard(user_id: str, employer_id: str | None = None,
@@ -943,50 +954,85 @@ def get_industry_signals(role: str | None = None, location: str | None = None,
             q = q.eq("location", location)
         rresp = q.execute()
         reqs = rresp.data or []
-        req_ids = [r["id"] for r in reqs]
+        req_ids = list(dict.fromkeys(r["id"] for r in reqs if r.get("id")))
         requirements_n = len(req_ids)
-        aresp = client.table("applications").select("id,status,applied_at,hiring_requirement_id").in_(
-            "hiring_requirement_id", req_ids).execute() if req_ids else None
-        apps = [a for a in ((aresp.data if aresp else []) or [])
-                if a.get("applied_at") and (not f and not t or _in_window(a["applied_at"], f, t))]
+
+        apps = []
+        if req_ids:
+            aresp = client.table("applications").select("id,status,applied_at,hiring_requirement_id").in_(
+                "hiring_requirement_id", req_ids).execute()
+            seen_app_ids = set()
+            for a in ((aresp.data if aresp else []) or []):
+                aid = a.get("id")
+                if not aid or aid in seen_app_ids:
+                    continue
+                if not a.get("applied_at"):
+                    continue
+                if (f or t) and not _in_window(a["applied_at"], f, t):
+                    continue
+                seen_app_ids.add(aid)
+                apps.append(a)
+
         applied_n = len(apps)
-        st = [a["status"] for a in apps]
+        st = [str(a.get("status") or "") for a in apps]
         interview_n = sum(1 for s in st if s in ("interview", "offer_received", "selected"))
         selection_n = sum(1 for s in st if s == "selected")
         app_ids = [a["id"] for a in apps]
+
         placement_n = 0
         if app_ids:
-            presp = client.table("placement_outcomes").select("id").in_(
+            presp = client.table("placement_outcomes").select("id,application_id,status").in_(
                 "application_id", app_ids).eq("status", "joined").execute()
-            placement_n = len(presp.data or [])
+            valid_placements = {
+                p["id"] for p in (presp.data or [])
+                if p.get("id")
+                and p.get("application_id")
+                and p["application_id"] in set(app_ids)
+                and p.get("status") == "joined"
+            }
+            placement_n = len(valid_placements)
+
         feedback_n = 0
         skill_gap: float | None = None
         demand: float | None = None
         if app_ids:
-            fresp = client.table("employer_feedback").select("id,created_at").in_(
+            fresp = client.table("employer_feedback").select("id,application_id,created_at").in_(
                 "application_id", app_ids).execute()
-            fbs = [x for x in (fresp.data or [])
-                   if (not f and not t or _in_window(x.get("created_at"), f, t))]
-            feedback_n = len(fbs)
-            if fbs:
+            valid_fbs = [
+                x for x in (fresp.data or [])
+                if x.get("id")
+                and x.get("application_id") in set(app_ids)
+                and (not f and not t or _in_window(x.get("created_at"), f, t))
+            ]
+            unique_fb_ids = list(dict.fromkeys(x["id"] for x in valid_fbs))
+            feedback_n = len(unique_fb_ids)
+            if unique_fb_ids:
                 sresp = client.table("employer_skill_feedback").select(
-                    "expected_level,observed_level").in_(
-                    "employer_feedback_id", [x["id"] for x in fbs]).execute()
-                gaps = [r["expected_level"] - r["observed_level"] for r in (sresp.data or [])
-                        if r.get("expected_level") is not None and r.get("observed_level") is not None]
-                skill_gap = (sum(gaps) / len(gaps)) if gaps else None
+                    "employer_feedback_id,expected_level,observed_level").in_(
+                    "employer_feedback_id", unique_fb_ids).execute()
+                gaps = [
+                    float(r["expected_level"]) - float(r["observed_level"])
+                    for r in (sresp.data or [])
+                    if r.get("expected_level") is not None and r.get("observed_level") is not None
+                ]
+                skill_gap = round(sum(gaps) / len(gaps), 4) if gaps else None
+
         # observed_demand is skill-specific; without ?skill param this is role-level volume only.
         min_n_met = applied_n >= 10 and feedback_n >= 5
         if not min_n_met:
             skill_gap = None
             demand = None
+
         return {
             "signal_version": "industry-outcome-signal-v1",
             "role": role,
             "location": location,
             "skill": None,
-            "time_window": {"from": from_s, "to": to_s,
-                            "basis": "applied_at for counts; feedback created_at for gap"},
+            "time_window": {
+                "from": from_s,
+                "to": to_s,
+                "basis": "applied_at for counts; feedback created_at for gap",
+            },
             "denominators": {"requirements_n": requirements_n, "applied_n": applied_n},
             "application_count": applied_n,
             "interview_count": interview_n,
@@ -997,6 +1043,8 @@ def get_industry_signals(role: str | None = None, location: str | None = None,
             "observed_skill_gap": skill_gap,
             "min_n_met": min_n_met,
         }
+    except HTTPException:
+        raise
     except Exception as e:
         if _missing(e):
             raise HTTPException(status_code=503, detail="Person 2 tables missing — run migrations 026/027")
@@ -1010,46 +1058,93 @@ def get_industry_skill_signal(skill_id: str, role: str | None = None,
     base = get_industry_signals(role=role, location=location, from_s=from_s, to_s=to_s)
     client = _ensure_client()
     try:
-        q = client.table("hiring_requirements").select("id")
+        try:
+            s_rows = client.table("skills").select("id,canonical_name").execute().data or []
+        except Exception:
+            s_rows = []
+
+        target_skill_ids = {str(skill_id).strip()}
+        skill_display = str(skill_id).strip()
+
+        for sr in s_rows:
+            sid = str(sr.get("id") or "").strip()
+            cname = str(sr.get("canonical_name") or "").strip()
+            if sid.lower() == str(skill_id).strip().lower():
+                if cname:
+                    skill_display = cname
+                    target_skill_ids.add(cname)
+            if cname.lower() == str(skill_id).strip().lower():
+                if sid:
+                    target_skill_ids.add(sid)
+                skill_display = cname
+
+        q = client.table("hiring_requirements").select("id,role_key,location")
         if role:
             q = q.eq("role_key", role)
         if location:
             q = q.eq("location", location)
-        reqs = (q.execute().data or [])
-        req_ids = [r["id"] for r in reqs]
+        reqs = q.execute().data or []
+        req_ids = list(dict.fromkeys(r["id"] for r in reqs if r.get("id")))
         requirements_n = len(req_ids)
+
+        demand: float | None = None
         if req_ids:
-            sresp = client.table("hiring_requirement_skills").select("hiring_requirement_id").in_(
-                "hiring_requirement_id", req_ids).eq("skill_id", skill_id).execute()
-            requesting = len({r["hiring_requirement_id"] for r in (sresp.data or [])})
-            demand = (requesting / requirements_n) if requirements_n else None
-        else:
-            demand = None
-        # Skill-specific gap
+            sresp = client.table("hiring_requirement_skills").select(
+                "hiring_requirement_id,skill_id").in_("hiring_requirement_id", req_ids).execute()
+            matching_reqs = {
+                r["hiring_requirement_id"]
+                for r in (sresp.data or [])
+                if str(r.get("skill_id") or "").strip() in target_skill_ids
+                and r.get("hiring_requirement_id") in set(req_ids)
+            }
+            demand = round(len(matching_reqs) / requirements_n, 4) if requirements_n > 0 else None
+
         f, t = _parse_window(from_s, to_s)
-        aresp = client.table("applications").select("id").in_(
+        aresp = client.table("applications").select("id,applied_at,hiring_requirement_id").in_(
             "hiring_requirement_id", req_ids).execute() if req_ids else None
-        app_ids = [a["id"] for a in ((aresp.data if aresp else []) or [])]
-        gap: float | None = None
+        apps = [
+            a for a in ((aresp.data if aresp else []) or [])
+            if a.get("applied_at") and (not f and not t or _in_window(a["applied_at"], f, t))
+        ]
+        app_ids = list(dict.fromkeys(a["id"] for a in apps if a.get("id")))
+
         fbn = 0
+        gap: float | None = None
         if app_ids:
-            fresp = client.table("employer_feedback").select("id,created_at").in_(
+            fresp = client.table("employer_feedback").select("id,created_at,application_id").in_(
                 "application_id", app_ids).execute()
-            fbs = [x for x in (fresp.data or [])
-                   if (not f and not t or _in_window(x.get("created_at"), f, t))]
-            if fbs:
+            fbs = [
+                x for x in (fresp.data or [])
+                if x.get("application_id") in set(app_ids)
+                and (not f and not t or _in_window(x.get("created_at"), f, t))
+            ]
+            fb_ids = list(dict.fromkeys(x["id"] for x in fbs if x.get("id")))
+            if fb_ids:
                 sresp = client.table("employer_skill_feedback").select(
-                    "expected_level,observed_level").in_(
-                    "employer_feedback_id", [x["id"] for x in fbs]).eq("skill_id", skill_id).execute()
-                gaps = [r["expected_level"] - r["observed_level"] for r in (sresp.data or [])
-                        if r.get("expected_level") is not None and r.get("observed_level") is not None]
-                fbn = len(gaps)
-                gap = (sum(gaps) / len(gaps)) if gaps else None
+                    "employer_feedback_id,skill_id,expected_level,observed_level").in_(
+                    "employer_feedback_id", fb_ids).execute()
+                valid_skill_fb = [
+                    r for r in (sresp.data or [])
+                    if str(r.get("skill_id") or "").strip() in target_skill_ids
+                    and r.get("expected_level") is not None
+                    and r.get("observed_level") is not None
+                ]
+                gaps = [float(r["expected_level"]) - float(r["observed_level"]) for r in valid_skill_fb]
+                fbn = len({r["employer_feedback_id"] for r in valid_skill_fb})
+                gap = round(sum(gaps) / len(gaps), 4) if gaps else None
+
         min_n = base["denominators"]["applied_n"] >= 5 and fbn >= 5
-        base.update({"skill": skill_id, "feedback_count": fbn,
-                     "observed_demand": demand if min_n else None,
-                     "observed_skill_gap": gap if min_n else None,
-                     "min_n_met": min_n})
+        base.update({
+            "skill": skill_display,
+            "feedback_count": fbn,
+            "observed_demand": demand if min_n else None,
+            "observed_skill_gap": gap if min_n else None,
+            "min_n_met": min_n,
+        })
         return base
-    except Exception:
+    except HTTPException:
+        raise
+    except Exception as e:
+        if _missing(e):
+            raise HTTPException(status_code=503, detail="Person 2 tables missing — run migrations 026/027")
         raise HTTPException(status_code=500, detail="Failed to build skill signal")
