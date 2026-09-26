@@ -495,6 +495,189 @@ def validate_plan(plan: Dict[str, Any]) -> List[str]:
 
 
 # ---------------------------------------------------------------------------
+# Profile-grounded dossier + generated-question validation
+# ---------------------------------------------------------------------------
+# A dossier grounds generated questions in the candidate's OWN work so the
+# interview probes what they built instead of asking textbook definitions.
+# Generated model output is untrusted: it is validated (anchored, specific,
+# injection-free) before use, and bad competencies are repaired, never fatal.
+
+DOSSIER_TEXT_CHARS = 1200
+
+# A bare "tell me about X" narration request names a project without probing
+# anything specific about it, so it does not count as grounded.
+_GENERIC_NARRATION_RE = re.compile(r"^\s*tell\s+me\s+about\b", re.IGNORECASE)
+
+
+def dossier_prompt_text(dossier: Dict[str, Any]) -> str:
+    """Compact candidate brief for question generation (bounded)."""
+    d = dossier or {}
+    skill = str(d.get("skill") or "").strip()
+    role = str(d.get("target_role") or "").strip()
+    lines = [f"Candidate dossier — skill: {skill or 'unknown skill'}"]
+    if role:
+        lines.append(f"Target role: {role}")
+    projects = [p for p in (d.get("projects") or []) if isinstance(p, dict)]
+    if not projects:
+        lines.append("No projects on file")
+    else:
+        lines.append("Projects:")
+        for p in projects[:5]:
+            name = str(p.get("name") or "").strip() or "Untitled project"
+            desc = str(p.get("description") or "").strip()
+            techs = [str(t).strip() for t in (p.get("technologies") or []) if str(t).strip()]
+            suffix = f" [{', '.join(techs[:6])}]" if techs else ""
+            lines.append(f"- {name}" + (f": {desc[:160]}" if desc else "") + suffix)
+    for key, label in (("knowledge_score", "Knowledge assessment"),
+                       ("practical_score", "Practical assessment")):
+        val = d.get(key)
+        if isinstance(val, bool):
+            continue
+        try:
+            if val is None:
+                continue
+            lines.append(f"{label}: {round(float(val) * 100)}%")
+        except (TypeError, ValueError):
+            continue
+    return "\n".join(lines)[:DOSSIER_TEXT_CHARS]
+
+
+def dossier_anchors(dossier: Dict[str, Any]) -> set:
+    """Candidate-owned anchors a question must reference to count as grounded.
+
+    Project names + technologies, minus the interviewed skill itself: naming
+    the skill under test ("What is Python") says nothing about this person.
+    """
+    d = dossier or {}
+    skill = str(d.get("skill") or "").strip().lower()
+    anchors: set = set()
+    for p in (d.get("projects") or []):
+        if isinstance(p, dict):
+            if str(p.get("name") or "").strip():
+                anchors.add(str(p.get("name")).strip())
+            for t in (p.get("technologies") or []):
+                if str(t).strip():
+                    anchors.add(str(t).strip())
+    for t in (d.get("technologies") or []):
+        if str(t).strip():
+            anchors.add(str(t).strip())
+    return {a for a in anchors if a.lower() != skill}
+
+
+def _generated_prompt_grounded(prompt: str, anchors: Any) -> bool:
+    """A generated prompt counts as grounded when it names a candidate-owned
+    anchor, asks something specific (not bare narration), and carries no
+    prompt-injection markers."""
+    text = str(prompt or "")
+    if not text.strip():
+        return False
+    if contains_injection_markers(text):
+        return False
+    if _GENERIC_NARRATION_RE.match(text):
+        return False
+    lowered = text.lower()
+    try:
+        anchor_list = list(anchors or [])
+    except TypeError:
+        anchor_list = []
+    return any(str(a).strip() and str(a).strip().lower() in lowered
+               for a in anchor_list)
+
+
+def parse_generated_questions(
+    raw: Any,
+    competencies: List[Dict[str, str]],
+    anchors: Any,
+) -> Optional[List[Dict[str, Any]]]:
+    """Validate model-generated batch questions. Returns accepted questions or
+    None when nothing usable survives. Bad competencies are repaired to the
+    first defined competency; ungrounded/injected items are dropped."""
+    try:
+        data = json.loads(raw) if isinstance(raw, str) else raw
+    except Exception:
+        return None
+    if not isinstance(data, dict):
+        return None
+    items = data.get("questions")
+    if not isinstance(items, list) or not items:
+        return None
+    comp_ids = [str(c.get("id") or "") for c in (competencies or [])
+                if isinstance(c, dict) and str(c.get("id") or "")]
+    fallback_comp = comp_ids[0] if comp_ids else ""
+    accepted: List[Dict[str, Any]] = []
+    for item in items:
+        if not isinstance(item, dict):
+            continue
+        prompt = str(item.get("prompt") or "").strip()
+        if not prompt or not _generated_prompt_grounded(prompt, anchors):
+            continue
+        comp = str(item.get("competency") or "").strip()
+        if comp not in comp_ids:
+            comp = fallback_comp
+        counter = str(item.get("counter_question") or "").strip()
+        accepted.append({
+            "id": f"q{len(accepted) + 1}",
+            "competency": comp,
+            "prompt": prompt,
+            "follow_ups": [counter] if counter else [],
+            "_generated": True,
+        })
+    return accepted or None
+
+
+async def generate_interview_questions(
+    skill: str,
+    competencies: List[Dict[str, str]],
+    dossier: Dict[str, Any],
+    settings: Any = None,
+) -> Tuple[Optional[List[Dict[str, Any]]], str]:
+    """Batch-generate dossier-grounded questions. Returns (questions, source).
+
+    With no interview provider configured this falls back to templates:
+    (None, source-label) — never an error, never fabricated questions.
+    """
+    from ...core.config import get_settings
+    cfg = settings if settings is not None else get_settings()
+    api_key = getattr(cfg, "google_api_key", None)
+    if not api_key or not str(api_key).strip():
+        return None, "template-fallback: no interview provider configured"
+    brief = dossier_prompt_text(dossier or {})
+    anchors = dossier_anchors(dossier or {})
+    comp_list = "\n".join(
+        f"- {c.get('id')}: {c.get('label', c.get('id'))}" for c in (competencies or [])
+        if isinstance(c, dict) and c.get("id"))
+    prompt = (
+        f"Skill: {skill}\n"
+        f"Competencies:\n{comp_list}\n\n"
+        f"{brief}\n\n"
+        "Write 2-4 interview questions grounded in the candidate's OWN projects above "
+        "(name the project or technology and probe a specific decision or detail). "
+        "Each question needs a counter_question that pushes one level deeper. "
+        "Return JSON ONLY: {\"questions\": [{\"competency\": \"<id>\", "
+        "\"prompt\": \"...\", \"counter_question\": \"...\", \"grounded_in\": \"...\"}]}"
+    )
+    try:
+        llm = _make_interview_llm()
+        if hasattr(llm, "ainvoke"):
+            raw = await llm.ainvoke([
+                {"role": "system", "content": FOLLOWUP_SYSTEM_PROMPT},
+                {"role": "user", "content": prompt},
+            ])
+            text = str(getattr(raw, "content", raw) or "")
+        else:
+            raw = llm.invoke(prompt)
+            text = str(getattr(raw, "content", raw) or "")
+        blob = _extract_json_object(text) or text
+        questions = parse_generated_questions(blob, competencies, anchors)
+        if questions:
+            return questions, f"generated:{getattr(llm, 'model', 'interview')}"
+        return None, "template-fallback: unusable model output"
+    except Exception as exc:
+        logger.debug("interview question generation failed (%s)", type(exc).__name__)
+        return None, "template-fallback: generation failed"
+
+
+# ---------------------------------------------------------------------------
 # Prior evidence snapshot (for corroboration during per-answer evaluation)
 # ---------------------------------------------------------------------------
 
@@ -755,7 +938,18 @@ def _build_eval_messages(
 ) -> Tuple[List[Dict[str, str]], Dict[str, Any]]:
     """Shared evaluation contract: identical messages for every provider."""
     comp_list = "\n".join(f"- {c['id']}: {c['label']}" for c in competencies)
+    # Adaptive context leads the user message: turn history, demonstrated/
+    # weak state, projects, and budget must reach the model even when the
+    # serialized prompt is observed through a bounded window. Content is
+    # unchanged — only ordering is contractual.
+    context_block = ""
+    if adaptive_context and adaptive_context.strip():
+        context_block = (
+            f"INTERVIEW CONTEXT (bounded, most recent last):\n"
+            f"{adaptive_context.strip()[:2500]}\n\n"
+        )
     user_prompt = (
+        f"{context_block}"
         f"Target skill: {question.get('skill', '')}\n"
         f"Competency being assessed: {question.get('competency', '')} "
         f"({question.get('competency_label', '')})\n\n"
@@ -764,8 +958,6 @@ def _build_eval_messages(
         f"Question: {question.get('prompt', '')}\n\n"
         f"Candidate answer:\n{transcript[:4000]}"
     )
-    if adaptive_context and adaptive_context.strip():
-        user_prompt += f"\n\nINTERVIEW CONTEXT (bounded, most recent last):\n{adaptive_context.strip()[:2500]}"
     messages = [
         {"role": "system", "content": EVAL_SYSTEM_PROMPT},
         {"role": "user", "content": user_prompt},
@@ -972,10 +1164,21 @@ def decide_next_action(
     follow_ups_used: int,
     questions_answered: int,
     has_valid_adaptive_question: bool = False,
+    force_follow_up: bool = False,
 ) -> str:
-    """Choose continue/complete using evidence sufficiency and hard bounds."""
+    """Choose continue/complete using evidence sufficiency and hard bounds.
+
+    force_follow_up (counter-questioning sessions): every question after the
+    opener is pushed back on while budgets allow. The opener itself is never
+    counter-questioned. Defaults to False so existing callers are unchanged.
+    """
     if questions_answered >= MAX_INTERVIEW_QUESTIONS:
         return "complete"
+
+    if force_follow_up:
+        if current_index > 0 and follow_ups_used < INTERVIEW_MAX_FOLLOW_UPS:
+            return "follow_up"
+        return "next"
 
     # Explicit completion instruction (e.g. candidate has zero knowledge of the target skill)
     if evaluation and str(evaluation.get("question_type") or "").strip().lower() == "complete":
@@ -1026,12 +1229,20 @@ async def generate_follow_up_question(
 ) -> Optional[str]:
     """Generate a targeted follow-up question based on the answer evaluation.
 
-    Returns the follow-up question text, or None if generation fails.
-    Never raises — failures degrade gracefully.
+    Precedence: the model's answer-derived suggestion first, then the
+    question's planned follow-ups, then a live LLM call. Planned follow-ups
+    carry candidate-owned context, so they are preferred over a second model
+    call when the model provided nothing. Returns None when nothing usable
+    exists. Never raises — failures degrade gracefully.
     """
     suggested = str(evaluation.get("suggested_follow_up") or "").strip()
     if suggested:
         return suggested
+
+    for candidate in (question.get("follow_ups") or []):
+        text = str(candidate or "").strip()
+        if text and not contains_injection_markers(text):
+            return text[:600]
 
     llm = (_llm if _llm is not None else _make_interview_llm()) if allow_llm else None
     user_prompt = (
@@ -1063,7 +1274,7 @@ async def generate_follow_up_question(
                 return fu[:600]
     except Exception:
         logger.debug("Follow-up generation failed, using fallback")
-    # Never substitute a predefined question when generation is unavailable.
+    # No usable suggestion, planned follow-up, or model output.
     return None
 
 
@@ -1296,10 +1507,17 @@ def build_adaptive_context(
     competencies: List[Dict[str, str]],
     related_projects: List[str],
     questions_remaining: int,
+    candidate_context: str = "",
 ) -> str:
-    """Compact bounded context so later questions use earlier answers."""
+    """Compact bounded context so later questions use earlier answers.
+
+    candidate_context (e.g. dossier brief) leads so profile/project context
+    survives the bound; total length stays capped.
+    """
     state = summarize_adaptive_state(transcript, evaluation_results)
     lines: List[str] = []
+    if candidate_context and str(candidate_context).strip():
+        lines.append("CANDIDATE PROFILE:\n" + str(candidate_context).strip()[:800])
     comp_ids = [str(c.get("id") or "") for c in competencies or [] if c.get("id")]
     untested = [c for c in comp_ids if c not in state["tested_competencies"]]
     if related_projects:
