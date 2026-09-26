@@ -13,37 +13,65 @@
   flex: 0 0 auto;
   background: #ffffff;
   color: #1a1a1a;
-  border-radius: 3px;
+  border-radius: 2px;
   box-shadow: 0 18px 50px rgba(33, 37, 55, 0.18), 0 2px 8px rgba(33, 37, 55, 0.12);
-  padding: 18mm 16mm;
+  padding: 14mm 15mm 16mm;
   font-family: Inter, "Segoe UI", Arial, Helvetica, sans-serif;
-  font-size: 10.5pt;
-  line-height: 1.5;
+  font-size: 10pt;
+  line-height: 1.45;
+}
+
+/* Compact editor toolbar: app chrome, never part of the printed resume. */
+.rdoc-toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  flex-wrap: wrap;
+  margin-bottom: 16px;
+}
+
+.rdoc-template-badge {
+  font-size: 0.72rem;
+  font-weight: 700;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: var(--shell-ink-2);
+  border: 1px solid var(--shell-line);
+  border-radius: 99px;
+  padding: 6px 12px;
+  background: rgba(255, 255, 255, 0.6);
+}
+
+.rdoc-toolbar-actions {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
 }
 
 .rdoc-header {
   text-align: center;
-  margin-bottom: 14px;
+  margin-bottom: 10px;
 }
 
 .rdoc-name {
-  font-size: 22pt;
+  font-size: 20pt;
   font-weight: 800;
   letter-spacing: 0.04em;
   text-transform: uppercase;
-  margin: 0 0 4px;
+  margin: 0 0 2px;
   line-height: 1.2;
 }
 
 .rdoc-subtitle {
-  font-size: 11pt;
+  font-size: 10.5pt;
   font-weight: 600;
   color: #374151;
-  margin: 0 0 6px;
+  margin: 0 0 4px;
 }
 
 .rdoc-contact {
-  font-size: 9pt;
+  font-size: 8.5pt;
   color: #374151;
   margin: 0;
 }
@@ -62,106 +90,140 @@
 }
 
 .rdoc-section {
-  margin-top: 14px;
+  margin-top: 10px;
 }
 
 .rdoc-heading {
-  font-size: 11pt;
+  font-size: 10pt;
   font-weight: 800;
   letter-spacing: 0.08em;
   text-transform: uppercase;
   color: #111827;
-  border-bottom: 1.5px solid #111827;
-  padding-bottom: 3px;
-  margin: 0 0 8px;
+  border-bottom: 1px solid #6b7280;
+  padding-bottom: 2px;
+  margin: 0 0 6px;
 }
 
 .rdoc-text {
-  margin: 0 0 6px;
-  font-size: 10.5pt;
+  margin: 0 0 4px;
+  font-size: 10pt;
 }
 
 .rdoc-muted {
   color: #4b5563;
-  font-size: 9.5pt;
-  margin: 0 0 2px;
+  font-size: 9pt;
+  margin: 0;
+}
+
+.rdoc-skills {
+  column-gap: 24px;
 }
 
 .rdoc-skillrow {
-  margin-bottom: 3px;
+  margin: 0 0 2px;
+  font-size: 9.5pt;
+  line-height: 1.4;
 }
 
 .rdoc-edu {
-  margin-bottom: 6px;
+  margin-bottom: 4px;
 }
 
-.rdoc-edu-school {
-  font-weight: 700;
+.rdoc-edu-line {
   margin: 0;
 }
 
 .rdoc-project {
-  margin-bottom: 10px;
+  margin-bottom: 8px;
+}
+
+.rdoc-project-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 12px;
 }
 
 .rdoc-project-name {
   font-weight: 700;
-  font-size: 11pt;
+  font-size: 10.5pt;
   margin: 0;
 }
 
-.rdoc-project-meta {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 4px 10px;
-  align-items: baseline;
+.rdoc-project-links {
+  margin: 0;
+  font-size: 8.5pt;
+  white-space: nowrap;
 }
 
-.rdoc-meta-link {
+.rdoc-project-links a {
   color: #1d4ed8;
   text-decoration: none;
-  font-size: 9pt;
+  margin-left: 8px;
 }
 
-.rdoc-meta-link:hover {
+.rdoc-project-links a:hover {
   text-decoration: underline;
 }
 
+.rdoc-techline {
+  color: #4b5563;
+  font-size: 9pt;
+  margin: 1px 0 0;
+}
+
 .rdoc-list {
-  margin: 4px 0 0;
-  padding-left: 18px;
+  margin: 3px 0 0;
+  padding-left: 16px;
 }
 
 .rdoc-list li {
-  margin-bottom: 3px;
+  margin-bottom: 2px;
 }
 
-/* Inline editing inherits document typography so the sheet stays WYSIWYG. */
+/* Click-to-edit affordance: invisible until hovered or focused. */
+.rdoc-editable {
+  border-radius: 3px;
+  cursor: text;
+}
+
+.rdoc-editable:hover {
+  background: #f1f5f9;
+}
+
+.rdoc-editable:focus-visible {
+  outline: 2px solid #1d4ed8;
+  outline-offset: 1px;
+  background: #f8fafc;
+}
+
+.rdoc-editable-block {
+  display: block;
+}
+
+/* Editing inputs inherit document typography so the sheet stays WYSIWYG. */
 .rdoc-input {
   font: inherit;
   color: inherit;
-  background: transparent;
-  border: 1px dashed transparent;
+  line-height: inherit;
+  background: #f8fafc;
+  border: 1px solid #93c5fd;
   border-radius: 4px;
   padding: 1px 4px;
   width: 100%;
 }
 
-.rdoc-input:hover {
-  border-color: #cbd5e1;
-}
-
 .rdoc-input:focus {
-  outline: none;
-  border-color: #1d4ed8;
-  background: #f8fafc;
+  outline: 2px solid #1d4ed8;
+  outline-offset: 0;
 }
 
 .rdoc-summary-input {
   width: 100%;
-  min-height: 64px;
+  min-height: 58px;
   resize: vertical;
   line-height: inherit;
+  display: block;
 }
 
 .rdoc-bullet-input {
@@ -171,6 +233,11 @@
 @media (max-width: 720px) {
   .rdoc-scroll {
     justify-content: flex-start;
+  }
+
+  .rdoc-toolbar {
+    align-items: stretch;
+    flex-direction: column;
   }
 }
 
@@ -196,10 +263,382 @@
     box-shadow: none;
     border-radius: 0;
     margin: 0;
+    -webkit-print-color-adjust: exact;
+    print-color-adjust: exact;
   }
 
   .rdoc-input {
     border: none;
     padding: 0;
+    background: transparent;
   }
+
+  .meng-skills {
+    column-count: 1;
+  }
+}
+
+/* ---------------- Template picker (app chrome, never printed) ---------------- */
+
+.rtpl-picker {
+  margin-bottom: 16px;
+}
+
+.rtpl-label {
+  font-size: 0.72rem;
+  font-weight: 700;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: var(--shell-ink-2);
+  margin: 0 0 8px;
+}
+
+.rtpl-options {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.rtpl-card {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 4px;
+  text-align: left;
+  font: inherit;
+  color: inherit;
+  background: rgba(255, 255, 255, 0.6);
+  border: 1px solid var(--shell-line);
+  border-radius: 12px;
+  padding: 12px;
+  cursor: pointer;
+}
+
+.rtpl-card:hover {
+  border-color: var(--shell-accent);
+}
+
+.rtpl-card.is-active {
+  border-color: var(--shell-accent);
+  box-shadow: 0 0 0 1px var(--shell-accent);
+}
+
+.rtpl-card:focus-visible {
+  outline: 2px solid var(--shell-accent);
+  outline-offset: 2px;
+}
+
+.rtpl-thumb {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  width: 100%;
+  background: #fff;
+  border: 1px solid var(--shell-line);
+  border-radius: 6px;
+  padding: 8px;
+  margin-bottom: 4px;
+}
+
+.rtpl-bar {
+  display: block;
+  height: 5px;
+  border-radius: 3px;
+  background: #cbd5e1;
+}
+
+.rtpl-bar-name {
+  width: 55%;
+  height: 7px;
+  background: #64748b;
+  align-self: center;
+}
+
+.rtpl-thumb-modern-engineering .rtpl-bar-name {
+  align-self: flex-start;
+  background: #1e40af;
+}
+
+.rtpl-thumb-academic-cv .rtpl-bar-name {
+  height: 6px;
+}
+
+.rtpl-bar-line {
+  width: 100%;
+}
+
+.rtpl-bar-short {
+  width: 72%;
+}
+
+.rtpl-bar-rule {
+  height: 2px;
+  background: #94a3b8;
+}
+
+.rtpl-thumb-modern-engineering .rtpl-bar-rule {
+  background: #1e40af;
+}
+
+.rtpl-name {
+  font-weight: 700;
+  font-size: 0.9rem;
+}
+
+.rtpl-desc {
+  font-size: 0.78rem;
+  color: var(--shell-ink-2);
+}
+
+@media (max-width: 720px) {
+  .rtpl-options {
+    grid-template-columns: 1fr;
+  }
+}
+
+/* ---------------- Modern Engineering template ---------------- */
+
+.tpl-modern-engineering {
+  font-size: 10pt;
+  line-height: 1.45;
+}
+
+.meng-header {
+  text-align: left;
+  margin-bottom: 6px;
+  padding-bottom: 10px;
+  border-bottom: 3px solid #1e40af;
+}
+
+.meng-name {
+  font-size: 22pt;
+  font-weight: 800;
+  letter-spacing: 0.01em;
+  margin: 0;
+  line-height: 1.15;
+  color: #111827;
+}
+
+.meng-role {
+  font-size: 11pt;
+  font-weight: 600;
+  color: #1e40af;
+  margin: 2px 0 4px;
+}
+
+.meng-contact {
+  font-size: 8.5pt;
+  color: #374151;
+  margin: 0;
+}
+
+.meng-contact a {
+  color: #1e40af;
+  text-decoration: none;
+}
+
+.meng-contact a:hover {
+  text-decoration: underline;
+}
+
+.meng-sep {
+  color: #9ca3af;
+}
+
+.meng-section {
+  margin-top: 12px;
+}
+
+.meng-heading {
+  font-size: 10.5pt;
+  font-weight: 800;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: #1e40af;
+  border-bottom: 1px solid #d1d5db;
+  padding-bottom: 3px;
+  margin: 0 0 7px;
+}
+
+.meng-text {
+  margin: 0 0 4px;
+  font-size: 10pt;
+}
+
+.meng-muted {
+  color: #4b5563;
+  font-size: 9pt;
+  margin: 0;
+}
+
+.meng-skills {
+  column-count: 2;
+  column-gap: 28px;
+}
+
+.meng-skillrow {
+  margin: 0 0 3px;
+  font-size: 9.5pt;
+  line-height: 1.4;
+  break-inside: avoid;
+}
+
+.meng-edu {
+  margin-bottom: 5px;
+}
+
+.meng-edu-school {
+  font-weight: 700;
+  margin: 0;
+}
+
+.meng-project {
+  margin-bottom: 10px;
+  padding-left: 10px;
+  border-left: 2px solid #e5e7eb;
+}
+
+.meng-project-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.meng-project-name {
+  font-weight: 800;
+  font-size: 11pt;
+  margin: 0;
+  color: #111827;
+}
+
+.meng-project-links {
+  margin: 0;
+  font-size: 8.5pt;
+  white-space: nowrap;
+}
+
+.meng-project-links a {
+  color: #1e40af;
+  text-decoration: none;
+  margin-left: 8px;
+}
+
+.meng-project-links a:hover {
+  text-decoration: underline;
+}
+
+.meng-techline {
+  color: #1e40af;
+  font-size: 9pt;
+  font-weight: 600;
+  margin: 2px 0 0;
+}
+
+@media (max-width: 720px) {
+  .meng-skills {
+    column-count: 1;
+  }
+}
+
+/* ---------------- Academic CV template ---------------- */
+
+.tpl-academic-cv {
+  font-family: Georgia, "Times New Roman", Times, serif;
+  font-size: 9.5pt;
+  line-height: 1.42;
+  color: #1a1a1a;
+}
+
+.acv-header {
+  text-align: center;
+  margin-bottom: 8px;
+}
+
+.acv-name {
+  font-size: 18pt;
+  font-weight: 700;
+  font-variant: small-caps;
+  letter-spacing: 0.05em;
+  margin: 0;
+  line-height: 1.2;
+}
+
+.acv-role {
+  font-style: italic;
+  font-size: 10pt;
+  color: #374151;
+  margin: 2px 0;
+}
+
+.acv-contact {
+  font-size: 8.5pt;
+  color: #374151;
+  margin: 2px 0 0;
+}
+
+.acv-contact a {
+  color: #1a1a1a;
+  text-decoration: underline;
+  text-decoration-color: #9ca3af;
+}
+
+.acv-sep {
+  color: #9ca3af;
+}
+
+.acv-section {
+  margin-top: 9px;
+}
+
+.acv-heading {
+  font-size: 10.5pt;
+  font-weight: 700;
+  font-variant: small-caps;
+  letter-spacing: 0.06em;
+  color: #111827;
+  border-bottom: 1px solid #111827;
+  padding-bottom: 1px;
+  margin: 0 0 5px;
+}
+
+.acv-text {
+  margin: 0 0 4px;
+  text-align: justify;
+}
+
+.acv-edu {
+  margin-bottom: 3px;
+}
+
+.acv-edu-line {
+  margin: 0;
+}
+
+.acv-right {
+  float: right;
+  color: #374151;
+}
+
+.acv-skillrow {
+  margin: 0 0 2px;
+}
+
+.acv-project {
+  margin-bottom: 7px;
+}
+
+.acv-project-line {
+  margin: 0;
+}
+
+.acv-links a {
+  color: #1a1a1a;
+  font-size: 8.5pt;
+}
+
+.acv-techline {
+  margin: 0;
+  font-size: 9pt;
+  color: #374151;
 }
