@@ -1,0 +1,205 @@
+/* Classic ATS resume document — presentation only. A4 sheet, print-ready. */
+
+.rdoc-scroll {
+  overflow-x: auto;
+  display: flex;
+  justify-content: center;
+  padding: 8px 4px 24px;
+}
+
+.rdoc-sheet {
+  width: 210mm;
+  min-height: 297mm;
+  flex: 0 0 auto;
+  background: #ffffff;
+  color: #1a1a1a;
+  border-radius: 3px;
+  box-shadow: 0 18px 50px rgba(33, 37, 55, 0.18), 0 2px 8px rgba(33, 37, 55, 0.12);
+  padding: 18mm 16mm;
+  font-family: Inter, "Segoe UI", Arial, Helvetica, sans-serif;
+  font-size: 10.5pt;
+  line-height: 1.5;
+}
+
+.rdoc-header {
+  text-align: center;
+  margin-bottom: 14px;
+}
+
+.rdoc-name {
+  font-size: 22pt;
+  font-weight: 800;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  margin: 0 0 4px;
+  line-height: 1.2;
+}
+
+.rdoc-subtitle {
+  font-size: 11pt;
+  font-weight: 600;
+  color: #374151;
+  margin: 0 0 6px;
+}
+
+.rdoc-contact {
+  font-size: 9pt;
+  color: #374151;
+  margin: 0;
+}
+
+.rdoc-contact a {
+  color: #1d4ed8;
+  text-decoration: none;
+}
+
+.rdoc-contact a:hover {
+  text-decoration: underline;
+}
+
+.rdoc-sep {
+  color: #9ca3af;
+}
+
+.rdoc-section {
+  margin-top: 14px;
+}
+
+.rdoc-heading {
+  font-size: 11pt;
+  font-weight: 800;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: #111827;
+  border-bottom: 1.5px solid #111827;
+  padding-bottom: 3px;
+  margin: 0 0 8px;
+}
+
+.rdoc-text {
+  margin: 0 0 6px;
+  font-size: 10.5pt;
+}
+
+.rdoc-muted {
+  color: #4b5563;
+  font-size: 9.5pt;
+  margin: 0 0 2px;
+}
+
+.rdoc-skillrow {
+  margin-bottom: 3px;
+}
+
+.rdoc-edu {
+  margin-bottom: 6px;
+}
+
+.rdoc-edu-school {
+  font-weight: 700;
+  margin: 0;
+}
+
+.rdoc-project {
+  margin-bottom: 10px;
+}
+
+.rdoc-project-name {
+  font-weight: 700;
+  font-size: 11pt;
+  margin: 0;
+}
+
+.rdoc-project-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 10px;
+  align-items: baseline;
+}
+
+.rdoc-meta-link {
+  color: #1d4ed8;
+  text-decoration: none;
+  font-size: 9pt;
+}
+
+.rdoc-meta-link:hover {
+  text-decoration: underline;
+}
+
+.rdoc-list {
+  margin: 4px 0 0;
+  padding-left: 18px;
+}
+
+.rdoc-list li {
+  margin-bottom: 3px;
+}
+
+/* Inline editing inherits document typography so the sheet stays WYSIWYG. */
+.rdoc-input {
+  font: inherit;
+  color: inherit;
+  background: transparent;
+  border: 1px dashed transparent;
+  border-radius: 4px;
+  padding: 1px 4px;
+  width: 100%;
+}
+
+.rdoc-input:hover {
+  border-color: #cbd5e1;
+}
+
+.rdoc-input:focus {
+  outline: none;
+  border-color: #1d4ed8;
+  background: #f8fafc;
+}
+
+.rdoc-summary-input {
+  width: 100%;
+  min-height: 64px;
+  resize: vertical;
+  line-height: inherit;
+}
+
+.rdoc-bullet-input {
+  display: block;
+}
+
+@media (max-width: 720px) {
+  .rdoc-scroll {
+    justify-content: flex-start;
+  }
+}
+
+@media print {
+  @page {
+    size: A4;
+    margin: 0;
+  }
+
+  .no-print {
+    display: none !important;
+  }
+
+  .rdoc-scroll {
+    display: block;
+    overflow: visible;
+    padding: 0;
+  }
+
+  .rdoc-sheet {
+    width: auto;
+    min-height: auto;
+    box-shadow: none;
+    border-radius: 0;
+    margin: 0;
+  }
+
+  .rdoc-input {
+    border: none;
+    padding: 0;
+  }
+}
