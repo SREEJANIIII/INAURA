@@ -7,6 +7,8 @@ import { isResumeTemplateId, type ResumeTemplateId } from "./templates";
 export type ResumeDocEditing = {
   onSummaryChange: (value: string) => void;
   onBulletChange: (projectIndex: number, bulletIndex: number, value: string) => void;
+  /** Opens the resume-skills editor. Presence renders Edit affordances. */
+  onEditSkills?: () => void;
 };
 
 type Props = {

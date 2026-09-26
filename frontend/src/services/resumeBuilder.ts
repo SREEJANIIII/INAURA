@@ -1,7 +1,7 @@
 import { apiFetch, apiFetchBlob } from "./api";
 
 export type ResumeProject = { name: string; technologies: string[]; description: string; bullets: string[]; links: string[] };
-export type ResumeContent = { header?: { name?: string; email?: string; phone?: string; links?: { label?: string; url?: string }[] }; summary?: string; education?: any[]; skills?: string[]; skill_groups?: Record<string, string[]>; projects?: ResumeProject[]; certifications?: any[]; experience?: any[]; achievements?: any[] };
+export type ResumeContent = { header?: { name?: string; email?: string; phone?: string; links?: { label?: string; url?: string }[] }; summary?: string; education?: any[]; skills?: string[]; skill_groups?: Record<string, string[]>; available_skills?: Record<string, string[]>; projects?: ResumeProject[]; certifications?: any[]; experience?: any[]; achievements?: any[] };
 export type Resume = { id: string; title: string; target_role: string; template: string; content: ResumeContent; claims: any[]; created_at?: string; updated_at?: string };
 export type ResumeFinding = { status: string; reason: string; section?: string; claim_id?: string; matches?: string[] };
 

@@ -1,4 +1,6 @@
 from app.services.resume_builder import (
+    MAX_RESUME_SKILL_GROUPS,
+    MAX_SKILLS_PER_GROUP,
     _likely_same_project,
     _parse_doc_projects,
     _sanitize_doc_text,
@@ -8,6 +10,7 @@ from app.services.resume_builder import (
     filter_project_bullets,
     humanize_repo_name,
     latex_escape,
+    select_resume_skills,
     to_latex,
     verify_content,
 )
@@ -159,6 +162,148 @@ def test_no_replacement_chars_in_parsed_content():
     projects = _parse_doc_projects("Sample Quest � Console App\n● Built a game\n")
     blob = " ".join([p["title"] for p in projects] + [b for p in projects for b in p["bullets"]])
     assert "�" not in blob
+
+
+def test_real_profile_compact_groups_and_untouched_profile():
+    """Live-data regression: compact groups, key skills kept, profile intact."""
+    pytest = __import__("pytest")
+    from app.core.supabase import get_supabase_client
+    from app.services import resume_builder as rb_module
+    client = get_supabase_client()
+    if client is None:
+        pytest.skip("Supabase not configured")
+    try:
+        profiles = (client.table("profiles").select("user_id").execute().data or [])
+    except Exception:
+        pytest.skip("profiles table unavailable")
+    user_id = None
+    for row in profiles:
+        try:
+            has = client.table("skill_assessments").select("id").eq(
+                "user_id", row["user_id"]).limit(1).execute().data
+        except Exception:
+            continue
+        if has:
+            user_id = row["user_id"]
+            break
+    if not user_id:
+        pytest.skip("no assessed profile available")
+    before_profile = client.table("profiles").select("*").eq("user_id", user_id).execute().data
+    before_count = len(client.table("skill_assessments").select("id").eq(
+        "user_id", user_id).execute().data or [])
+    snapshot = rb_module.build_evidence_snapshot(user_id, "Software Engineer")
+    assert len(snapshot["skills"]) > 10  # genuinely rich profile
+    content, _ = rb_module.deterministic_content(snapshot)
+    groups = content["skill_groups"]
+    assert 1 <= len(groups) <= MAX_RESUME_SKILL_GROUPS
+    assert all(len(v) <= MAX_SKILLS_PER_GROUP for v in groups.values())
+    assert len(groups) < len({s.get("category") for s in snapshot["skills"] if s.get("category")})
+    flat = [n for g in groups.values() for n in g]
+    assert len(flat) == len({n.lower() for n in flat})
+    assert not any(k.lower() in ("database", "devops") and k != "Databases" and "DevOps" not in k
+                   for k in groups)
+    for key in ("React", "Python"):
+        assert key in flat
+    after_profile = client.table("profiles").select("*").eq("user_id", user_id).execute().data
+    after_count = len(client.table("skill_assessments").select("id").eq(
+        "user_id", user_id).execute().data or [])
+    assert after_profile == before_profile
+    assert after_count == before_count
+
+
+# ---- Resume skill selector (presentation curation, profile untouched) ----
+
+def _sel_skill(name, category="Programming", proficiency=0.5, confidence=0.5,
+               evidence_count=1, source="skill_assessment"):
+    return {"name": name, "category": category, "proficiency": proficiency,
+            "confidence": confidence, "evidence_count": evidence_count, "source": source}
+
+def _sel_reqs(*names, importance=0.9):
+    return [{"skill": n, "importance": importance, "interview_relevance": 0.8, "demand": 0.7}
+            for n in names]
+
+
+def test_selector_returns_compact_groups_within_budget():
+    skills = [
+        _sel_skill("Python"), _sel_skill("Java"), _sel_skill("C++"), _sel_skill("JavaScript"),
+        _sel_skill("TypeScript"), _sel_skill("Go"), _sel_skill("Rust"),
+        _sel_skill("React", "Frontend"), _sel_skill("Next.js", "Frontend"),
+        _sel_skill("Node.js", "Backend"), _sel_skill("REST APIs", "Backend"),
+        _sel_skill("PostgreSQL", "Databases"), _sel_skill("MongoDB", "Databases"), _sel_skill("SQL", "Databases"),
+        _sel_skill("Git", "Tools"), _sel_skill("Docker", "DevOps/Cloud"),
+        _sel_skill("Pandas", "AI/ML"), _sel_skill("Machine Learning", "AI/ML"),
+        _sel_skill("Data Structures & Algorithms", "Computer Science"),
+        _sel_skill("Testing", "Quality"), _sel_skill("DBMS", "Computer Science"),
+        _sel_skill("System Design", "Computer Science"),
+    ]
+    selected, available, stats = select_resume_skills(
+        skills, _sel_reqs("Python", "React", "Node.js", "PostgreSQL", "Git", "Pandas",
+                           "Data Structures & Algorithms"))
+    assert len(selected) <= MAX_RESUME_SKILL_GROUPS
+    assert all(len(v) <= MAX_SKILLS_PER_GROUP for v in selected.values())
+    assert stats["skills_selected"] + stats["skills_available"] == len(skills)
+
+
+def test_role_relevance_beats_alphabetical_order():
+    skills = [_sel_skill("ZebraLang", proficiency=0.9, confidence=0.9),
+              _sel_skill("Python", proficiency=0.5, confidence=0.5)]
+    selected, _, _ = select_resume_skills(skills, _sel_reqs("Python"))
+    assert selected["Languages"][0] == "Python"
+
+
+def test_selector_never_mutates_or_deletes_canonical_profile():
+    skills = [_sel_skill("Python"), _sel_skill("Cobol", "Programming", proficiency=0.1)]
+    before = [dict(s) for s in skills]
+    selected, available, _ = select_resume_skills(skills, _sel_reqs("Python"), max_groups=1)
+    assert skills == before
+    all_names = [n for g in list(selected.values()) + list(available.values()) for n in g]
+    assert "Cobol" in all_names  # still present, only unselected
+
+
+def test_duplicate_categories_and_names_consolidated():
+    skills = [_sel_skill("SQL", "Database"), _sel_skill("PostgreSQL", "Databases"),
+              _sel_skill("MongoDB", "Databases"), _sel_skill("SQL", "Databases")]
+    selected, _, _ = select_resume_skills(skills, [])
+    assert "Database" not in selected
+    assert sorted(selected["Databases"]) == ["MongoDB", "PostgreSQL", "SQL"]
+
+
+def test_no_self_referential_group_and_no_invented_skills():
+    skills = [_sel_skill("Machine Learning", "AI/ML")]
+    selected, _, _ = select_resume_skills(skills, [])
+    assert "Machine Learning" not in selected
+    assert selected["Data & ML"] == ["Machine Learning"]
+    flat = [n for g in selected.values() for n in g]
+    assert set(flat) <= {"Machine Learning"}
+
+
+def test_soft_skills_and_leftovers_stay_available():
+    skills = [_sel_skill("Communication", "Soft Skills"), _sel_skill("Python")]
+    selected, available, _ = select_resume_skills(skills, _sel_reqs("Python"))
+    assert "Communication" not in [n for g in selected.values() for n in g]
+    assert "Communication" in [n for g in available.values() for n in g]
+
+
+def test_selected_groups_land_in_resume_data_and_latex():
+    snapshot = {
+        "profile": {"full_name": "Test User", "college": "C", "degree": "B.Tech",
+                    "branch": "CS", "current_year": "2nd Year", "graduation_year": 2029},
+        "projects": [], "doc_projects": [], "github_repos": [], "github_owner": "",
+        "github_evidence_id": None, "github_url": "",
+        "certifications": [], "evidence": [],
+        "skills": [_sel_skill("Python"), _sel_skill("SQL", "Database"),
+                   _sel_skill("Communication", "Soft Skills")],
+        "assessed_skills": [], "github_skills": [], "leetcode": {}, "experience": [],
+        "achievements": [], "doc_evidence_id": None,
+        "requirements": _sel_reqs("Python"), "target_role": "Software Engineer",
+        "diagnostics": {},
+    }
+    content, _ = deterministic_content(snapshot)
+    assert set(content["skill_groups"]) == {"Languages", "Databases"}
+    assert "Communication" in [n for g in content["available_skills"].values() for n in g]
+    tex = to_latex({"content": content})
+    assert "Languages" in tex and "Python" in tex
+    assert "Communication" not in tex
 
 
 # ---- Deterministic bullet-quality filter (no LLM) ----

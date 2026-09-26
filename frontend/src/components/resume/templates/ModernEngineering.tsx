@@ -98,7 +98,14 @@ export function ModernEngineering({ content, targetRole, editing }: Props) {
 
       {(skillGroups.length > 0 || skillsFlat.length > 0) && (
         <section className="meng-section" aria-label="Technical skills">
-          <h2 className="meng-heading">Technical Skills</h2>
+          <div className="rdoc-sec-head">
+            <h2 className="meng-heading">Technical Skills</h2>
+            {editing?.onEditSkills && (
+              <button type="button" className="rdoc-edit-btn no-print" onClick={editing.onEditSkills}>
+                Edit
+              </button>
+            )}
+          </div>
           {skillGroups.length > 0 ? (
             <div className="meng-skills">
               {skillGroups.map(([group, skills]) => (
