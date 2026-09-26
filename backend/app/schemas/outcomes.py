@@ -1,4 +1,4 @@
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
 from typing import List, Optional
 from datetime import datetime, date
 from uuid import UUID
@@ -113,12 +113,20 @@ class EmployerFeedbackOut(BaseModel):
 
 
 class PlacementCreate(BaseModel):
-    employer_id: UUID
+    employer_id: Optional[UUID] = None
     application_id: Optional[UUID] = None
     role_title: str = Field(..., min_length=2, max_length=200)
     location: Optional[str] = Field(None, max_length=200)
     joining_date: Optional[date] = None
-    status: str = Field(..., pattern="^(offer_accepted|selected|joined|declined|not_joined)$")
+    status: str = Field(default="selected", pattern="^(offer_accepted|selected|joined|declined|not_joined)$")
+
+    @model_validator(mode="after")
+    def validate_placement(self):
+        if not self.application_id and not self.employer_id:
+            raise ValueError("employer_id is required for unlinked placement")
+        if self.status == "joined" and not self.joining_date:
+            raise ValueError("joining_date is required when status is joined")
+        return self
 
 
 class PlacementUpdate(BaseModel):
@@ -142,6 +150,8 @@ class PlacementOut(BaseModel):
     verification_status: str
     created_at: datetime
     updated_at: datetime
+    employer_name: Optional[str] = None
+    requirement_title: Optional[str] = None
 
     class Config:
         from_attributes = True
@@ -183,6 +193,12 @@ class DashboardOut(BaseModel):
     top_observed_gaps: List[dict] = []
     unlinked_placements_n: int = 0
     window: dict
+    applied_count: Optional[int] = None
+    interview_count: Optional[int] = None
+    offer_count: Optional[int] = None
+    selected_count: Optional[int] = None
+    joined_count: Optional[int] = None
+    unlinked_placement_count: Optional[int] = None
 
 
 class IndustryOutcomeSignal(BaseModel):

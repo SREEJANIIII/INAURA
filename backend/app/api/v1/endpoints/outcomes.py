@@ -128,6 +128,16 @@ def list_placements(current_user: CurrentUser = Depends(get_current_user)):
     return svc.list_placements(current_user.id)
 
 
+@router.get("/employers/{employer_id}/placements", response_model=list[PlacementOut])
+def list_employer_placements(employer_id: str, current_user: CurrentUser = Depends(get_current_user)):
+    return svc.list_placements_for_employer(current_user.id, employer_id)
+
+
+@router.get("/placements/{placement_id}", response_model=PlacementOut)
+def get_placement(placement_id: str, current_user: CurrentUser = Depends(get_current_user)):
+    return svc.get_placement_detail(current_user.id, placement_id)
+
+
 @router.patch("/placements/{placement_id}", response_model=PlacementOut)
 def update_placement(placement_id: str, payload: PlacementUpdate, current_user: CurrentUser = Depends(get_current_user)):
     clean = {k: v for k, v in payload.model_dump().items() if v is not None}
@@ -135,8 +145,8 @@ def update_placement(placement_id: str, payload: PlacementUpdate, current_user: 
 
 
 @router.post("/placements/{placement_id}/confirm", response_model=PlacementOut)
-def confirm_placement(placement_id: str, current_user: CurrentUser = Depends(get_current_user)):
-    return svc.confirm_placement(current_user.id, placement_id, True)
+def confirm_placement(placement_id: str, verified: bool = True, current_user: CurrentUser = Depends(get_current_user)):
+    return svc.confirm_placement(current_user.id, placement_id, verified)
 
 
 @router.post("/alignments", response_model=AlignmentOut, status_code=201)

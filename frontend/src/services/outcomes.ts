@@ -82,6 +82,8 @@ export type Placement = {
   verification_status: string;
   created_at: string;
   updated_at: string;
+  employer_name?: string | null;
+  requirement_title?: string | null;
 };
 
 export type Alignment = {
@@ -193,17 +195,46 @@ export function listPlacements() {
   return apiFetch<Placement[]>("/outcomes/placements");
 }
 
+export function listPlacementsForEmployer(employerId: string) {
+  return apiFetch<Placement[]>(`/outcomes/employers/${employerId}/placements`);
+}
+
+export function getPlacement(id: string) {
+  return apiFetch<Placement>(`/outcomes/placements/${id}`);
+}
+
 export function createPlacement(payload: {
-  employer_id: string;
+  employer_id?: string | null;
   application_id?: string | null;
   role_title: string;
   location?: string | null;
   joining_date?: string | null;
-  status: string;
+  status?: string;
 }) {
   return apiFetch<Placement>("/outcomes/placements", {
     method: "POST",
     body: JSON.stringify(payload),
+  });
+}
+
+export function updatePlacement(
+  placementId: string,
+  payload: {
+    role_title?: string;
+    location?: string | null;
+    joining_date?: string | null;
+    status?: string;
+  }
+) {
+  return apiFetch<Placement>(`/outcomes/placements/${placementId}`, {
+    method: "PATCH",
+    body: JSON.stringify(payload),
+  });
+}
+
+export function confirmPlacement(placementId: string, verified: boolean = true) {
+  return apiFetch<Placement>(`/outcomes/placements/${placementId}/confirm?verified=${verified}`, {
+    method: "POST",
   });
 }
 

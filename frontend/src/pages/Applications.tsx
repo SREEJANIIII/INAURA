@@ -6,9 +6,13 @@ import {
   getApplication,
   listApplications,
   transitionApplication,
+  listPlacements,
+  createPlacement,
+  updatePlacement,
   type Application,
   type ApplicationDetail,
   type ApplicationStatus,
+  type Placement,
 } from "../services/outcomes";
 import {
   formatStatusLabel,
@@ -31,9 +35,15 @@ export default function Applications() {
   const [tab, setTab] = useState<FilterTab>("all");
   const [withdrawReason, setWithdrawReason] = useState("");
   const [showWithdrawBox, setShowWithdrawBox] = useState(false);
+  const [placements, setPlacements] = useState<Placement[]>([]);
+  const [joiningDateInput, setJoiningDateInput] = useState("");
+  const [savingPlacement, setSavingPlacement] = useState(false);
 
-  const refresh = () =>
-    listApplications()
+  const refresh = () => {
+    listPlacements()
+      .then(setPlacements)
+      .catch(() => {});
+    return listApplications()
       .then((rows) => {
         setApps(rows);
         if (detail) {
@@ -44,6 +54,7 @@ export default function Applications() {
         }
       })
       .catch((e) => setError(messageOf(e)));
+  };
 
   useEffect(() => {
     void refresh();
@@ -97,6 +108,59 @@ export default function Applications() {
       setError(messageOf(e));
     } finally {
       setSaving(false);
+    }
+  };
+
+  const handleRecordJoining = async (existingPlacementId?: string) => {
+    if (!detail) return;
+    if (!joiningDateInput) {
+      setError("Please select a valid joining date.");
+      return;
+    }
+    setSavingPlacement(true);
+    setError(null);
+    try {
+      if (existingPlacementId) {
+        await updatePlacement(existingPlacementId, {
+          status: "joined",
+          joining_date: joiningDateInput,
+        });
+      } else {
+        await createPlacement({
+          application_id: detail.id,
+          role_title: detail.requirement_title || "Selected Candidate",
+          status: "joined",
+          joining_date: joiningDateInput,
+        });
+      }
+      setJoiningDateInput("");
+      await refresh();
+    } catch (e) {
+      setError(messageOf(e));
+    } finally {
+      setSavingPlacement(false);
+    }
+  };
+
+  const handleDeclineOffer = async (existingPlacementId?: string) => {
+    if (!detail) return;
+    setSavingPlacement(true);
+    setError(null);
+    try {
+      if (existingPlacementId) {
+        await updatePlacement(existingPlacementId, { status: "declined" });
+      } else {
+        await createPlacement({
+          application_id: detail.id,
+          role_title: detail.requirement_title || "Selected Candidate",
+          status: "declined",
+        });
+      }
+      await refresh();
+    } catch (e) {
+      setError(messageOf(e));
+    } finally {
+      setSavingPlacement(false);
     }
   };
 
@@ -319,11 +383,83 @@ export default function Applications() {
                 </p>
               )}
 
-              {!isTerminalStatus(detail.status) && detail.status !== "saved" && (
-                <p className="p2__hint" style={{ marginTop: "0.5rem" }}>
-                  Interview and decision stages are managed directly by the employer. You will see status updates here as your application advances.
-                </p>
-              )}
+              {/* Placement & Joining Tracking */}
+              {(detail.status === "selected" || placements.some((p) => p.application_id === detail.id)) && (() => {
+                const currentPlacement = placements.find((p) => p.application_id === detail.id);
+                return (
+                  <div
+                    className="p2__card"
+                    style={{
+                      marginTop: "1rem",
+                      borderLeft: "4px solid #10b981",
+                      background: "rgba(16, 185, 129, 0.05)",
+                    }}
+                  >
+                    <h4 style={{ margin: "0 0 0.5rem 0", display: "flex", alignItems: "center", gap: "0.5rem" }}>
+                      <span>Placement Outcome &amp; Joining</span>
+                      {currentPlacement && (
+                        <span className={`p2__badge p2__badge--${currentPlacement.status}`}>
+                          {formatStatusLabel(currentPlacement.status)}
+                        </span>
+                      )}
+                    </h4>
+                    <div className="p2__meta" style={{ marginBottom: "0.5rem" }}>
+                      <span><strong>Employer:</strong> {detail.employer_name || currentPlacement?.employer_name || "Employer"}</span>
+                      <span><strong>Role:</strong> {detail.requirement_title || currentPlacement?.role_title || "Selected Candidate"}</span>
+                      {currentPlacement?.joining_date && (
+                        <span><strong>Joining Date:</strong> {new Date(currentPlacement.joining_date).toLocaleDateString()}</span>
+                      )}
+                      {currentPlacement && (
+                        <span><strong>Verification:</strong> {currentPlacement.verification_status} ({currentPlacement.outcome_source})</span>
+                      )}
+                    </div>
+
+                    {(!currentPlacement || currentPlacement.status === "selected" || currentPlacement.status === "offer_accepted") && (
+                      <div style={{ marginTop: "0.5rem" }}>
+                        <p className="p2__hint" style={{ marginBottom: "0.5rem" }}>
+                          Confirm your joining date or update your outcome decision:
+                        </p>
+                        <div className="p2__row" style={{ alignItems: "center", gap: "0.5rem" }}>
+                          <input
+                            type="date"
+                            value={joiningDateInput}
+                            onChange={(e) => setJoiningDateInput(e.target.value)}
+                            style={{ width: "auto" }}
+                          />
+                          <button
+                            type="button"
+                            className="p2__btn"
+                            disabled={savingPlacement || !joiningDateInput}
+                            onClick={() => handleRecordJoining(currentPlacement?.id)}
+                          >
+                            Confirm &amp; Record Joining
+                          </button>
+                          <button
+                            type="button"
+                            className="p2__btn p2__btn--ghost"
+                            disabled={savingPlacement}
+                            onClick={() => handleDeclineOffer(currentPlacement?.id)}
+                          >
+                            Decline Offer
+                          </button>
+                        </div>
+                      </div>
+                    )}
+
+                    {currentPlacement?.status === "joined" && (
+                      <p className="p2__hint" style={{ color: "#10b981", fontWeight: 500, marginTop: "0.5rem" }}>
+                        ✓ You have joined this role on {new Date(currentPlacement.joining_date || "").toLocaleDateString()}. Status is {currentPlacement.verification_status}.
+                      </p>
+                    )}
+
+                    {currentPlacement?.status === "declined" && (
+                      <p className="p2__hint" style={{ color: "#ef4444", fontWeight: 500, marginTop: "0.5rem" }}>
+                        You have declined this placement offer.
+                      </p>
+                    )}
+                  </div>
+                );
+              })()}
 
               {/* Chronological Event History */}
               <h4 style={{ marginTop: "1rem", marginBottom: "0.25rem" }}>Event History ({detail.events.length})</h4>

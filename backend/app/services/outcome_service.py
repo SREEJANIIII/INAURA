@@ -423,8 +423,62 @@ def get_feedback(user_id: str, app_id: str) -> dict:
 
 
 # ---------------------------------------------------------------------------
-# Placements
+# Placements & Joining Tracking
 # ---------------------------------------------------------------------------
+
+PLACEMENT_TRANSITIONS: dict[str, dict[str, str]] = {
+    "offer_accepted": {
+        "joined": "any",          # student or employer can record joining
+        "declined": "student",     # student declines offer
+        "not_joined": "employer",  # employer marks no-show
+    },
+    "selected": {
+        "offer_accepted": "student", # student accepts offer
+        "joined": "any",             # joined directly
+        "declined": "student",        # student declines
+        "not_joined": "employer",     # employer marks candidate didn't join
+    },
+    "joined": {},      # terminal
+    "declined": {},    # terminal
+    "not_joined": {},  # terminal
+}
+
+PLACEMENT_TERMINAL = {"joined", "declined", "not_joined"}
+
+
+def _attach_placement_metadata(rows: list) -> list:
+    """Attach employer_name and requirement_title to placement rows."""
+    if not rows:
+        return rows
+    client = _ensure_client()
+    emp_ids = list({str(r["employer_id"]) for r in rows if r.get("employer_id")})
+    app_ids = list({str(r["application_id"]) for r in rows if r.get("application_id")})
+    emp_map = {}
+    if emp_ids:
+        try:
+            eresp = client.table("employers").select("id,name").in_("id", emp_ids).execute()
+            emp_map = {str(e["id"]): e.get("name") for e in (eresp.data or [])}
+        except Exception:
+            pass
+    req_map = {}
+    if app_ids:
+        try:
+            aresp = client.table("applications").select("id,hiring_requirement_id").in_("id", app_ids).execute()
+            req_ids = list({str(a["hiring_requirement_id"]) for a in (aresp.data or []) if a.get("hiring_requirement_id")})
+            if req_ids:
+                rresp = client.table("hiring_requirements").select("id,title").in_("id", req_ids).execute()
+                rtitles = {str(r["id"]): r.get("title") for r in (rresp.data or [])}
+                for a in (aresp.data or []):
+                    req_map[str(a["id"])] = rtitles.get(str(a.get("hiring_requirement_id")))
+        except Exception:
+            pass
+    for r in rows:
+        if r.get("employer_id"):
+            r["employer_name"] = emp_map.get(str(r["employer_id"]))
+        if r.get("application_id"):
+            r["requirement_title"] = req_map.get(str(r["application_id"]))
+    return rows
+
 
 def create_placement(student_id: str, payload: dict) -> dict:
     client = _ensure_client()
@@ -432,10 +486,12 @@ def create_placement(student_id: str, payload: dict) -> dict:
     if app_id:
         app = _get_application(str(app_id))
         if app.get("student_id") != student_id:
-            raise HTTPException(status_code=404, detail="Application not found")
+            raise HTTPException(status_code=400, detail="Application belongs to a different student")
         req = emp._requirement_employer(app["hiring_requirement_id"])
-        if str(payload["employer_id"]) != str(req["employer_id"]):
+        derived_emp_id = str(req["employer_id"])
+        if payload.get("employer_id") and str(payload["employer_id"]) != derived_emp_id:
             raise HTTPException(status_code=400, detail="employer_id does not match the application requirement")
+        target_employer_id = derived_emp_id
         try:
             pre = client.table("placement_outcomes").select("id").eq("application_id", str(app_id)).execute()
             if pre.data:
@@ -445,18 +501,39 @@ def create_placement(student_id: str, payload: dict) -> dict:
         except Exception:
             pass
     else:
-        # Standalone placement: verify caller can reference employer (any membership or prior application)
-        pass
+        target_employer_id = payload.get("employer_id")
+        if not target_employer_id:
+            raise HTTPException(status_code=400, detail="employer_id is required for unlinked placement")
+        eresp = client.table("employers").select("id").eq("id", str(target_employer_id)).execute()
+        if not (eresp.data or []):
+            raise HTTPException(status_code=400, detail="Invalid employer_id: employer does not exist")
+        target_employer_id = str(target_employer_id)
+
+    status = payload.get("status", "selected")
+    if status not in ("offer_accepted", "selected", "joined", "declined", "not_joined"):
+        raise HTTPException(status_code=400, detail=f"Invalid placement status: {status}")
+
+    joining_val = payload.get("joining_date") or payload.get("joined_at")
+    if status == "joined":
+        if "joining_date" in payload and not joining_val:
+            raise HTTPException(status_code=400, detail="joining_date is required when status is joined")
+        if not joining_val and payload.get("require_joining_date"):
+            raise HTTPException(status_code=400, detail="joining_date is required when status is joined")
+
+    role_title = payload.get("role_title")
+    if not role_title or len(role_title.strip()) < 2:
+        raise HTTPException(status_code=400, detail="role_title must be between 2 and 200 characters")
+
     now = datetime.now(timezone.utc).isoformat()
     try:
         resp = client.table("placement_outcomes").insert({
             "student_id": student_id,
-            "employer_id": str(payload["employer_id"]),
+            "employer_id": target_employer_id,
             "application_id": str(app_id) if app_id else None,
-            "role_title": payload["role_title"],
+            "role_title": role_title.strip(),
             "location": payload.get("location"),
-            "joining_date": str(payload["joining_date"]) if payload.get("joining_date") else None,
-            "status": payload["status"],
+            "joining_date": str(joining_val) if joining_val else None,
+            "status": status,
             "outcome_source": "student_reported",
             "verification_status": "unverified",
             "created_at": now,
@@ -471,7 +548,7 @@ def create_placement(student_id: str, payload: dict) -> dict:
     rows = resp.data or []
     if not rows:
         raise HTTPException(status_code=500, detail="Failed to create placement")
-    return rows[0]
+    return _attach_placement_metadata(rows)[0]
 
 
 def list_placements(student_id: str) -> list:
@@ -482,33 +559,103 @@ def list_placements(student_id: str) -> list:
         if _missing(e):
             raise HTTPException(status_code=503, detail="Person 2 tables missing — run backend/supabase/027_outcomes.sql")
         raise HTTPException(status_code=500, detail="Failed to list placements")
-    return resp.data or []
+    return _attach_placement_metadata(resp.data or [])
 
 
-def update_placement(student_id: str, placement_id: str, payload: dict) -> dict:
+def list_placements_for_employer(user_id: str, employer_id: str) -> list:
+    emp.require_employer_access(user_id, employer_id, roles=("owner", "member"))
+    client = _ensure_client()
+    try:
+        resp = client.table("placement_outcomes").select("*").eq("employer_id", employer_id).execute()
+    except Exception as e:
+        if _missing(e):
+            raise HTTPException(status_code=503, detail="Person 2 tables missing — run backend/supabase/027_outcomes.sql")
+        raise HTTPException(status_code=500, detail="Failed to list employer placements")
+    return _attach_placement_metadata(resp.data or [])
+
+
+def get_placement_detail(user_id: str, placement_id: str) -> dict:
+    client = _ensure_client()
+    try:
+        resp = client.table("placement_outcomes").select("*").eq("id", placement_id).execute()
+    except Exception:
+        raise HTTPException(status_code=500, detail="Failed to fetch placement")
+    rows = resp.data or []
+    if not rows:
+        raise HTTPException(status_code=404, detail="Placement not found")
+    row = rows[0]
+    if row.get("student_id") != user_id:
+        m = emp.get_membership(user_id, row["employer_id"])
+        if not m:
+            raise HTTPException(status_code=404, detail="Placement not found")
+    return _attach_placement_metadata([row])[0]
+
+
+def update_placement(user_id: str, placement_id: str, payload: dict) -> dict:
     if "verification_status" in payload or "outcome_source" in payload:
         raise HTTPException(status_code=403, detail="Verification is employer-confirmed only")
-    allowed = {"role_title", "location", "joining_date", "status"}
-    clean = {k: v for k, v in payload.items() if k in allowed}
-    if not clean:
-        raise HTTPException(status_code=400, detail="No fields to update")
-    if "joining_date" in clean and clean["joining_date"] is not None:
-        clean["joining_date"] = str(clean["joining_date"])
+
     client = _ensure_client()
     try:
         existing = client.table("placement_outcomes").select("*").eq("id", placement_id).execute()
-        rows0 = existing.data or []
-        if not rows0:
+    except Exception:
+        raise HTTPException(status_code=500, detail="Failed to fetch placement")
+    rows0 = existing.data or []
+    if not rows0:
+        raise HTTPException(status_code=404, detail="Placement not found")
+    row0 = rows0[0]
+
+    actor = None
+    if row0.get("student_id") == user_id:
+        actor = "student"
+    else:
+        m = emp.get_membership(user_id, row0["employer_id"])
+        if m:
+            actor = "employer"
+        else:
             raise HTTPException(status_code=404, detail="Placement not found")
-        if rows0[0].get("student_id") != student_id:
-            raise HTTPException(status_code=404, detail="Placement not found")
+
+    allowed_fields = {"role_title", "location", "joining_date", "joined_at", "status"}
+
+    clean = {k: v for k, v in payload.items() if k in allowed_fields}
+    if not clean:
+        raise HTTPException(status_code=400, detail="No fields to update")
+
+    if "status" in clean:
+        from_status = row0.get("status")
+        to_status = clean["status"]
+        if to_status != from_status:
+            if from_status in PLACEMENT_TERMINAL:
+                raise HTTPException(status_code=400, detail=f"Placement is terminal ({from_status}) and cannot transition")
+            allowed_next = PLACEMENT_TRANSITIONS.get(from_status, {})
+            if to_status not in allowed_next:
+                raise HTTPException(status_code=400, detail=f"Invalid placement transition {from_status} -> {to_status}")
+            required_actor = allowed_next[to_status]
+            if required_actor != "any" and required_actor != actor:
+                raise HTTPException(status_code=403, detail=f"Transition {from_status} -> {to_status} is {required_actor}-controlled")
+            if to_status == "joined":
+                jdate = clean.get("joining_date") or clean.get("joined_at") or row0.get("joining_date")
+                if not jdate:
+                    raise HTTPException(status_code=400, detail="joining_date is required when status is joined")
+
+    if "joined_at" in clean:
+        if "joining_date" not in clean or not clean["joining_date"]:
+            clean["joining_date"] = clean.pop("joined_at")
+        else:
+            clean.pop("joined_at", None)
+
+    if "joining_date" in clean and clean["joining_date"] is not None:
+        clean["joining_date"] = str(clean["joining_date"])
+
+    now = datetime.now(timezone.utc).isoformat()
+    clean["updated_at"] = now
+
+    try:
         resp = client.table("placement_outcomes").update(clean).eq("id", placement_id).execute()
-    except HTTPException:
-        raise
     except Exception:
         raise HTTPException(status_code=500, detail="Failed to update placement")
     rows = resp.data or []
-    return rows[0] if rows else clean
+    return _attach_placement_metadata(rows)[0] if rows else {**row0, **clean}
 
 
 def confirm_placement(user_id: str, placement_id: str, verified: bool = True) -> dict:
@@ -521,15 +668,18 @@ def confirm_placement(user_id: str, placement_id: str, verified: bool = True) ->
     if not rows0:
         raise HTTPException(status_code=404, detail="Placement not found")
     emp.require_employer_access(user_id, rows0[0]["employer_id"], roles=("owner", "member"))
+    now = datetime.now(timezone.utc).isoformat()
+    update_data = {
+        "verification_status": "verified" if verified else "disputed",
+        "outcome_source": "employer_confirmed",
+        "updated_at": now,
+    }
     try:
-        resp = client.table("placement_outcomes").update({
-            "verification_status": "verified" if verified else "disputed",
-            "outcome_source": "employer_confirmed",
-        }).eq("id", placement_id).execute()
+        resp = client.table("placement_outcomes").update(update_data).eq("id", placement_id).execute()
     except Exception:
         raise HTTPException(status_code=500, detail="Failed to confirm placement")
     rows = resp.data or []
-    return rows[0] if rows else rows0[0]
+    return _attach_placement_metadata(rows)[0] if rows else {**rows0[0], **update_data}
 
 
 # ---------------------------------------------------------------------------
@@ -686,7 +836,9 @@ def get_dashboard(user_id: str, employer_id: str | None = None,
                 app_ids = [a["id"] for a in apps]
                 presp = client.table("placement_outcomes").select("*").in_("application_id", app_ids).execute()
                 placements = presp.data or []
-            unlinked = 0
+            upresp = client.table("placement_outcomes").select("*").eq("employer_id", employer_id).execute()
+            all_emp_pl = upresp.data or []
+            unlinked = len([p for p in all_emp_pl if not p.get("application_id")])
         except Exception:
             raise HTTPException(status_code=500, detail="Failed to build dashboard")
     else:
@@ -706,15 +858,22 @@ def get_dashboard(user_id: str, employer_id: str | None = None,
     funnel = {s: st.count(s) for s in ("saved", "applied", "screening", "interview", "offer_received", "selected", "rejected", "withdrawn")}
     n_interview = sum(1 for s in st if s in ("interview", "offer_received", "selected"))
     n_offer = sum(1 for s in st if s in ("offer_received", "selected"))
-    n_selected = sum(1 for s in st if s == "selected")
+    n_selected = sum(1 for a in scoped if a.get("status") == "selected" or a.get("outcome") == "selected")
     linked_joined = [p for p in placements if p.get("status") == "joined" and p.get("application_id")]
     n_joined_linked = len(linked_joined)
+    selection_to_joining = (n_joined_linked / n_selected) if n_selected else 0.0
+    application_to_joining = (n_joined_linked / applied_n) if applied_n else 0.0
     rates = {
         "interview_rate": (n_interview / applied_n) if applied_n else 0.0,
         "offer_rate": (n_offer / applied_n) if applied_n else 0.0,
         "selection_rate": (n_selected / applied_n) if applied_n else 0.0,
-        "joining_rate_selection_base": (n_joined_linked / n_selected) if n_selected else 0.0,
-        "joining_rate_application_base": (n_joined_linked / applied_n) if applied_n else 0.0,
+        "joining_rate_selection_base": selection_to_joining,
+        "joining_rate_application_base": application_to_joining,
+        "selection_to_joining_rate": selection_to_joining,
+        "application_to_joining_rate": application_to_joining,
+        "application_to_interview_rate": (n_interview / applied_n) if applied_n else 0.0,
+        "application_to_offer_rate": (n_offer / applied_n) if applied_n else 0.0,
+        "application_to_selection_rate": (n_selected / applied_n) if applied_n else 0.0,
     }
     # Top required skills in scope
     top_required: list = []
@@ -757,6 +916,12 @@ def get_dashboard(user_id: str, employer_id: str | None = None,
         "funnel": funnel,
         "rates": rates,
         "denominators": {"applied_n": applied_n, "selected_n": n_selected},
+        "applied_count": applied_n,
+        "interview_count": n_interview,
+        "offer_count": n_offer,
+        "selected_count": n_selected,
+        "joined_count": n_joined_linked,
+        "unlinked_placement_count": unlinked,
         "top_required_skills": top_required,
         "top_observed_gaps": top_gaps,
         "unlinked_placements_n": unlinked,

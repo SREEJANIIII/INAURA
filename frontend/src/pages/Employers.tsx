@@ -27,10 +27,15 @@ import {
   transitionApplication,
   getFeedback,
   submitFeedback,
+  listPlacementsForEmployer,
+  createPlacement,
+  updatePlacement,
+  confirmPlacement,
   type Application,
   type ApplicationDetail,
   type ApplicationStatus,
   type EmployerFeedback,
+  type Placement,
 } from "../services/outcomes";
 import {
   formatStatusLabel,
@@ -83,6 +88,11 @@ export default function Employers() {
   const [fbExpectedLevel, setFbExpectedLevel] = useState("0.7");
   const [fbObservedLevel, setFbObservedLevel] = useState("0.7");
   const [fbSkillComment, setFbSkillComment] = useState("");
+
+  // Placement state for selected candidate application
+  const [empPlacements, setEmpPlacements] = useState<Placement[]>([]);
+  const [placementJoiningDate, setPlacementJoiningDate] = useState("");
+  const [placementSaving, setPlacementSaving] = useState(false);
 
   // Employer creation form
   const [empName, setEmpName] = useState("");
@@ -158,6 +168,7 @@ export default function Employers() {
     if (!selected) {
       setMembers([]);
       setRequirements([]);
+      setEmpPlacements([]);
       setSelectedReq(null);
       setEditingEmp(false);
       return;
@@ -173,7 +184,20 @@ export default function Employers() {
     listRequirements(selected.id)
       .then(setRequirements)
       .catch((e) => setError(messageOf(e)));
+
+    listPlacementsForEmployer(selected.id)
+      .then(setEmpPlacements)
+      .catch(() => setEmpPlacements([]));
   }, [selected]);
+
+  const refreshEmpPlacements = async () => {
+    if (!selected) return;
+    try {
+      setEmpPlacements(await listPlacementsForEmployer(selected.id));
+    } catch {
+      // ignore
+    }
+  };
 
   // When selected requirement changes: load requirement skills and candidate applications
   useEffect(() => {
@@ -340,6 +364,61 @@ export default function Employers() {
       setError(messageOf(e));
     } finally {
       setAppActionSaving(false);
+    }
+  };
+
+  const handleConfirmPlacement = async (placementId: string, verified: boolean) => {
+    setPlacementSaving(true);
+    setError(null);
+    try {
+      await confirmPlacement(placementId, verified);
+      await refreshEmpPlacements();
+    } catch (e) {
+      setError(messageOf(e));
+    } finally {
+      setPlacementSaving(false);
+    }
+  };
+
+  const handleEmployerUpdatePlacementStatus = async (
+    placementId: string,
+    toStatus: string,
+    joiningDate?: string
+  ) => {
+    setPlacementSaving(true);
+    setError(null);
+    try {
+      await updatePlacement(placementId, {
+        status: toStatus,
+        joining_date: joiningDate || undefined,
+      });
+      setPlacementJoiningDate("");
+      await refreshEmpPlacements();
+    } catch (e) {
+      setError(messageOf(e));
+    } finally {
+      setPlacementSaving(false);
+    }
+  };
+
+  const handleCreateCandidatePlacement = async () => {
+    if (!selected || !selectedAppDetail) return;
+    setPlacementSaving(true);
+    setError(null);
+    try {
+      await createPlacement({
+        employer_id: selected.id,
+        application_id: selectedAppDetail.id,
+        role_title: selectedReq?.title || "Selected Candidate",
+        status: placementJoiningDate ? "joined" : "selected",
+        joining_date: placementJoiningDate || undefined,
+      });
+      setPlacementJoiningDate("");
+      await refreshEmpPlacements();
+    } catch (e) {
+      setError(messageOf(e));
+    } finally {
+      setPlacementSaving(false);
     }
   };
 
@@ -1213,6 +1292,125 @@ export default function Employers() {
                             )}
                           </div>
                         </div>
+
+                        {/* Placement & Joining Verification Section */}
+                        {(() => {
+                          const candidatePlacement = empPlacements.find((p) => p.application_id === selectedAppDetail.id);
+                          return (
+                            <div style={{ marginTop: "1rem", borderTop: "1px solid color-mix(in srgb, currentColor 10%, transparent)", paddingTop: "0.75rem" }}>
+                              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+                                <h6>Placement Outcome &amp; Joining Verification</h6>
+                                {candidatePlacement ? (
+                                  <div style={{ display: "flex", gap: "0.5rem" }}>
+                                    <span className={`p2__badge p2__badge--${candidatePlacement.status}`} style={{ fontSize: "0.7rem" }}>
+                                      {formatStatusLabel(candidatePlacement.status)}
+                                    </span>
+                                    <span
+                                      className={`p2__badge p2__badge--${candidatePlacement.verification_status === "verified" ? "open" : "suspended"}`}
+                                      style={{ fontSize: "0.7rem" }}
+                                    >
+                                      {candidatePlacement.verification_status}
+                                    </span>
+                                  </div>
+                                ) : (
+                                  <span className="p2__badge p2__badge--draft" style={{ fontSize: "0.7rem" }}>
+                                    No Placement Record
+                                  </span>
+                                )}
+                              </div>
+
+                              {candidatePlacement ? (
+                                <div style={{ marginTop: "0.5rem", background: "color-mix(in srgb, currentColor 3%, transparent)", padding: "0.75rem", borderRadius: "0.5rem" }}>
+                                  <div style={{ display: "flex", flexWrap: "wrap", gap: "1rem", fontSize: "0.85rem", marginBottom: "0.5rem" }}>
+                                    <div>Role: <strong>{candidatePlacement.role_title}</strong></div>
+                                    <div>
+                                      Joining Date: <strong>{candidatePlacement.joining_date ? new Date(candidatePlacement.joining_date).toLocaleDateString() : "Pending"}</strong>
+                                    </div>
+                                    <div>
+                                      Source: <strong>{candidatePlacement.outcome_source}</strong>
+                                    </div>
+                                  </div>
+
+                                  <div className="p2__row" style={{ alignItems: "center", gap: "0.5rem", marginTop: "0.5rem" }}>
+                                    {candidatePlacement.verification_status !== "verified" && (
+                                      <button
+                                        type="button"
+                                        className="p2__btn p2__btn--open"
+                                        disabled={placementSaving}
+                                        onClick={() => handleConfirmPlacement(candidatePlacement.id, true)}
+                                      >
+                                        ✓ Confirm Placement
+                                      </button>
+                                    )}
+                                    {candidatePlacement.verification_status !== "disputed" && candidatePlacement.verification_status !== "verified" && (
+                                      <button
+                                        type="button"
+                                        className="p2__btn p2__btn--ghost"
+                                        disabled={placementSaving}
+                                        onClick={() => handleConfirmPlacement(candidatePlacement.id, false)}
+                                      >
+                                        Dispute
+                                      </button>
+                                    )}
+                                    {candidatePlacement.status !== "joined" && candidatePlacement.status !== "declined" && candidatePlacement.status !== "not_joined" && (
+                                      <>
+                                        <input
+                                          type="date"
+                                          placeholder="Joining date"
+                                          value={placementJoiningDate}
+                                          onChange={(e) => setPlacementJoiningDate(e.target.value)}
+                                          style={{ width: "auto" }}
+                                        />
+                                        <button
+                                          type="button"
+                                          className="p2__btn"
+                                          disabled={placementSaving || !placementJoiningDate}
+                                          onClick={() => handleEmployerUpdatePlacementStatus(candidatePlacement.id, "joined", placementJoiningDate)}
+                                        >
+                                          Mark Candidate Joined
+                                        </button>
+                                        <button
+                                          type="button"
+                                          className="p2__btn p2__btn--danger-ghost"
+                                          disabled={placementSaving}
+                                          onClick={() => handleEmployerUpdatePlacementStatus(candidatePlacement.id, "not_joined")}
+                                        >
+                                          Mark Not Joined
+                                        </button>
+                                      </>
+                                    )}
+                                  </div>
+                                </div>
+                              ) : (
+                                <div style={{ marginTop: "0.5rem" }}>
+                                  {selectedAppDetail.status === "selected" ? (
+                                    <div className="p2__row" style={{ alignItems: "center", gap: "0.5rem" }}>
+                                      <input
+                                        type="date"
+                                        placeholder="Joining date (optional)"
+                                        value={placementJoiningDate}
+                                        onChange={(e) => setPlacementJoiningDate(e.target.value)}
+                                        style={{ width: "auto" }}
+                                      />
+                                      <button
+                                        type="button"
+                                        className="p2__btn"
+                                        disabled={placementSaving}
+                                        onClick={handleCreateCandidatePlacement}
+                                      >
+                                        Create Placement Record
+                                      </button>
+                                    </div>
+                                  ) : (
+                                    <p className="p2__hint">
+                                      Placement record can be established once the candidate is selected or placed.
+                                    </p>
+                                  )}
+                                </div>
+                              )}
+                            </div>
+                          );
+                        })()}
 
                         {/* Employer Feedback Section */}
                         <div style={{ marginTop: "1rem", borderTop: "1px solid color-mix(in srgb, currentColor 10%, transparent)", paddingTop: "0.75rem" }}>
