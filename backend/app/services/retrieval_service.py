@@ -366,6 +366,10 @@ def _enrich_with_catalog(item: dict, catalog_index: Dict[Any, dict]) -> dict:
             "evidence_context", "published_at", "retrieved_at", "description",
             "role_relevance", "source_version", "source_reference",
             "source_occupation", "mapping_version", "skill_category", "version",
+            # Phase 3: contextual employer-outcome annotation rides the same
+            # enrichment (both retrieval paths share this function). Never a
+            # ranking input — _fuse_signals reads only its fixed signals.
+            "outcome_overlay",
         ):
             if enriched.get(key) in (None, "") and row.get(key) not in (None, ""):
                 enriched[key] = row.get(key)

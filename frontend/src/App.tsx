@@ -1,5 +1,21 @@
 import { lazy, Suspense, type ReactNode } from "react";
 import { Navigate, Routes, Route } from "react-router-dom";
+// import Home from "./pages/Home";
+// import ProfileSetup from "./pages/ProfileSetup";
+// import Profile from "./pages/Profile";
+// import CareerTrack from "./pages/CareerTrack";
+// import CareerSkill from "./pages/CareerSkill";
+// import Analysis from "./pages/Analysis";
+// import AnalysisResults from "./pages/AnalysisResults";
+// import CapabilityMap from "./pages/CapabilityMap";
+// import Roadmap from "./pages/Roadmap";
+// import AIReviewTest from "./pages/AIReviewTest";
+// import Interview from "./pages/Interview";
+// import AtsTester from "./pages/AtsTester";
+// import Revision from "./pages/Revision";
+import Employers from "./pages/Employers";
+import Applications from "./pages/Applications";
+import Outcomes from "./pages/Outcomes";
 import Resume from "./pages/Resume";
 import { ProtectedRoute, GuestOnly } from "./components/auth/ProtectedRoute";
 import AppLayout from "./components/layout/AppLayout";
@@ -69,6 +85,10 @@ export default function App() {
         <Route path="/skill-assessment/dsa" element={<SkillAssessment view="dsa" />} />
         <Route path="/roadmap" element={<Roadmap />} />
         <Route path="/revision" element={<Revision />} />
+        {/* Person 2: employer & outcomes (additive, isolated module) */}
+        <Route path="/employers" element={<Employers />} />
+        <Route path="/applications" element={<Applications />} />
+        <Route path="/outcomes" element={<Outcomes />} />
         {/* Career Track: one page per career and one per skill, rendered from the role's data */}
         <Route path="/career-track" element={<CareerTrack />} />
         <Route path="/career-track/:careerId" element={<CareerTrack />} />

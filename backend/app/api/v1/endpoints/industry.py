@@ -11,7 +11,9 @@ from ....schemas.industry import (
     IndustryIntelligenceResponse,
     DemandProviderInfo,
 )
+from ....schemas.industry_outcomes import EmergingSkillOut
 from ....services import industry_service, retrieval_service
+from ....services import industry_outcome_service as outcome_obs
 from ....services.industry_roles import list_catalog_roles
 from ....core.security import get_current_user, CurrentUser
 
@@ -96,6 +98,7 @@ async def retrieve_requirements(
             "similarity": float(r.get("similarity", 0.0)),
             "evidence_strength": r.get("evidence_strength"),
             "supporting_chunks": r.get("supporting_chunks"),
+            "outcome_overlay": r.get("outcome_overlay"),
             "trend": r.get("trend"),
             "freshness": r.get("freshness"),
             "data_origin": r.get("data_origin"),
@@ -114,6 +117,22 @@ async def retrieve_requirements(
     }
 
 
+@router.get("/outcomes/emerging", response_model=List[EmergingSkillOut])
+def get_emerging_skills(
+    role: str = Query(..., description="Role name e.g., Software Engineer"),
+    location: Optional[str] = Query(None, description="Coarse city, e.g. Bengaluru"),
+    current_user: CurrentUser = Depends(get_current_user),
+):
+    """Phase 3 derived read model: aggregated employer-observed skills with NO
+    curated requirement for this role. Read-only; status is always
+    observed_not_required. Never enters gap mathematics or the taxonomy."""
+    from ....services.skill_taxonomy import normalize_skill as _canon
+
+    curated = {
+        (_canon(str(r.get("skill", "") or "")) or str(r.get("skill", "") or "")).lower()
+        for r in industry_service.list_by_role(role)
+    }
+    return outcome_obs.get_emerging(role, location, curated)
 @router.get("/intelligence", response_model=IndustryIntelligenceResponse)
 def get_role_intelligence(
     role: str = Query(..., description="Role name e.g., Software Engineer"),

@@ -86,6 +86,22 @@ const items: NavItem[] = [
     to: "/revision",
     icon: <Icon><path d="M4 5.5A2.5 2.5 0 0 1 6.5 3H20v16H6.5A2.5 2.5 0 0 0 4 21.5z" /><path d="M4 5.5v16" /><path d="M8 7h8M8 11h8" /></Icon>,
   },
+  // Person 2: employer & outcomes (additive module, no changes to items above)
+  {
+    label: "Employers",
+    to: "/employers",
+    icon: <Icon><rect x="3.5" y="7.5" width="17" height="12" rx="2" /><path d="M9 7.5V6a2 2 0 0 1 2-2h2a2 2 0 0 1 2 2v1.5" /><path d="M3.5 12.5h17" /></Icon>,
+  },
+  {
+    label: "Applications",
+    to: "/applications",
+    icon: <Icon><path d="M7 3.5h7l4 4v13H7z" /><path d="M14 3.5v4h4" /><path d="M10 12.5h5M10 16h5" /></Icon>,
+  },
+  {
+    label: "Outcomes",
+    to: "/outcomes",
+    icon: <Icon><path d="M4 20.5h16" /><rect x="5.5" y="11" width="3" height="6.5" rx="1" /><rect x="10.5" y="6.5" width="3" height="11" rx="1" /><rect x="15.5" y="13.5" width="3" height="4" rx="1" /></Icon>,
+  },
   // Pages not built yet — shown so students know they're coming
   {
     label: "Resources",

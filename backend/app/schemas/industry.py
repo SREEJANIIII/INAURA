@@ -2,6 +2,8 @@ from pydantic import BaseModel, Field
 from typing import Optional, List, Any
 from datetime import datetime
 
+from .industry_outcomes import OutcomeOverlay
+
 
 class IndustryRequirementResponse(BaseModel):
     id: str
@@ -46,6 +48,13 @@ class IndustryRequirementResponse(BaseModel):
     duplicate_sources_collapsed: Optional[int] = Field(
         default=None,
         description="Same-source duplicate rows collapsed during aggregation",
+    )
+    # Phase 3: contextual employer-outcome annotation. Absent unless the
+    # outcome overlay is enabled and the cell meets its threshold. Never a
+    # gap-mathematics input.
+    outcome_overlay: Optional[OutcomeOverlay] = Field(
+        default=None,
+        description="Observed employer-demand context for this curated requirement",
     )
     # Dynamic Industry Intelligence (additive, all optional for compatibility).
     location: Optional[dict] = Field(
@@ -178,6 +187,11 @@ class RetrieveItem(BaseModel):
     supporting_chunks: Optional[List[dict]] = Field(
         default=None,
         description="References (chunk id, role, topic, source, url) to benchmark chunks mentioning this skill",
+    )
+    # Phase 3: contextual employer-outcome annotation (see IndustryRequirementResponse).
+    outcome_overlay: Optional[OutcomeOverlay] = Field(
+        default=None,
+        description="Observed employer-demand context for this curated requirement",
     )
     trend: Optional[str] = Field(default=None)
     freshness: Optional[str] = Field(default=None)

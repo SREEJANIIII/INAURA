@@ -695,8 +695,11 @@ def build_requirements_map(requirements: List[dict], client: Optional[Client] = 
     """
     Build canonical lookup map of target role requirements.
     Preserves separate dimensions: required_level, importance, demand, interview_relevance, industry_confidence.
-    Dynamic Intelligence fields (trend, freshness, location, data_origin) pass
-    through additively; scoring formulas are untouched.
+    Frozen Phase-3 boundary: ONLY authoritative requirement fields are exposed
+    here. Dynamic metadata (trend, freshness, data_origin, location,
+    collected_at, last_updated, mapping_status) and outcome overlays stay on
+    the industry-service rows for intelligence/retrieval consumers and MUST
+    NOT enter this map, so they can never become gap-math inputs.
     """
     req_map: Dict[str, dict] = {}
     for req in requirements:
@@ -734,13 +737,6 @@ def build_requirements_map(requirements: List[dict], client: Optional[Client] = 
             "retrieved_at": req.get("retrieved_at", ""),
             "role_relevance": req.get("role_relevance", "CORE" if importance >= 0.80 else ("IMPORTANT" if importance >= 0.70 else "RELEVANT")),
             "evidence_context": req.get("evidence_context", ""),
-            "trend": str(req.get("trend") or "stable"),
-            "freshness": req.get("freshness"),
-            "data_origin": req.get("data_origin") or "source_data",
-            "location": req.get("location"),
-            "collected_at": req.get("collected_at", ""),
-            "last_updated": req.get("last_updated", ""),
-            "mapping_status": req.get("mapping_status") or "mapped",
         }
     return req_map
 
