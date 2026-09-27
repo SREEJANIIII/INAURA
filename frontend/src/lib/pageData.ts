@@ -71,9 +71,11 @@ export const resultsPageData = cached("results-page", async () => {
 });
 
 export const roadmapPageData = cached("roadmap-page", async () => {
-  const [profile, analysis, roadmapBundle] = await Promise.all([
+  const [profile, analysis, gaps, roadmapBundle] = await Promise.all([
     getProfile().catch(() => null),
     getLatestAnalysis().catch(() => null),
+    // Each skill's level, evidence and priority: the journey map's states and reasons
+    getGaps().catch(() => [] as SkillGap[]),
     getLatestRoadmap()
       .then(async (roadmap) => ({ roadmap, weeks: await getRoadmapWeeks(roadmap.id) }))
       .catch((e: unknown) => {
@@ -82,7 +84,7 @@ export const roadmapPageData = cached("roadmap-page", async () => {
         return null;
       }),
   ]);
-  return { profile, analysis, roadmap: roadmapBundle?.roadmap ?? null, weeks: roadmapBundle?.weeks ?? [] };
+  return { profile, analysis, gaps, roadmap: roadmapBundle?.roadmap ?? null, weeks: roadmapBundle?.weeks ?? [] };
 });
 
 export const roleCatalogData = cached("role-catalog", getRolesCatalog);
