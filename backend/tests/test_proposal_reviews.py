@@ -376,6 +376,13 @@ def test_authorization_reviewer_recorded(db):
     assert exc.value.status_code == 401
 
 
+def test_reviewer_identity_not_spoofable(db):
+    # The create schema carries no reviewer field: identity always comes from
+    # the authenticated caller, never the request body.
+    assert "reviewer_id" not in schemas.ReviewCreate.model_fields
+    assert "reviewer" not in schemas.ReviewCreate.model_fields
+
+
 def test_audit_history(db):
     pid = _proposal_ids(db)[0]
     svc.create_review(REVIEWER_1, pid, **CTX, decision="DEFERRED", reason="Q3.")

@@ -622,5 +622,138 @@ discovery but block the larger repository inspection pass.
 
 - [x] Phase 0 — Skeleton fixed (main.py, requirements, git, README, title)
 - [x] Phase 1 — Frontend ↔ Backend connection (api service, CORS, proxy, Home shell)
-- [x] Phase 2 — Scoring engine (next)
-- [x] RAG / Recommendation / Roadmap / Auth / DB — deferred
+- [x] Phase 2 — Scoring engine
+- [x] RAG / Recommendation / Roadmap / Auth / DB
+- [x] P0 workforce/training intelligence foundation (see below)
+- [x] P1 action-planning layers (see below)
+
+---
+
+## Workforce & Training Intelligence (P0/P1)
+
+On top of the student-side pipeline above, INAURA has a deterministic
+workforce/training intelligence stack. Every layer is a live projection over
+the layer below unless stated otherwise; nothing here uses an LLM for
+calculations, and nothing here auto-applies decisions.
+
+### Labour-market intelligence (P0 #1)
+
+Job-posting observations are ingested, deduplicated, normalized to canonical
+roles/skills/locations, and aggregated into monthly demand signals
+(`posting_count`, `skill_posting_count`, `skill_share`, trend with
+small-sample suppression, full provenance). Unmapped concepts are preserved,
+never forced. The deterministic demo provider is synthetic seed data and is
+never presented as live market data.
+
+### Institution / course / curriculum model (P0 #2)
+
+Institutions → courses → modules → taught skills, plus a minimal trainer
+roster with trainer→skill mappings. Curriculum phrases resolve through the
+canonical taxonomy; unmapped concepts are preserved with
+`mapping_status = "unmapped"`.
+
+### Cohort skill supply (P0 #3)
+
+Cohorts roster existing students (`auth.users.id`; no second student table).
+Per-learner skill state is read live from `skill_signals` /
+`skill_assessments` using the existing engine math — never duplicated.
+Self-reported-only skills never count as supply. Cohorts under 5 active
+members suppress per-skill detail.
+
+### District training intelligence (P0 #5, via P0 #4 alignment)
+
+Per-course alignment rows (demand × curriculum × cohort supply) aggregated
+to district level with learner-weighted coverage (sums of learners, never
+averaged percentages). Global demand rows apply everywhere but are labelled
+`fallback_global`, never presented as district-measured demand. P0 #4 itself
+produces per-skill curriculum/attainment/demand statuses with rule-based
+priorities and structured reasons — no opaque scores.
+
+### Training priority engine (P1.1)
+
+Projects district rows to HIGH / MEDIUM / LOW / INSUFFICIENT_EVIDENCE with
+an orthogonal aligned / actionable_gap / insufficient_evidence status.
+Missing evidence is never LOW; aligned skills keep their aligned status.
+Ordering is by level, then observed share, then skill — not a ranking score.
+
+### Curriculum proposals (P1.2)
+
+One human-reviewable record per course + skill from five controlled actions
+(`ADD_SKILL`, `INCREASE_COVERAGE`, `ADD_PRACTICAL_ASSESSMENT`,
+`UPDATE_MODULE`, `REVIEW_CONTENT`), selected by explicit evidence rules.
+Generation performs zero writes; every record starts `PENDING_REVIEW`.
+
+### Trainer development signals (P1.3)
+
+Observed `trainer_skills` mappings projected against teaching context:
+`DEVELOPMENT_SIGNAL` (`NO_TRAINER_OBSERVED` / `LOW_TRAINER_COVERAGE` /
+`SKILL_TRAINER_MISMATCH`), `SUFFICIENT_EVIDENCE`, or
+`INSUFFICIENT_EVIDENCE`. Absence of a mapping is reported as absent
+evidence, never as inability. No assignment, no plans, no trainer identities
+exposed.
+
+### Capacity planning signals (P1.4)
+
+Observed institutions/courses/learners/trainers per prioritized skill. The
+repository contains no validated seat-capacity source, so status is always
+`CAPACITY_DATA_INSUFFICIENT` with an explicit statement; seat counts,
+ratios, and shortage claims are never produced.
+
+### Human review workflow (P1.5)
+
+Append-only decision ledger (`curriculum_proposal_reviews`, migration 033):
+`PENDING_REVIEW → APPROVED | REJECTED | DEFERRED`, with `DEFERRED` allowing
+re-review and terminal states final. Reasons required for reject/defer;
+reviewer is the authenticated caller. Approval records a decision only —
+it never mutates curriculum data. RLS: authenticated read, own-row insert,
+no update/delete; anon revoked.
+
+### Outcome feedback loop (P1.6)
+
+Read-only aggregates over existing outcome tables (applications, employer
+and skill feedback, qualification alignments, placements) joined by
+canonical IDs, with sample sizes, periods, and min-n suppression.
+Signals are `SUPPORTIVE` / `MIXED` / `CONTRADICTORY` /
+`INSUFFICIENT_OUTCOME_EVIDENCE` on observed rating gaps; co-occurrence with
+priorities is reported as co-occurrence — causal impact is never claimed.
+
+---
+
+## Honesty Rules (applicable everywhere)
+
+- Demo-seeded data is synthetic and labelled as such; it is never live data.
+- No automatic curriculum edits, trainer assignments, seat allocations,
+  approvals, or policy decisions exist anywhere in the system.
+- Global fallback demand is labelled, never presented as local demand.
+- Small samples are suppressed with explicit reasons, never silently dropped
+  or presented as strong conclusions.
+- Outcome data describes past observations; it does not prove causal impact.
+- Deterministic rules live in named constants and pure functions; LLMs are
+  used only in the conversational/assessment features noted below, never for
+  P0/P1 calculations.
+
+## What Uses AI/LLMs
+
+Server-side Gemini evaluation powers the adaptive interview experience and
+related assessment narration; embeddings use the configured provider.
+Priority, alignment, proposal, review, and feedback logic is fully
+deterministic and has no LLM dependency.
+
+## Known Limitations
+
+- Labour-market providers are demo seeds; no live job-board integration.
+- No validated seat-capacity data exists, so capacity planning stays
+  evidence-only.
+- Review authorization is any-authenticated-user (institutional RBAC is
+  deferred, not invented).
+- Outcome-to-cohort attribution uses ever-membership, not timestamp-matched
+  active enrollment.
+- Cross-cohort roster overlap can double-count district learner sums.
+
+## Deferred Functionality
+
+- Live labour-market provider integrations
+- Institutional role-based access control
+- Curriculum authoring/implementation workflows
+- Trainer development planning beyond signals
+- Causal outcome evaluation designs
