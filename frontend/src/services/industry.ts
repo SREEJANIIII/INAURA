@@ -185,6 +185,187 @@ export function listDemandProviders() {
   >("/industry/providers");
 }
 
+// Labour-market observations (P0 #1): aggregated imported-posting signals.
+// Derived measurements with provenance; demo-origin rows are synthetic and
+// must never be labelled live.
+export type LabourMarketSignal = {
+  role_key: string;
+  skill_slug?: string | null;
+  source_concept?: string | null;
+  mapping_status: string;
+  location_scope: string;
+  country?: string | null;
+  region?: string | null;
+  city?: string | null;
+  period_start: string;
+  period_end: string;
+  posting_count: number;
+  skill_posting_count: number;
+  distinct_company_count?: number | null;
+  skill_share?: number | null;
+  demand?: number | null;
+  required_level?: number | null;
+  importance?: number | null;
+  trend: string;
+  confidence?: number | null;
+  evidence_suppressed: boolean;
+  provider_id: string;
+  data_origin: string;
+  source_version?: string | null;
+  evidence_context?: string | null;
+  computed_at?: string | null;
+};
+
+export function getLabourMarketSignals(params: {
+  role?: string;
+  skill?: string;
+  country?: string;
+  region?: string;
+  city?: string;
+  start_date?: string;
+  end_date?: string;
+  provider_id?: string;
+  include_raw_concepts?: boolean;
+} = {}) {
+  const q = new URLSearchParams();
+  for (const [k, v] of Object.entries(params)) {
+    if (v === undefined || v === null || v === "") continue;
+    q.set(k, String(v));
+  }
+  const suffix = q.toString() ? `?${q.toString()}` : "";
+  return apiFetch<LabourMarketSignal[]>(`/industry/labour-market/signals${suffix}`);
+}
+
+// Course / industry alignment (P0 #4): deterministic projection joining
+// labour-market demand, course curriculum, and cohort supply on canonical
+// skill identity. Aggregate dimensions only — no student-level data.
+export type AlignmentSkillRow = {
+  skill: string;
+  display_name?: string | null;
+  category?: string | null;
+  industry?: {
+    required: boolean;
+    posting_count?: number | null;
+    skill_posting_count?: number | null;
+    skill_share?: number | null;
+    trend?: string | null;
+    confidence?: number | null;
+    evidence_suppressed?: boolean | null;
+    provider_id?: string | null;
+    data_origin?: string | null;
+  } | null;
+  curriculum?: {
+    taught: boolean;
+    coverage?: string | null;
+    modules: string[];
+    mapping_status?: string | null;
+  } | null;
+  cohort?: {
+    evidenced_member_count?: number | null;
+    verified_member_count?: number | null;
+    skill_coverage?: number | null;
+    verified_coverage?: number | null;
+    average_proficiency?: number | null;
+  } | null;
+  alignment: {
+    curriculum_status: string;
+    attainment_status: string;
+    demand_status: string;
+    overall_status: string;
+    priority: string;
+    priority_reasons: string[];
+  };
+};
+
+export type CourseAlignmentResponse = {
+  role: string;
+  canonical_role?: string | null;
+  role_mapping_status: string;
+  course: { id: string; name?: string | null };
+  institution: { id: string; name?: string | null };
+  market_context?: Record<string, unknown> | null;
+  cohort_context?: { mode?: string; member_count?: number; suppressed?: boolean } | null;
+  skills: AlignmentSkillRow[];
+  summary: Record<string, number>;
+  extra_cohort_skills: string[];
+  unmapped_excluded: Record<string, number>;
+  provenance: Record<string, unknown>;
+  note: string;
+};
+
+export function getCourseAlignment(params: {
+  course_id: string;
+  role: string;
+  cohort_id?: string;
+  country?: string;
+  region?: string;
+  city?: string;
+  start_date?: string;
+  end_date?: string;
+  provider_id?: string;
+}) {
+  const q = new URLSearchParams();
+  for (const [k, v] of Object.entries(params)) {
+    if (v === undefined || v === null || v === "") continue;
+    q.set(k, String(v));
+  }
+  return apiFetch<CourseAlignmentResponse>(`/industry/course-alignment?${q.toString()}`);
+}
+
+// District training intelligence (P0 #5): evidence-backed planning inputs
+// aggregated over district institutions/courses/cohorts. Aggregate
+// dimensions only — no student-level data, no seat recommendations.
+export type DistrictSkillRow = {
+  skill: string;
+  display_name?: string | null;
+  market?: {
+    skill_share?: number | null;
+    trend?: string | null;
+  } | null;
+  training_supply: {
+    learner_count: number;
+    evidenced_learner_count: number;
+    verified_learner_count: number;
+    verified_coverage?: number | null;
+  };
+  curriculum: { courses_teaching: number; courses_missing: number };
+  trainer: { trainer_count: number; trainer_signal: string };
+  gap: { curriculum?: string | null; attainment?: string | null; concentration?: string | null };
+  priority: { level: string; reasons: string[] };
+};
+
+export type DistrictTrainingResponse = {
+  district: string;
+  district_status: string;
+  role: string;
+  market_context?: { match_type?: string } | null;
+  institutions: { id: string; name?: string | null; institution_type?: string | null }[];
+  skills: DistrictSkillRow[];
+  suppressed: boolean;
+  summary: Record<string, number | Record<string, number>>;
+  capacity: { capacity_evidence_status: string; seat_note: string };
+  provenance: Record<string, unknown>;
+  note: string;
+};
+
+export function getDistrictTraining(params: {
+  district: string;
+  role: string;
+  state?: string;
+  country?: string;
+  city?: string;
+  start_date?: string;
+  end_date?: string;
+  provider_id?: string;
+}) {
+  const q = new URLSearchParams();
+  for (const [k, v] of Object.entries(params)) {
+    if (v === undefined || v === null || v === "") continue;
+    q.set(k, String(v));
+  }
+  return apiFetch<DistrictTrainingResponse>(`/industry/district-training?${q.toString()}`);
+}
+
 export function getAnalysisState() {
   return apiFetch<AnalysisState>("/analysis/state");
 }

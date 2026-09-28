@@ -10,6 +10,9 @@ from ....schemas.industry import (
     RetrieveResponse,
     IndustryIntelligenceResponse,
     DemandProviderInfo,
+    LabourMarketSignalResponse,
+    LabourMarketRefreshRequest,
+    LabourMarketRefreshResponse,
 )
 from ....schemas.industry_outcomes import EmergingSkillOut
 from ....services import industry_service, retrieval_service
@@ -196,3 +199,60 @@ def list_demand_providers(current_user: CurrentUser = Depends(get_current_user))
     from ....services import industry_intelligence as _intel
 
     return _intel.list_providers()
+
+
+@router.get("/labour-market/signals", response_model=List[LabourMarketSignalResponse])
+def get_labour_market_signals(
+    role: Optional[str] = Query(None, description="Canonical role, e.g. Software Engineer"),
+    skill: Optional[str] = Query(None, description="Canonical skill or raw source concept"),
+    country: Optional[str] = Query(None),
+    region: Optional[str] = Query(None),
+    city: Optional[str] = Query(None),
+    start_date: Optional[str] = Query(None, description="ISO date lower bound (period_start)"),
+    end_date: Optional[str] = Query(None, description="ISO date upper bound (period_start)"),
+    provider_id: Optional[str] = Query(None),
+    include_raw_concepts: bool = Query(False, description="Include unmapped source concepts"),
+    current_user: CurrentUser = Depends(get_current_user),
+):
+    """Read aggregated labour-market demand signals with full provenance.
+
+    Returns derived measurements (demand/skill_share/trend/confidence) beside
+    the raw counts they were computed from. Unmapped concepts are excluded
+    unless include_raw_concepts=true. Demo-origin rows are synthetic and are
+    never labelled live.
+    """
+    from ....services import labour_market_service as _lm
+
+    return _lm.get_demand_signals(
+        role=role, skill=skill, country=country, region=region, city=city,
+        start_date=start_date, end_date=end_date, provider_id=provider_id,
+        include_raw_concepts=include_raw_concepts,
+    )
+
+
+@router.post("/labour-market/refresh", response_model=LabourMarketRefreshResponse)
+def refresh_labour_market_signals(
+    payload: LabourMarketRefreshRequest,
+    current_user: CurrentUser = Depends(get_current_user),
+):
+    """Authenticated deterministic refresh of labour-market aggregates.
+
+    Validates the provider id, fetches that provider's postings (demo provider
+    by default — synthetic, never live), and re-aggregates idempotently:
+    re-running with identical input yields identical signals. No unauthenticated
+    access; no raw posting bodies are returned.
+    """
+    from ....services import labour_market_service as _lm
+
+    provider = _lm.get_posting_provider(payload.provider_id)
+    if provider is None:
+        raise HTTPException(status_code=400, detail=f"Unknown provider_id: {payload.provider_id}")
+    location = None
+    if any([payload.country, payload.region, payload.city]):
+        location = {"country": payload.country, "region": payload.region, "city": payload.city}
+    try:
+        raw = provider.fetch_postings(payload.role, location, payload.start_date, payload.end_date)
+    except Exception as e:
+        raise HTTPException(status_code=502, detail=f"Provider fetch failed: {str(e)[:200]}")
+    result = _lm.refresh_demand_signals(provider=provider, postings=raw)
+    return {"provider_id": provider.provider_id, "ingested": result["ingested"], "signals": result["signals"]}

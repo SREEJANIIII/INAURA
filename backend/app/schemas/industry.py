@@ -255,3 +255,47 @@ class DemandProviderInfo(BaseModel):
     data_origin: str
     is_live: bool
     description: str
+
+
+class LabourMarketSignalResponse(BaseModel):
+    role_key: str = Field(description="Canonical role, e.g. Software Engineer")
+    skill_slug: Optional[str] = Field(default=None)
+    source_concept: Optional[str] = Field(default=None)
+    mapping_status: str = "mapped"
+    location_scope: str = "global"
+    country: Optional[str] = None
+    region: Optional[str] = None
+    city: Optional[str] = None
+    period_start: str
+    period_end: str
+    posting_count: int
+    skill_posting_count: int
+    distinct_company_count: Optional[int] = None
+    skill_share: Optional[float] = None
+    demand: Optional[float] = None
+    required_level: Optional[float] = None
+    importance: Optional[float] = None
+    trend: str = "insufficient_data"
+    confidence: Optional[float] = None
+    evidence_suppressed: bool = False
+    provider_id: str = ""
+    data_origin: str = "source_data"
+    source_version: Optional[str] = None
+    evidence_context: Optional[str] = None
+    computed_at: Optional[str] = None
+
+
+class LabourMarketRefreshRequest(BaseModel):
+    provider_id: str = Field(default="demo_postings_v1", max_length=120)
+    role: Optional[str] = Field(default=None, max_length=150)
+    country: Optional[str] = Field(default=None, max_length=120)
+    region: Optional[str] = Field(default=None, max_length=120)
+    city: Optional[str] = Field(default=None, max_length=120)
+    start_date: Optional[str] = Field(default=None)
+    end_date: Optional[str] = Field(default=None)
+
+
+class LabourMarketRefreshResponse(BaseModel):
+    provider_id: Optional[str] = None
+    ingested: dict
+    signals: int
