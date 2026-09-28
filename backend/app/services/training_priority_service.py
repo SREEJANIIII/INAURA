@@ -26,7 +26,7 @@ from typing import Any, Dict, List, Optional
 
 from fastapi import HTTPException
 
-from . import district_training_service as district
+from . import district_training_service as district_svc
 from .course_alignment_service import (
     HIGH_OBSERVED_SHARE,
     MODERATE_OBSERVED_SHARE,
@@ -184,7 +184,7 @@ def get_training_priorities(
             status_code=400,
             detail=f"Invalid priority filter: {priority!r}. Allowed: {list(LEVELS)}",
         )
-    full = district.get_district_training(
+    full = district_svc.get_district_training(
         district=district, role=role, state=state, country=country, city=city,
         region=region, start_date=start_date, end_date=end_date, provider_id=provider_id,
     )
