@@ -523,7 +523,8 @@ def test_migration_numbering_intact():
     names = sorted(p.name for p in base.glob("*.sql"))
     assert "031_institution_course_supply.sql" in names
     assert "032_cohort_skill_supply.sql" in names
-    assert not list(base.glob("033*.sql"))
+    assert "033_curriculum_proposal_reviews.sql" in names
+    assert not list(base.glob("034*.sql"))
 
 
 # ---------------------------------------------------------------------------

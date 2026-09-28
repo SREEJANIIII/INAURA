@@ -136,7 +136,7 @@ def _seed_demand():
     lm.clear_memory_store()
     plan = {  # month -> {skill: mention count}
         "2026-06": {"Docker": 3, "Kubernetes": 8, "Git": 6, "Redis": 5, "SQL": 7, "Java": 10},
-        "2026-07": {"Docker": 7, "Kubernetes": 9, "Git": 6, "Redis": 5, "SQL": 7, "Java": 4},
+        "2026-07": {"Docker": 7, "Kubernetes": 9, "Git": 6, "Redis": 4, "SQL": 7, "Java": 4},
     }
     raw = []
     n = 0
@@ -314,7 +314,8 @@ def test_declining_demand(db):
 
 def test_high_skill_share_threshold(db):
     k8s = _entry(_priorities(db), "kubernetes")["evidence"]["market"]
-    assert k8s["skill_share"] == pytest.approx(9 / 12, abs=1e-4) >= svc.HIGH_SHARE
+    assert k8s["skill_share"] == pytest.approx(9 / 12, abs=1e-4)
+    assert k8s["skill_share"] >= svc.HIGH_OBSERVED_SHARE
 
 
 def test_meaningful_attainment_threshold(db):
@@ -350,7 +351,7 @@ def test_reason_traceability(db):
 def test_deterministic_ordering(db):
     out = _priorities(db)
     assert [e["skill"] for e in out["priorities"]] == [
-        "kubernetes", "docker", "sql", "redis", "java", "git", "typescript"]
+        "kubernetes", "docker", "sql", "java", "redis", "git", "typescript"]
     levels = [e["priority"] for e in out["priorities"]]
     assert levels == ["HIGH", "HIGH", "MEDIUM", "MEDIUM", "MEDIUM", "LOW", "INSUFFICIENT_EVIDENCE"]
 
@@ -370,13 +371,24 @@ def test_market_context_preservation(db):
     mc = out["market_context"]
     assert (mc["country"], mc["region"], mc["city"]) == (COUNTRY, STATE, CITY)
     assert mc["match_type"] == "exact" and mc["role"] == ROLE
-    assert mc["providers"] == ["test_provider"]
+    assert set(mc["providers"]) == {"test_provider", "global_provider"}
 
 
 def test_global_fallback_labeling(db):
     out = _priorities(db, city=None, region=None)
     assert out["market_context"]["match_type"] == "fallback_global"
     assert "global fallback" in out["note"].lower()
+    # Global evidence applies everywhere but stays labelled, never localised.
+    docker = _entry(out, "docker")
+    assert docker["evidence"]["market"]["provider_id"] == "global_provider"
+    assert docker["evidence"]["market"]["skill_share"] == pytest.approx(6 / 10, abs=1e-4)
+
+
+def test_deterministic_output(db):
+    first, second = _priorities(db), _priorities(db)
+    first["provenance"].pop("computed_at")
+    second["provenance"].pop("computed_at")
+    assert first == second
 
 
 def test_role_normalization(db):
@@ -408,8 +420,9 @@ def test_suppressed_cohort_behavior(db):
                                             "user_id": u, "enrollment_status": "active"})
     out = svc.get_training_priorities(district="Tiny District", role=ROLE,
                                       state=STATE, country=COUNTRY)
+    # Suppressed supply derives no priorities: nothing judged from hidden data.
     assert out["priorities"] == []
-    assert out["note"] or True  # envelope explains via district layer
+    assert out["summary"]["total"] == 0
 
 
 def test_no_student_id_leakage(db):
@@ -465,8 +478,12 @@ def test_missing_cohort_data(db):
                                  "name": "Solo", "status": "active"})
     out = svc.get_training_priorities(district="Lonely District", role=ROLE,
                                       state=STATE, country=COUNTRY, city=CITY, region=STATE)
-    assert out["priorities"] == []
-    assert out["summary"]["total"] == 0
+    # No learners at all: curriculum gaps are still decidable from
+    # curriculum + demand alone (supply-independent), so they surface;
+    # attainment stays undecidable and never becomes a priority claim.
+    assert {e["priority"] for e in out["priorities"]} == {"HIGH", "MEDIUM"}
+    assert all("absent from district curriculum" in " ".join(e["reasons"]).lower()
+               for e in out["priorities"])
 
 
 # ---------------------------------------------------------------------------

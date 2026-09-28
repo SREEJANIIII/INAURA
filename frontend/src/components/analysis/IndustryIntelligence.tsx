@@ -3,6 +3,11 @@ import { getRoleIntelligence, type IntelligenceResponse } from "../../services/i
 import MarketEvidence from "./MarketEvidence";
 import CourseAlignment from "./CourseAlignment";
 import DistrictTraining from "./DistrictTraining";
+import TrainingPriorities from "./TrainingPriorities";
+import CurriculumProposals from "./CurriculumProposals";
+import TrainerDevelopmentSignals from "./TrainerDevelopmentSignals";
+import CapacityPlanningSignals from "./CapacityPlanningSignals";
+import OutcomeFeedback from "./OutcomeFeedback";
 
 const pct = (v: number) => Math.round((v ?? 0) * 100);
 const titleCase = (v?: string | null) => v ? v.replaceAll("_", " ").replace(/\b\w/g, (c) => c.toUpperCase()) : "Unknown";
@@ -36,5 +41,10 @@ export default function IndustryIntelligence({ role, preferredLocation }: { role
     <MarketEvidence role={data.role} location={requestedLocation} />
     <CourseAlignment role={data.role} />
     <DistrictTraining role={data.role} />
+    <TrainingPriorities role={data.role} />
+    <CurriculumProposals role={data.role} />
+    <TrainerDevelopmentSignals role={data.role} />
+    <CapacityPlanningSignals role={data.role} />
+    <OutcomeFeedback role={data.role} />
   </div>;
 }

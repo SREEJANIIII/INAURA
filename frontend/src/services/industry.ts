@@ -366,6 +366,320 @@ export function getDistrictTraining(params: {
   return apiFetch<DistrictTrainingResponse>(`/industry/district-training?${q.toString()}`);
 }
 
+// Training priorities (P1.1): deterministic action-prioritization over P0
+// evidence. Levels HIGH/MEDIUM/LOW/INSUFFICIENT_EVIDENCE plus an orthogonal
+// aligned/actionable_gap/insufficient_evidence status. Aggregate evidence
+// packets only — no student-level data, no seat recommendations, no scores.
+export type TrainingPriorityEntry = {
+  skill: string;
+  display_name?: string | null;
+  category?: string | null;
+  priority: string;
+  status: string;
+  reasons: string[];
+  evidence: {
+    market: {
+      trend?: string | null;
+      skill_share?: number | null;
+      posting_count?: number | null;
+      match_type?: string | null;
+      provider_id?: string | null;
+    };
+    curriculum: { courses_teaching: number; courses_missing: number };
+    learner_supply: {
+      learner_count: number;
+      verified_learner_count: number;
+      verified_coverage?: number | null;
+      average_proficiency?: number | null;
+    };
+    trainer: { trainer_count: number; capacity_status?: string | null };
+  };
+};
+
+export type TrainingPrioritiesResponse = {
+  district: string;
+  district_status: string;
+  role: string;
+  canonical_role?: string | null;
+  role_mapping_status: string;
+  market_context?: { match_type?: string } | null;
+  priorities: TrainingPriorityEntry[];
+  summary: Record<string, number>;
+  capacity_note: string;
+  provenance: Record<string, unknown>;
+  note: string;
+};
+
+export function getTrainingPriorities(params: {
+  district: string;
+  role: string;
+  state?: string;
+  country?: string;
+  city?: string;
+  region?: string;
+  start_date?: string;
+  end_date?: string;
+  provider_id?: string;
+  priority?: string;
+}) {
+  const q = new URLSearchParams();
+  for (const [k, v] of Object.entries(params)) {
+    if (v === undefined || v === null || v === "") continue;
+    q.set(k, String(v));
+  }
+  return apiFetch<TrainingPrioritiesResponse>(`/industry/training-priorities?${q.toString()}`);
+}
+
+// Curriculum change proposals (P1.2): human-reviewable planning artifacts.
+// Every record starts PENDING_REVIEW; generation never mutates curriculum.
+export type CurriculumProposalRow = {
+  proposal_id: string;
+  course_id: string;
+  course_name?: string | null;
+  institution_name?: string | null;
+  district: string;
+  role: string;
+  skill: { id: string; name: string };
+  priority: { level: string; status: string; reasons: string[] };
+  action: { type: string; status: string };
+  title: string;
+  rationale: string[];
+  market_context: { match_type?: string | null };
+};
+
+export type CurriculumProposalsResponse = {
+  district: string;
+  role: string;
+  market_context?: Record<string, unknown> | null;
+  proposals: CurriculumProposalRow[];
+  summary: { total: number; by_action: Record<string, number>; high_priority: number };
+  provenance: Record<string, unknown>;
+  note: string;
+};
+
+export function getCurriculumProposals(params: {
+  district: string;
+  role: string;
+  state?: string;
+  country?: string;
+  city?: string;
+  region?: string;
+  start_date?: string;
+  end_date?: string;
+  provider_id?: string;
+  course_id?: string;
+  skill?: string;
+  action_type?: string;
+  priority?: string;
+  status?: string;
+}) {
+  const q = new URLSearchParams();
+  for (const [k, v] of Object.entries(params)) {
+    if (v === undefined || v === null || v === "") continue;
+    q.set(k, String(v));
+  }
+  return apiFetch<CurriculumProposalsResponse>(`/industry/curriculum-proposals?${q.toString()}`);
+}
+
+// Proposal reviews (P1.5): append-only human decisions. Approval records a
+// decision only — it never mutates curriculum data and is not implementation.
+export type ProposalReviewRow = {
+  id: string;
+  proposal_id: string;
+  district: string;
+  role: string;
+  course_id?: string | null;
+  reviewer_id?: string | null;
+  from_status?: string | null;
+  to_status: string;
+  reason?: string | null;
+  created_at: string;
+};
+
+export function getProposalReviews(params: {
+  proposal_id?: string;
+  course_id?: string;
+  district?: string;
+  decision?: string;
+} = {}) {
+  const q = new URLSearchParams();
+  for (const [k, v] of Object.entries(params)) {
+    if (v === undefined || v === null || v === "") continue;
+    q.set(k, String(v));
+  }
+  const suffix = q.toString() ? `?${q.toString()}` : "";
+  return apiFetch<ProposalReviewRow[]>(`/industry/curriculum-reviews${suffix}`);
+}
+
+export function createProposalReview(payload: {
+  proposal_id: string;
+  district: string;
+  role: string;
+  decision: string;
+  reason?: string;
+}) {
+  return apiFetch<ProposalReviewRow>("/industry/curriculum-reviews", {
+    method: "POST",
+    body: JSON.stringify(payload),
+  });
+}
+
+// Trainer development signals (P1.3): observed trainer-skill mappings
+// projected against teaching context and P1.1 priorities. Aggregate only —
+// no trainer identities, no assignment, no plans.
+export type TrainerDevelopmentSignalRow = {
+  skill: string;
+  display_name?: string | null;
+  signal: string;
+  signal_type: string;
+  reasons: string[];
+  priority: { level?: string | null; status?: string | null; reasons: string[] };
+  trainer_evidence: {
+    trainer_count: number;
+    institutions_with_skill_trainers: number;
+    institutions_teaching: number;
+    proficiency_breakdown: Record<string, number>;
+  };
+  related_proposals: { proposal_id: string; course_id: string; action_type: string; priority: string }[];
+};
+
+export type TrainerDevelopmentResponse = {
+  district: string;
+  district_status: string;
+  role: string;
+  market_context?: Record<string, unknown> | null;
+  signals: TrainerDevelopmentSignalRow[];
+  summary: Record<string, number>;
+  provenance: Record<string, unknown>;
+  note: string;
+};
+
+export function getTrainerDevelopmentSignals(params: {
+  district: string;
+  role: string;
+  state?: string;
+  country?: string;
+  city?: string;
+  region?: string;
+  start_date?: string;
+  end_date?: string;
+  provider_id?: string;
+  course_id?: string;
+  skill?: string;
+  signal?: string;
+}) {
+  const q = new URLSearchParams();
+  for (const [k, v] of Object.entries(params)) {
+    if (v === undefined || v === null || v === "") continue;
+    q.set(k, String(v));
+  }
+  return apiFetch<TrainerDevelopmentResponse>(`/industry/trainer-development-signals?${q.toString()}`);
+}
+
+// Capacity planning signals (P1.4): observed counts plus an explicit
+// statement that seat capacity is not measured. No seat, ratio, or
+// shortage claims — missing data is never presented as zero capacity.
+export type CapacityPlanningRow = {
+  skill: string;
+  display_name?: string | null;
+  priority: string;
+  status: string;
+  courses_teaching: number;
+  institutions_teaching: number;
+  institutions_total: number;
+  learner_count: number;
+  verified_learner_count: number;
+  trainers_observed: number;
+  market_trend?: string | null;
+  capacity_status: string;
+  planning_note: string;
+};
+
+export type CapacityPlanningResponse = {
+  district: string;
+  district_status: string;
+  role: string;
+  market_context?: Record<string, unknown> | null;
+  capacity: CapacityPlanningRow[];
+  summary: Record<string, number>;
+  capacity_evidence_status: string;
+  planning_note: string;
+  provenance: Record<string, unknown>;
+  note: string;
+};
+
+export function getCapacityPlanning(params: {
+  district: string;
+  role: string;
+  state?: string;
+  country?: string;
+  city?: string;
+  region?: string;
+  start_date?: string;
+  end_date?: string;
+  provider_id?: string;
+  course_id?: string;
+  skill?: string;
+}) {
+  const q = new URLSearchParams();
+  for (const [k, v] of Object.entries(params)) {
+    if (v === undefined || v === null || v === "") continue;
+    q.set(k, String(v));
+  }
+  return apiFetch<CapacityPlanningResponse>(`/industry/capacity-planning?${q.toString()}`);
+}
+
+// Outcome feedback (P1.6): observed employer/placement aggregates with
+// periods and limitations. Co-occurrence is reported as co-occurrence —
+// causal impact is never claimed. Aggregate only, small samples suppressed.
+export type SkillOutcomeRow = {
+  skill: string;
+  display_name?: string | null;
+  signal: string;
+  limitation: string;
+  sample: {
+    feedback_count?: number | null;
+    placement_count?: number | null;
+    successful_placements?: number | null;
+    alignment_count: number;
+  };
+  employer_feedback: {
+    observations: number;
+    average_observed_minus_expected?: number | null;
+  };
+  training_priority?: string | null;
+  observed_mismatch: boolean;
+};
+
+export type OutcomeFeedbackResponse = {
+  district?: string | null;
+  role?: string | null;
+  observation_period: { start?: string | null; end?: string | null };
+  skills: SkillOutcomeRow[];
+  summary: Record<string, number>;
+  provenance: Record<string, unknown>;
+  note: string;
+};
+
+export function getOutcomeFeedback(params: {
+  district?: string;
+  role?: string;
+  course_id?: string;
+  institution_id?: string;
+  skill?: string;
+  proposal_id?: string;
+  start_date?: string;
+  end_date?: string;
+} = {}) {
+  const q = new URLSearchParams();
+  for (const [k, v] of Object.entries(params)) {
+    if (v === undefined || v === null || v === "") continue;
+    q.set(k, String(v));
+  }
+  const suffix = q.toString() ? `?${q.toString()}` : "";
+  return apiFetch<OutcomeFeedbackResponse>(`/industry/outcome-feedback${suffix}`);
+}
+
 export function getAnalysisState() {
   return apiFetch<AnalysisState>("/analysis/state");
 }

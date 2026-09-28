@@ -394,7 +394,7 @@ def test_migration_numbering_does_not_touch_history():
     names = sorted(p.name for p in base.glob("*.sql"))
     assert "030_labour_market_intelligence.sql" in names
     assert "031_institution_course_supply.sql" in names
-    assert not list(base.glob("033*.sql"))
+    assert not list(base.glob("034*.sql"))
 
 
 # ---------------------------------------------------------------------------

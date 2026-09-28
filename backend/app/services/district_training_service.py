@@ -441,7 +441,11 @@ def get_district_training(
         alignments, cohort_supplies, trainer_agg, len(institutions), len(courses))
     unsuppressed_learners = agg_counts["unsuppressed_learners"]
     suppressed_detail = unsuppressed_learners == 0 and learners > 0
-    if unsuppressed_learners == 0:
+    if suppressed_detail:
+        # Learners exist but all detail is privacy-hidden: blank the rows so
+        # no priority can be derived from hidden data. Zero learners is not
+        # suppression — rows stay, with attainment insufficient_evidence, so
+        # supply-independent curriculum gaps remain decidable.
         skills = []
 
     by_type: Dict[str, int] = {}

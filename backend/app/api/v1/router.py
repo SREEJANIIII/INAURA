@@ -20,6 +20,11 @@ from .endpoints.cohorts import course_cohort_router as course_cohorts_router
 from .endpoints.course_alignment import router as course_alignment_router
 from .endpoints.district_training import router as district_training_router
 from .endpoints.training_priorities import router as training_priorities_router
+from .endpoints.curriculum_proposals import router as curriculum_proposals_router
+from .endpoints.trainer_development import router as trainer_development_router
+from .endpoints.capacity_planning import router as capacity_planning_router
+from .endpoints.proposal_reviews import router as proposal_reviews_router
+from .endpoints.outcome_feedback import router as outcome_feedback_router
 from .endpoints.outcomes import router as outcomes_router
 from .endpoints.outcomes import requirements_router as requirements_router
 
@@ -45,5 +50,10 @@ api_router.include_router(course_cohorts_router)  # P0#3: course cohort views
 api_router.include_router(course_alignment_router)  # P0#4: course/industry alignment
 api_router.include_router(district_training_router)  # P0#5: district training intelligence
 api_router.include_router(training_priorities_router)  # P1.1: training priority engine
+api_router.include_router(curriculum_proposals_router)  # P1.2: curriculum change proposals
+api_router.include_router(trainer_development_router)  # P1.3: trainer development signals
+api_router.include_router(capacity_planning_router)  # P1.4: capacity planning signals
+api_router.include_router(proposal_reviews_router)  # P1.5: human review / approval
+api_router.include_router(outcome_feedback_router)  # P1.6: outcome feedback loop
 api_router.include_router(outcomes_router)  # Person 2: applications, feedback, placements
 api_router.include_router(requirements_router)  # Person 2: requirement detail/skills
