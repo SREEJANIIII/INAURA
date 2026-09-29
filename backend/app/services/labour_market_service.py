@@ -767,7 +767,14 @@ def _fetch_signals_from_supabase() -> List[Dict[str, Any]]:
         if client is None:
             return []
         res = client.table("labour_market_demand_signals").select("*").limit(500).execute()
-        return list(res.data or [])
+        rows = list(res.data or [])
+        # The signals table stores canonical_skill_slug; in-memory signals
+        # carry skill_slug. Normalise here so Supabase-backed reads present
+        # the same shape every consumer (e.g. course alignment) expects.
+        for r in rows:
+            if not r.get("skill_slug"):
+                r["skill_slug"] = r.get("canonical_skill_slug")
+        return rows
     except Exception:
         return []
 
