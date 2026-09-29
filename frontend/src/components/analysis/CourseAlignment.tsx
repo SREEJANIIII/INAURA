@@ -1,26 +1,110 @@
-import { useState } from "react";
-import { getCourseAlignment, type CourseAlignmentResponse } from "../../services/industry";
+import { useEffect, useState } from "react";
+import {
+  getCourseAlignment,
+  getCourseCoverage,
+  listCourseCohorts,
+  listCourses,
+  listInstitutions,
+  type Cohort,
+  type Course,
+  type CourseAlignmentResponse,
+  type CourseCoverage,
+  type Institution,
+} from "../../services/industry";
 
 const titleCase = (v?: string | null) => v ? v.replaceAll("_", " ").replace(/\b\w/g, (c) => c.toUpperCase()) : "Unknown";
 const share = (v?: number | null) => v === null || v === undefined ? "—" : `${Math.round(v * 100)}%`;
 
-// Small additive course-alignment view for the Industry Intelligence page.
-// Evidence-first rows (demand → curriculum → cohort supply → status); takes a
-// course ID (+ optional cohort ID) and queries the deterministic P0 #4
-// projection. Insufficient/suppressed data is labelled, never hidden.
+// Course-alignment view for the Industry Intelligence page.
+// Flow: pick institution → pick course → review the course's full details
+// (record + curriculum coverage) → optional cohort → Evaluate. IDs are never
+// typed by hand; every option comes from the API. Evidence-first rows
+// (demand → curriculum → cohort supply → status); insufficient/suppressed
+// data is labelled, never hidden.
 export default function CourseAlignment({ role }: { role: string }) {
+  const [institutions, setInstitutions] = useState<Institution[]>([]);
+  const [instLoading, setInstLoading] = useState(true);
+  const [instError, setInstError] = useState<string | null>(null);
+  const [instId, setInstId] = useState("");
+
+  const [courses, setCourses] = useState<Course[]>([]);
+  const [coursesLoading, setCoursesLoading] = useState(false);
   const [courseId, setCourseId] = useState("");
+
+  const [coverage, setCoverage] = useState<CourseCoverage | null>(null);
+  const [detailsLoading, setDetailsLoading] = useState(false);
+  const [detailsError, setDetailsError] = useState<string | null>(null);
+
+  const [cohorts, setCohorts] = useState<Cohort[]>([]);
   const [cohortId, setCohortId] = useState("");
+
   const [applied, setApplied] = useState<{ course_id: string; cohort_id?: string } | null>(null);
   const [data, setData] = useState<CourseAlignmentResponse | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
+  // Step 1: institutions drive everything else
+  useEffect(() => {
+    let cancelled = false;
+    setInstLoading(true);
+    setInstError(null);
+    listInstitutions()
+      .then((rows) => { if (!cancelled) { setInstitutions(rows); setInstLoading(false); } })
+      .catch((e: unknown) => {
+        if (!cancelled) {
+          setInstError(e instanceof Error ? e.message : "Institutions could not be loaded.");
+          setInstLoading(false);
+        }
+      });
+    return () => { cancelled = true; };
+  }, []);
+
+  // Step 2: courses for the chosen institution
+  useEffect(() => {
+    setCourses([]);
+    setCourseId("");
+    if (!instId) return;
+    let cancelled = false;
+    setCoursesLoading(true);
+    listCourses(instId)
+      .then((rows) => { if (!cancelled) { setCourses(rows); setCoursesLoading(false); } })
+      .catch(() => { if (!cancelled) setCoursesLoading(false); });
+    return () => { cancelled = true; };
+  }, [instId]);
+
+  // Step 3: full course details (record + curriculum coverage) and cohorts.
+  // Shown BEFORE evaluation — nothing is scored sight-unseen.
+  useEffect(() => {
+    setCoverage(null);
+    setDetailsError(null);
+    setCohorts([]);
+    setCohortId("");
+    setApplied(null);
+    setData(null);
+    setError(null);
+    if (!courseId) return;
+    let cancelled = false;
+    setDetailsLoading(true);
+    Promise.all([
+      getCourseCoverage(courseId).catch(() => null),
+      listCourseCohorts(courseId).catch(() => [] as Cohort[]),
+    ]).then(([cov, chs]) => {
+      if (cancelled) return;
+      setCoverage(cov);
+      if (!cov) setDetailsError("Course curriculum details are unavailable for this course.");
+      setCohorts(chs);
+      setDetailsLoading(false);
+    });
+    return () => { cancelled = true; };
+  }, [courseId, role]);
+
+  const course = courses.find((c) => c.id === courseId) ?? null;
+  const institution = institutions.find((i) => i.id === instId) ?? null;
+
   const submit = (e: React.FormEvent) => {
     e.preventDefault();
-    const cid = courseId.trim();
-    if (!cid) return;
-    const next = { course_id: cid, cohort_id: cohortId.trim() || undefined };
+    if (!courseId) return;
+    const next = { course_id: courseId, cohort_id: cohortId || undefined };
     setApplied(next);
     setLoading(true);
     setError(null);
@@ -29,9 +113,88 @@ export default function CourseAlignment({ role }: { role: string }) {
       .catch((e) => { setError(e instanceof Error ? e.message : "Course alignment unavailable."); setLoading(false); });
   };
 
+  const taughtCount = coverage
+    ? coverage.modules.reduce((n, m) => n + m.skills.length, 0) + coverage.course_level_skills.length
+    : 0;
+
   return <section aria-label="Course alignment">
-    <div className="an-overview__bar"><span><strong>Course alignment</strong><span className="an-faint"> · deterministic demand × curriculum × cohort supply</span></span><form onSubmit={submit} style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}><label className="an-faint" htmlFor="align-course">Course ID</label><input id="align-course" value={courseId} onChange={(e) => setCourseId(e.target.value)} placeholder="course UUID" style={{ maxWidth: 260 }} /><label className="an-faint" htmlFor="align-cohort">Cohort ID</label><input id="align-cohort" value={cohortId} onChange={(e) => setCohortId(e.target.value)} placeholder="optional" style={{ maxWidth: 200 }} /><button type="submit" className="an-link an-link--btn">Evaluate</button></form></div>
-    {!applied && <p className="an-note">Enter a course ID to evaluate its alignment against {role} demand. No scores are computed without evidence.</p>}
+    <div className="an-overview__bar">
+      <span><strong>Course alignment</strong><span className="an-faint"> · deterministic demand × curriculum × cohort supply</span></span>
+    </div>
+
+    {instLoading && <div className="an-skel an-skel--block" aria-label="Loading institutions" />}
+    {instError && <p className="an-empty">{instError}</p>}
+    {!instLoading && !instError && institutions.length === 0 && (
+      <p className="an-note">No institutions are registered yet, so there is nothing to align. Register an institution and its courses first (or seed the deterministic demo supply), then return here to evaluate.</p>
+    )}
+    {!instLoading && !instError && institutions.length > 0 && (
+      <form onSubmit={submit} style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap", marginBottom: "0.75rem" }}>
+        <label className="an-faint" htmlFor="align-inst">Institution</label>
+        <select id="align-inst" value={instId} onChange={(e) => setInstId(e.target.value)} style={{ maxWidth: 280 }}>
+          <option value="">Choose institution…</option>
+          {institutions.map((i) => (
+            <option key={i.id} value={i.id}>{i.name}{i.district ? ` · ${i.district}` : ""}</option>
+          ))}
+        </select>
+        <label className="an-faint" htmlFor="align-course">Course</label>
+        <select id="align-course" value={courseId} onChange={(e) => setCourseId(e.target.value)} disabled={!instId || coursesLoading} style={{ maxWidth: 280 }}>
+          <option value="">{!instId ? "Pick an institution first" : coursesLoading ? "Loading courses…" : "Choose course…"}</option>
+          {courses.map((c) => (
+            <option key={c.id} value={c.id}>{c.name}{c.code ? ` (${c.code})` : ""}</option>
+          ))}
+        </select>
+        <label className="an-faint" htmlFor="align-cohort">Cohort</label>
+        <select id="align-cohort" value={cohortId} onChange={(e) => setCohortId(e.target.value)} disabled={!courseId} style={{ maxWidth: 240 }}>
+          <option value="">Combined supply (all cohorts)</option>
+          {cohorts.map((c) => (
+            <option key={c.id} value={c.id}>{c.name}{c.academic_year ? ` · ${c.academic_year}` : ""}</option>
+          ))}
+        </select>
+        <button type="submit" className="an-link an-link--btn" disabled={!courseId || loading}>
+          {loading ? "Evaluating…" : "Evaluate"}
+        </button>
+      </form>
+    )}
+
+    {instId && !coursesLoading && courses.length === 0 && (
+      <p className="an-note">{institution?.name ?? "This institution"} has no courses registered yet.</p>
+    )}
+
+    {detailsLoading && <div className="an-skel an-skel--block" aria-label="Loading course details" />}
+    {detailsError && course && <p className="an-empty">{detailsError}</p>}
+    {course && !detailsLoading && (
+      <div style={{ background: "var(--paper-2, #f8fafc)", padding: "0.85rem 1rem", borderRadius: "8px", marginBottom: "1rem", border: "1px solid var(--line)" }}>
+        <div style={{ fontSize: "0.8rem", fontWeight: 700, textTransform: "uppercase", color: "var(--muted)", marginBottom: "0.4rem" }}>
+          Selected course — review before evaluating
+        </div>
+        <div style={{ fontSize: "1rem", fontWeight: 700 }}>{course.name}</div>
+        <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(180px, 1fr))", gap: "0.5rem", fontSize: "0.85rem", marginTop: "0.4rem" }}>
+          <div>Institution: <strong>{institution?.name || "—"}</strong></div>
+          <div>Code: <strong>{course.code || "—"}</strong></div>
+          <div>Level: <strong>{course.level || "—"}</strong></div>
+          <div>Duration: <strong>{course.duration_text || "—"}</strong></div>
+          <div>Delivery: <strong>{course.delivery_mode ? titleCase(course.delivery_mode) : "—"}</strong></div>
+          <div>Status: <strong>{titleCase(course.status)}</strong></div>
+        </div>
+        {course.description && (
+          <p style={{ fontSize: "0.85rem", color: "var(--muted)", margin: "0.5rem 0 0" }}>{course.description}</p>
+        )}
+        {coverage && (
+          <div style={{ fontSize: "0.85rem", marginTop: "0.5rem" }}>
+            Curriculum: <strong>{coverage.modules.length} module{coverage.modules.length === 1 ? "" : "s"}</strong> ·{" "}
+            <strong>{taughtCount} taught skill{taughtCount === 1 ? "" : "s"}</strong>
+            {coverage.modules.length > 0 && (
+              <span style={{ color: "var(--muted)" }}> ({coverage.modules.map((m) => m.module_name || "Untitled module").join(" · ")})</span>
+            )}
+          </div>
+        )}
+        {courseId && cohorts.length === 0 && !detailsLoading && (
+          <p className="an-note" style={{ margin: "0.5rem 0 0" }}>No cohorts for this course yet — evaluation will use course-combined supply (cohort detail will read as insufficient evidence).</p>
+        )}
+      </div>
+    )}
+
+    {!applied && course && <p className="an-note">Review the course details above, then Evaluate to align it against {role} demand. No scores are computed without evidence.</p>}
     {loading && <div className="an-skel an-skel--block" aria-label="Loading course alignment" />}
     {error && <p className="an-empty">{error}</p>}
     {!loading && !error && data && <>

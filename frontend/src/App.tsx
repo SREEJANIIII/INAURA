@@ -34,6 +34,7 @@ const CareerSkill = lazy(() => import("./pages/CareerSkill"));
 const Analysis = lazy(() => import("./pages/Analysis"));
 const AnalysisResults = lazy(() => import("./pages/AnalysisResults"));
 const Industry = lazy(() => import("./pages/Industry"));
+const Alignment = lazy(() => import("./pages/Alignment"));
 const CapabilityMap = lazy(() => import("./pages/CapabilityMap"));
 const SkillAssessment = lazy(() => import("./pages/SkillAssessment"));
 const Roadmap = lazy(() => import("./pages/Roadmap"));
@@ -92,6 +93,7 @@ export default function App() {
         <Route path="/analysis" element={<Analysis />} />
         <Route path="/analysis/results" element={<AnalysisResults />} />
         <Route path="/industry" element={<Industry />} />
+        <Route path="/alignment" element={<Alignment />} />
         <Route path="/analysis/capabilities" element={<CapabilityMap />} />
         <Route path="/skill-assessment" element={<SkillAssessment view="skills" />} />
         <Route path="/skill-assessment/dsa" element={<SkillAssessment view="dsa" />} />

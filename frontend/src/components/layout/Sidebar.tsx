@@ -44,6 +44,11 @@ const items: NavItem[] = [
     icon: <Icon><circle cx="12" cy="12" r="8.5" /><path d="M3.5 12h17" /><path d="M12 3.5c2.5 2.3 3.8 5.2 3.8 8.5s-1.3 6.2-3.8 8.5c-2.5-2.3-3.8-5.2-3.8-8.5S9.5 5.8 12 3.5z" /></Icon>,
   },
   {
+    label: "Course Alignment",
+    to: "/alignment",
+    icon: <Icon><path d="M9 3.5h6" /><path d="M10 3.5V6l-5.5 9.5a2.1 2.1 0 0 0 1.8 3.2h11.4a2.1 2.1 0 0 0 1.8-3.2L14 6V3.5" /><path d="M7.5 14.5h9" /></Icon>,
+  },
+  {
     label: "Skill Assessment",
     to: "/skill-assessment",
     icon: <Icon><circle cx="12" cy="12" r="8.5" /><path d="m8.5 12.2 2.4 2.3 4.6-4.9" /></Icon>,

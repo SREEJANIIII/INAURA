@@ -691,6 +691,83 @@ export function setTargetRole(target_role: string) {
   });
 }
 
+// P0 #2 training supply (read-only listings for pickers — callers never
+// invent UUIDs; they choose from what the API returns).
+export type Institution = {
+  id: string;
+  name: string;
+  code?: string | null;
+  institution_type: string;
+  district?: string | null;
+  state?: string | null;
+  city?: string | null;
+  status: string;
+};
+
+export type Course = {
+  id: string;
+  institution_id: string;
+  name: string;
+  code?: string | null;
+  description?: string | null;
+  level?: string | null;
+  duration_text?: string | null;
+  delivery_mode?: string | null;
+  status: string;
+};
+
+export type Cohort = {
+  id: string;
+  institution_id: string;
+  course_id: string;
+  name: string;
+  code?: string | null;
+  academic_year?: string | null;
+  status: string;
+};
+
+export type CourseCoverageSkill = {
+  id: string;
+  module_id?: string | null;
+  source_concept: string;
+  canonical_skill_slug?: string | null;
+  mapping_status: string;
+  coverage?: string | null;
+  importance?: string | null;
+};
+
+export type CourseCoverage = {
+  course: Course;
+  modules: {
+    module_id: string;
+    module_name?: string | null;
+    sequence?: number | null;
+    skills: CourseCoverageSkill[];
+  }[];
+  course_level_skills: CourseCoverageSkill[];
+  counts: Record<string, number>;
+};
+
+export function listInstitutions(params?: { district?: string; state?: string }) {
+  const q = new URLSearchParams();
+  if (params?.district) q.set("district", params.district);
+  if (params?.state) q.set("state", params.state);
+  const suffix = q.toString() ? `?${q.toString()}` : "";
+  return apiFetch<Institution[]>(`/institutions${suffix}`);
+}
+
+export function listCourses(institutionId: string) {
+  return apiFetch<Course[]>(`/institutions/${encodeURIComponent(institutionId)}/courses`);
+}
+
+export function getCourseCoverage(courseId: string) {
+  return apiFetch<CourseCoverage>(`/courses/${encodeURIComponent(courseId)}/coverage`);
+}
+
+export function listCourseCohorts(courseId: string) {
+  return apiFetch<Cohort[]>(`/courses/${encodeURIComponent(courseId)}/cohorts`);
+}
+
 export function prepareAnalysis(target_role?: string) {
   return apiFetch<{
     status: AnalysisState["status"];
