@@ -10,6 +10,7 @@ import {
   confirmPlacement,
   listAlignments,
   type ApplicationDetail,
+  type CandidateSkill,
   type EmployerFeedback,
   type Placement,
   type Alignment,
@@ -30,6 +31,79 @@ type CandidateDetailModalProps = {
 };
 
 type ModalTab = "skills" | "decision" | "feedback" | "placement";
+
+const PROFILE_PREVIEW_N = 8;
+
+function confidenceLabel(confidence: number | null | undefined): string {
+  if (confidence == null) return "Confidence n/a";
+  if (confidence >= 0.75) return "High confidence";
+  if (confidence >= 0.5) return "Medium confidence";
+  return "Developing";
+}
+
+function CandidateSkillProfileList({ skills }: { skills: CandidateSkill[] }) {
+  const [expanded, setExpanded] = useState(false);
+  const visible = expanded ? skills : skills.slice(0, PROFILE_PREVIEW_N);
+  return (
+    <div>
+      <div style={{ display: "flex", flexDirection: "column", gap: "0.45rem" }}>
+        {visible.map((s) => (
+          <div
+            key={s.skill_id}
+            style={{
+              display: "flex",
+              alignItems: "center",
+              gap: "0.75rem",
+              background: "var(--paper, #ffffff)",
+              border: "1px solid var(--line)",
+              padding: "0.5rem 0.75rem",
+              borderRadius: "8px",
+              fontSize: "0.82rem",
+            }}
+          >
+            <div style={{ minWidth: 0, flex: "1 1 auto" }}>
+              <div style={{ display: "flex", justifyContent: "space-between", gap: "0.5rem", alignItems: "baseline" }}>
+                <strong style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                  {s.skill_name || s.skill_id}
+                </strong>
+                <span style={{ fontWeight: 700, flexShrink: 0 }}>
+                  {s.proficiency != null ? `${Math.round(s.proficiency * 100)}%` : "—"}
+                </span>
+              </div>
+              <div style={{ height: 6, borderRadius: 999, background: "var(--paper-2, #eef2f7)", marginTop: "0.3rem", overflow: "hidden" }}>
+                <div
+                  style={{
+                    width: `${Math.round((s.proficiency ?? 0) * 100)}%`,
+                    height: "100%",
+                    borderRadius: 999,
+                    background: "#0d9488",
+                  }}
+                />
+              </div>
+              <div style={{ display: "flex", gap: "0.5rem", marginTop: "0.25rem", fontSize: "0.72rem", color: "var(--muted)" }}>
+                <span>{confidenceLabel(s.confidence)}</span>
+                {s.skill_category && <span>· {s.skill_category}</span>}
+                {s.evidence_count != null && (
+                  <span>· {s.evidence_count} evidence signal{s.evidence_count === 1 ? "" : "s"}</span>
+                )}
+              </div>
+            </div>
+          </div>
+        ))}
+      </div>
+      {skills.length > PROFILE_PREVIEW_N && (
+        <button
+          type="button"
+          className="emp-btn emp-btn--secondary emp-btn--sm"
+          style={{ marginTop: "0.6rem" }}
+          onClick={() => setExpanded((v) => !v)}
+        >
+          {expanded ? "Show fewer" : `View all ${skills.length} skills`}
+        </button>
+      )}
+    </div>
+  );
+}
 
 export default function CandidateDetailModal({
   applicationId,
@@ -135,10 +209,12 @@ export default function CandidateDetailModal({
     setSubmittingFeedback(true);
     setError(null);
     try {
-      const skillFeedbackPayload = (detail.candidate_skills || []).map((s) => ({
+      // Skill observations mirror the job requirement match. Never invent
+      // levels: a missing assessment or requirement stays null.
+      const skillFeedbackPayload = (detail.skill_matches ?? []).map((s) => ({
         skill_id: s.skill_id,
-        expected_level: s.required_level ?? 0.7,
-        observed_level: s.observed_level ?? 0.7,
+        expected_level: s.required_level ?? null,
+        observed_level: s.observed_level ?? null,
         comment: s.status === "gap" ? "Needs growth" : "Adequate proficiency observed",
       }));
 
@@ -173,7 +249,7 @@ export default function CandidateDetailModal({
         application_id: detail.id,
         role_title: detail.requirement_title || "Software Engineer",
         joining_date: joiningDate || null,
-        status: "pending",
+        status: joiningDate ? "joined" : "selected",
       });
       await loadData();
       onApplicationUpdated();
@@ -309,14 +385,17 @@ export default function CandidateDetailModal({
                   </div>
                 )}
 
-                {/* Skill Alignment Comparison */}
+                {/* Section A: Job Requirement Match */}
                 <div style={{ marginBottom: "1.25rem" }}>
                   <h4 style={{ fontSize: "0.95rem", fontWeight: 700, margin: "0 0 0.5rem" }}>
-                    Required Skills vs. Demonstrated Proficiency
+                    Job Requirement Match
                   </h4>
-                  {(!detail.candidate_skills || detail.candidate_skills.length === 0) ? (
+                  {(!detail.skill_matches || detail.skill_matches.length === 0) ? (
                     <div style={{ padding: "0.75rem", background: "var(--paper-2, #f8fafc)", borderRadius: "8px", fontSize: "0.85rem", color: "var(--muted)" }}>
-                      No explicit skill requirements mapped to this requirement yet. Manage skills under Hiring Requirements.
+                      This hiring requirement has no mapped skills yet. Manage skills under Hiring Requirements.
+                      {(detail.candidate_skills?.length ?? 0) > 0 && (
+                        <span> Showing the candidate&apos;s verified skill profile below.</span>
+                      )}
                     </div>
                   ) : (
                     <div className="emp-table-wrap">
@@ -324,14 +403,14 @@ export default function CandidateDetailModal({
                         <thead>
                           <tr>
                             <th>Skill</th>
-                            <th>Priority</th>
-                            <th>Target Level</th>
-                            <th>Observed / Assessed</th>
+                            <th>Importance</th>
+                            <th>Required</th>
+                            <th>Candidate</th>
                             <th>Status</th>
                           </tr>
                         </thead>
                         <tbody>
-                          {detail.candidate_skills.map((sk) => {
+                          {detail.skill_matches.map((sk) => {
                             const isMet = sk.status === "met";
                             const isGap = sk.status === "gap";
                             return (
@@ -344,7 +423,7 @@ export default function CandidateDetailModal({
                                     {sk.importance}
                                   </span>
                                 </td>
-                                <td>{sk.required_level != null ? `${Math.round(sk.required_level * 100)}%` : "Not specified"}</td>
+                                <td>{sk.required_level != null ? `${Math.round(sk.required_level * 100)}%` : "—"}</td>
                                 <td>
                                   {sk.observed_level != null ? (
                                     <span>
@@ -358,18 +437,18 @@ export default function CandidateDetailModal({
                                       </span>
                                     </span>
                                   ) : (
-                                    <span style={{ color: "var(--muted)" }}>Not assessed</span>
+                                    <span style={{ color: "var(--muted)" }}>—</span>
                                   )}
                                 </td>
                                 <td>
                                   {isMet && (
-                                    <span className="emp-badge emp-badge--open">✓ Requirement Met</span>
+                                    <span className="emp-badge emp-badge--open">✓ Met</span>
                                   )}
                                   {isGap && (
-                                    <span className="emp-badge emp-badge--rejected">Skill Gap Identified</span>
+                                    <span className="emp-badge emp-badge--rejected">⚠ Gap</span>
                                   )}
                                   {!isMet && !isGap && (
-                                    <span className="emp-badge emp-badge--applied">Under Review</span>
+                                    <span className="emp-badge emp-badge--applied">Unassessed</span>
                                   )}
                                 </td>
                               </tr>
@@ -381,14 +460,31 @@ export default function CandidateDetailModal({
                   )}
                 </div>
 
-                {/* Candidate Evidence Items */}
+                {/* Section B: Candidate Skill Profile (INAURA-assessed) */}
                 <div style={{ marginBottom: "1.25rem" }}>
                   <h4 style={{ fontSize: "0.95rem", fontWeight: 700, margin: "0 0 0.5rem" }}>
-                    Demonstrated Evidence &amp; Artifacts
+                    Candidate Skill Profile{" "}
+                    <span style={{ fontWeight: 400, fontSize: "0.78rem", color: "var(--muted)" }}>
+                      INAURA-assessed, not self-reported
+                    </span>
+                  </h4>
+                  {(!detail.candidate_skills || detail.candidate_skills.length === 0) ? (
+                    <div style={{ padding: "0.75rem", background: "var(--paper-2, #f8fafc)", borderRadius: "8px", fontSize: "0.85rem", color: "var(--muted)" }}>
+                      No assessed skills are available for this candidate yet.
+                    </div>
+                  ) : (
+                    <CandidateSkillProfileList skills={detail.candidate_skills} />
+                  )}
+                </div>
+
+                {/* Section C: Evidence & Artifacts */}
+                <div style={{ marginBottom: "1.25rem" }}>
+                  <h4 style={{ fontSize: "0.95rem", fontWeight: 700, margin: "0 0 0.5rem" }}>
+                    Evidence &amp; Artifacts
                   </h4>
                   {(!detail.candidate_evidence || detail.candidate_evidence.length === 0) ? (
                     <p style={{ fontSize: "0.85rem", color: "var(--muted)", margin: 0 }}>
-                      No standalone projects or external certifications linked by the candidate yet.
+                      No projects or certifications have been added by this candidate yet.
                     </p>
                   ) : (
                     <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(280px, 1fr))", gap: "0.75rem" }}>
@@ -396,17 +492,24 @@ export default function CandidateDetailModal({
                         <div key={ev.id} style={{ background: "var(--paper-2, #f8fafc)", padding: "0.75rem", borderRadius: "8px", border: "1px solid var(--line)" }}>
                           <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: "0.5rem" }}>
                             <strong style={{ fontSize: "0.85rem" }}>{ev.title || "Evidence Artifact"}</strong>
-                            <span style={{ display: "flex", gap: "0.3rem", alignItems: "center" }}>
-                              <span className="emp-badge emp-badge--applied" style={{ fontSize: "0.7rem" }}>{ev.type}</span>
-                              <span
-                                className="emp-badge emp-badge--applied"
-                                style={{ fontSize: "0.68rem" }}
-                                title="Submitted by the candidate; review the linked artifact before relying on it"
-                              >
-                                Student-provided
-                              </span>
+                            <span className="emp-badge emp-badge--applied" style={{ fontSize: "0.7rem" }}>
+                              {ev.type === "project" ? "Project" : ev.type === "certification" ? "Certification" : ev.type}
                             </span>
                           </div>
+                          {ev.issuing_org && (
+                            <div style={{ fontSize: "0.78rem", color: "var(--muted)", marginTop: "0.25rem" }}>
+                              Issued by <strong>{ev.issuing_org}</strong>
+                            </div>
+                          )}
+                          {ev.technologies && ev.technologies.length > 0 && (
+                            <div style={{ display: "flex", flexWrap: "wrap", gap: "0.3rem", marginTop: "0.35rem" }}>
+                              {ev.technologies.slice(0, 6).map((t) => (
+                                <span key={t} style={{ fontSize: "0.7rem", padding: "0.1rem 0.45rem", background: "rgba(13, 148, 136, 0.08)", border: "1px solid rgba(13, 148, 136, 0.2)", borderRadius: "999px" }}>
+                                  {t}
+                                </span>
+                              ))}
+                            </div>
+                          )}
                           {ev.description && (
                             <p style={{ fontSize: "0.8rem", color: "var(--muted)", margin: "0.35rem 0" }}>
                               {ev.description}
@@ -419,7 +522,7 @@ export default function CandidateDetailModal({
                               rel="noreferrer noopener"
                               style={{ fontSize: "0.75rem", color: "#0d9488", textDecoration: "underline" }}
                             >
-                              Open Source Link ↗
+                              Open link ↗
                             </a>
                           )}
                         </div>

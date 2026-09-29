@@ -139,7 +139,7 @@ def test_employer_transition_visible_to_student():
                            "status": "screening"}]],
     })
     with patch.object(svc, "_get_application", return_value=dict(app)), \
-         patch.object(svc, "_actor_type_for", return_value="employer"), \
+         patch.object(svc, "_actor_roles_for", return_value={"employer"}), \
          patch.object(svc.emp, "_requirement_employer", return_value={"employer_id": "e1"}), \
          patch.object(svc, "_ensure_client", return_value=fake):
         updated = svc.transition_status("app-1", "owner-1", "screening", note="Shortlisted")
@@ -154,7 +154,7 @@ def test_employer_transition_visible_to_student():
 def test_student_cannot_take_employer_transition():
     app = {"id": "app-1", "student_id": "s1", "hiring_requirement_id": "r1", "status": "applied"}
     with patch.object(svc, "_get_application", return_value=app), \
-         patch.object(svc, "_actor_type_for", return_value="student"):
+         patch.object(svc, "_actor_roles_for", return_value={"student"}):
         with pytest.raises(HTTPException) as exc:
             svc.transition_status("app-1", "s1", "screening")
     assert exc.value.status_code == 403
@@ -163,7 +163,7 @@ def test_student_cannot_take_employer_transition():
 def test_student_cannot_mark_self_selected():
     app = {"id": "app-1", "student_id": "s1", "hiring_requirement_id": "r1", "status": "offer_received"}
     with patch.object(svc, "_get_application", return_value=app), \
-         patch.object(svc, "_actor_type_for", return_value="student"):
+         patch.object(svc, "_actor_roles_for", return_value={"student"}):
         with pytest.raises(HTTPException) as exc:
             svc.transition_status("app-1", "s1", "selected")
     assert exc.value.status_code == 403
@@ -235,7 +235,7 @@ def test_placement_owner_reads_outsider_cannot():
 def test_student_application_detail_hidden_from_stranger():
     app = {"id": "app-1", "student_id": "s1", "hiring_requirement_id": "r1", "status": "applied"}
     with patch.object(svc, "_get_application", return_value=app), \
-         patch.object(svc, "_actor_type_for", return_value=None):
+         patch.object(svc, "_actor_roles_for", return_value=set()):
         with pytest.raises(HTTPException) as exc:
             svc.get_application_detail("s2", "app-1")
     assert exc.value.status_code == 404

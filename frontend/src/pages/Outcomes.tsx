@@ -51,7 +51,7 @@ export default function Outcomes() {
       await createPlacement({
         employer_id: employerId.trim(),
         role_title: roleTitle.trim(),
-        status: "joined",
+        status: "selected",
       });
       setEmployerId("");
       setRoleTitle("");

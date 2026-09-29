@@ -77,12 +77,31 @@ def _get_application(app_id: str) -> dict:
     return rows[0]
 
 
-def _actor_type_for(app: dict, actor_id: str) -> str | None:
+def _actor_roles_for(app: dict, actor_id: str) -> set[str]:
+    """All roles actor_id holds on this application.
+
+    A user can be BOTH the applicant and an employer member (e.g. testing by
+    applying to their own company's posting). Old code returned only the first
+    match, which hid employer data in that case.
+    """
+    roles: set[str] = set()
     if app.get("student_id") == actor_id:
+        roles.add("student")
+    try:
+        req = emp._requirement_employer(app["hiring_requirement_id"])
+        m = emp.get_membership(actor_id, req["employer_id"])
+        if m:
+            roles.add("employer")
+    except Exception:
+        pass
+    return roles
+
+
+def _actor_type_for(app: dict, actor_id: str) -> str | None:
+    roles = _actor_roles_for(app, actor_id)
+    if "student" in roles:
         return "student"
-    req = emp._requirement_employer(app["hiring_requirement_id"])
-    m = emp.get_membership(actor_id, req["employer_id"])
-    if m:
+    if "employer" in roles:
         return "employer"
     return None
 
@@ -313,9 +332,10 @@ def list_open_roles(user_id: str, search: str | None = None, limit: int = 50) ->
 
 def get_application_detail(user_id: str, app_id: str) -> dict:
     app = _get_application(app_id)
-    actor = _actor_type_for(app, user_id)
-    if not actor:
+    roles = _actor_roles_for(app, user_id)
+    if not roles:
         raise HTTPException(status_code=404, detail="Application not found")
+    actor = "student" if "student" in roles else "employer"
     client = _ensure_client()
     try:
         eresp = client.table("application_events").select("*").eq("application_id", app_id).order("created_at").execute()
@@ -326,7 +346,7 @@ def get_application_detail(user_id: str, app_id: str) -> dict:
     app["requirement_title"] = req.get("title")
     app["events"] = (eresp.data if eresp else []) or []
 
-    if actor == "employer":
+    if "employer" in roles:
         try:
             presp = client.table("profiles").select("full_name,college,degree,branch,graduation_year").eq("user_id", app["student_id"]).execute()
             pdata = (presp.data or [None])[0]
@@ -336,50 +356,85 @@ def get_application_detail(user_id: str, app_id: str) -> dict:
         except Exception:
             pass
 
-        # Requirement skills & candidate skills alignment
+        # Requirement skills for THIS job (read-only; never modified here)
         try:
             rsresp = client.table("hiring_requirement_skills").select("skill_id,importance,required_level").eq("hiring_requirement_id", app["hiring_requirement_id"]).execute()
             r_skills = rsresp.data or []
-            sids = [rs["skill_id"] for rs in r_skills if rs.get("skill_id")]
-            sk_meta = {}
-            cand_skills_map = {}
-            if sids:
-                try:
-                    sk_names_resp = client.table("skills").select("id,display_name,category").in_("id", sids).execute()
-                    sk_meta = {s["id"]: s for s in (sk_names_resp.data or [])}
-                except Exception:
-                    pass
-                try:
-                    sa_resp = client.table("skill_assessments").select("skill_id,proficiency").eq("user_id", app["student_id"]).in_("skill_id", sids).execute()
-                    for sa in (sa_resp.data or []):
-                        cand_skills_map[sa["skill_id"]] = sa.get("proficiency")
-                except Exception:
-                    pass
-            skill_matches = []
-            for rs in r_skills:
-                sid = rs.get("skill_id")
-                req_lvl = rs.get("required_level")
-                cand_lvl = cand_skills_map.get(sid)
-                meta = sk_meta.get(sid, {})
-                status = "unassessed"
-                if cand_lvl is not None and req_lvl is not None:
-                    status = "met" if cand_lvl >= req_lvl else "gap"
-                skill_matches.append({
-                    "skill_id": sid,
-                    "skill_name": meta.get("display_name") or sid,
-                    "importance": rs.get("importance"),
-                    "required_level": req_lvl,
-                    "observed_level": cand_lvl,
-                    "status": status,
-                })
-            app["candidate_skills"] = skill_matches
         except Exception:
-            app["candidate_skills"] = []
+            r_skills = []
 
-        # Candidate evidence: projects & certifications
+        # Full assessed profile for the candidate (read-only over the
+        # Person 1 skill engine: skill_assessments + skills metadata).
+        # One bulk query each — no per-skill round trips.
+        try:
+            sa_resp = client.table("skill_assessments").select(
+                "skill_id,proficiency,confidence,evidence_count,evidence_weight,source_diversity"
+            ).eq("user_id", app["student_id"]).execute()
+            assessments = sa_resp.data or []
+        except Exception:
+            assessments = []
+
+        try:
+            meta_ids = list({
+                str(rs.get("skill_id")) for rs in r_skills if rs.get("skill_id")
+            } | {
+                str(sa.get("skill_id")) for sa in assessments if sa.get("skill_id")
+            })
+            sk_meta: dict = {}
+            if meta_ids:
+                sk_names_resp = client.table("skills").select("id,display_name,canonical_name,category").in_("id", meta_ids).execute()
+                sk_meta = {str(s["id"]): s for s in (sk_names_resp.data or [])}
+        except Exception:
+            sk_meta = {}
+
+        # Broader verified skill profile (INAURA-assessed, never self-reported).
+        assessed_by_skill = {str(sa.get("skill_id")): sa for sa in assessments if sa.get("skill_id")}
+        candidate_profile_skills = []
+        for sid, sa in assessed_by_skill.items():
+            meta = sk_meta.get(sid, {})
+            candidate_profile_skills.append({
+                "skill_id": sid,
+                "skill_name": meta.get("display_name") or meta.get("canonical_name") or sid,
+                "skill_category": meta.get("category"),
+                "proficiency": sa.get("proficiency"),
+                "confidence": sa.get("confidence"),
+                "evidence_count": sa.get("evidence_count"),
+                "evidence_weight": sa.get("evidence_weight"),
+                "source_diversity": sa.get("source_diversity"),
+            })
+        candidate_profile_skills.sort(key=lambda s: (s.get("proficiency") is None, -(s.get("proficiency") or 0)))
+        app["candidate_skills"] = candidate_profile_skills
+
+        # Job-specific comparison: requirement skill vs assessed proficiency.
+        # No fabrication: missing assessment -> observed null / "unassessed";
+        # missing required_level stays null.
+        skill_matches = []
+        for rs in r_skills:
+            sid = str(rs.get("skill_id")) if rs.get("skill_id") is not None else None
+            if not sid:
+                continue
+            req_lvl = rs.get("required_level")
+            sa = assessed_by_skill.get(sid)
+            cand_lvl = sa.get("proficiency") if sa else None
+            meta = sk_meta.get(sid, {})
+            status = "unassessed"
+            if cand_lvl is not None and req_lvl is not None:
+                status = "met" if cand_lvl >= req_lvl else "gap"
+            skill_matches.append({
+                "skill_id": sid,
+                "skill_name": meta.get("display_name") or meta.get("canonical_name") or sid,
+                "importance": rs.get("importance"),
+                "required_level": req_lvl,
+                "observed_level": cand_lvl,
+                "status": status,
+            })
+        app["skill_matches"] = skill_matches
+
+        # Candidate evidence: projects + certifications + URL/file evidence
+        # rows (read-only). No new evidence system; no raw record dumps.
         evidence_items = []
         try:
-            pj_resp = client.table("projects").select("id,name,description,project_url,github_url").eq("user_id", app["student_id"]).execute()
+            pj_resp = client.table("projects").select("id,name,description,technologies,project_url,github_url").eq("user_id", app["student_id"]).execute()
             for pj in (pj_resp.data or []):
                 evidence_items.append({
                     "id": pj["id"],
@@ -387,6 +442,7 @@ def get_application_detail(user_id: str, app_id: str) -> dict:
                     "title": pj.get("name"),
                     "description": pj.get("description"),
                     "url": pj.get("project_url") or pj.get("github_url"),
+                    "technologies": pj.get("technologies"),
                 })
         except Exception:
             pass
@@ -396,9 +452,25 @@ def get_application_detail(user_id: str, app_id: str) -> dict:
                 evidence_items.append({
                     "id": ct["id"],
                     "type": "certification",
-                    "title": f"{ct.get('name')} ({ct.get('issuing_org')})",
+                    "title": ct.get("name"),
                     "url": ct.get("certificate_url"),
                     "description": None,
+                    "issuing_org": ct.get("issuing_org"),
+                })
+        except Exception:
+            pass
+        try:
+            ev_resp = client.table("evidence").select("id,evidence_type,title,source_url").eq("user_id", app["student_id"]).execute()
+            for ev in (ev_resp.data or []):
+                if not ev.get("source_url") and not ev.get("title"):
+                    continue
+                evidence_items.append({
+                    "id": ev["id"],
+                    "type": str(ev.get("evidence_type") or "evidence"),
+                    "title": ev.get("title") or str(ev.get("evidence_type") or "Evidence"),
+                    "url": ev.get("source_url"),
+                    "description": None,
+                    "source": "evidence",
                 })
         except Exception:
             pass
@@ -418,10 +490,10 @@ def transition_status(app_id: str, actor_id: str, to_status: str, note: str | No
     if to_status not in allowed:
         raise HTTPException(status_code=400, detail=f"Invalid transition {from_status} -> {to_status}")
     required_actor = allowed[to_status]
-    actual_actor = _actor_type_for(app, actor_id)
-    if not actual_actor:
+    roles = _actor_roles_for(app, actor_id)
+    if not roles:
         raise HTTPException(status_code=404, detail="Application not found")
-    if actual_actor != required_actor:
+    if required_actor not in roles:
         raise HTTPException(
             status_code=403,
             detail=f"Transition {from_status} -> {to_status} is {required_actor}-controlled",
@@ -654,18 +726,25 @@ def _attach_placement_metadata(rows: list) -> list:
     return rows
 
 
-def create_placement(student_id: str, payload: dict) -> dict:
+def create_placement(user_id: str, payload: dict) -> dict:
     client = _ensure_client()
     app_id = payload.get("application_id")
+    effective_student_id = user_id
     if app_id:
         app = _get_application(str(app_id))
-        if app.get("student_id") != student_id:
-            raise HTTPException(status_code=400, detail="Application belongs to a different student")
         req = emp._requirement_employer(app["hiring_requirement_id"])
         derived_emp_id = str(req["employer_id"])
         if payload.get("employer_id") and str(payload["employer_id"]) != derived_emp_id:
             raise HTTPException(status_code=400, detail="employer_id does not match the application requirement")
         target_employer_id = derived_emp_id
+        if app.get("student_id") != user_id:
+            # Employer flow: a member of the hiring employer may record the
+            # placement for their candidate's application. The placement keeps
+            # the candidate's student_id (not the employer's user id).
+            m = emp.get_membership(user_id, derived_emp_id)
+            if not m:
+                raise HTTPException(status_code=400, detail="Application belongs to a different student")
+            effective_student_id = app.get("student_id")
         try:
             pre = client.table("placement_outcomes").select("id").eq("application_id", str(app_id)).execute()
             if pre.data:
@@ -682,6 +761,14 @@ def create_placement(student_id: str, payload: dict) -> dict:
         if not (eresp.data or []):
             raise HTTPException(status_code=400, detail="Invalid employer_id: employer does not exist")
         target_employer_id = str(target_employer_id)
+        # Guard against silent data corruption: an employer member creating an
+        # unlinked placement (no application_id) would otherwise store their
+        # own user id as student_id. Require a linked application instead.
+        if emp.get_membership(user_id, target_employer_id):
+            raise HTTPException(
+                status_code=400,
+                detail="application_id is required when creating a placement as employer — select a candidate application",
+            )
 
     status = payload.get("status", "selected")
     if status not in ("offer_accepted", "selected", "joined", "declined", "not_joined"):
@@ -701,7 +788,7 @@ def create_placement(student_id: str, payload: dict) -> dict:
     now = datetime.now(timezone.utc).isoformat()
     try:
         resp = client.table("placement_outcomes").insert({
-            "student_id": student_id,
+            "student_id": effective_student_id,
             "employer_id": target_employer_id,
             "application_id": str(app_id) if app_id else None,
             "role_title": role_title.strip(),

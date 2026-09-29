@@ -71,7 +71,7 @@ export default function EmployerPlacements() {
         application_id: newAppId || null,
         role_title: newRoleTitle.trim(),
         joining_date: newJoiningDate || null,
-        status: "pending",
+        status: newJoiningDate ? "joined" : "selected",
       });
       setShowCreateModal(false);
       setNewAppId("");

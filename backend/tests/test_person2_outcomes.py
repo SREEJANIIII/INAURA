@@ -86,7 +86,7 @@ def _mock_app(status="applied", student="student-1", req="req-1"):
 def test_wrong_actor_gets_403_not_400():
     app = _mock_app("applied")
     with patch.object(svc, "_get_application", return_value=app), \
-         patch.object(svc, "_actor_type_for", return_value="student"):
+         patch.object(svc, "_actor_roles_for", return_value={"student"}):
         # applied->screening is employer-controlled; student attempt must be 403
         with pytest.raises(HTTPException) as exc:
             svc.transition_status("app-1", "student-1", "screening")
@@ -96,7 +96,7 @@ def test_wrong_actor_gets_403_not_400():
 def test_invalid_transition_gets_400():
     app = _mock_app("saved")
     with patch.object(svc, "_get_application", return_value=app), \
-         patch.object(svc, "_actor_type_for", return_value="student"):
+         patch.object(svc, "_actor_roles_for", return_value={"student"}):
         with pytest.raises(HTTPException) as exc:
             svc.transition_status("app-1", "student-1", "interview")
         assert exc.value.status_code == 400
@@ -113,7 +113,7 @@ def test_terminal_transition_blocked_400():
 def test_unknown_actor_gets_404_enumeration_safe():
     app = _mock_app("applied")
     with patch.object(svc, "_get_application", return_value=app), \
-         patch.object(svc, "_actor_type_for", return_value=None):
+         patch.object(svc, "_actor_roles_for", return_value=set()):
         with pytest.raises(HTTPException) as exc:
             svc.transition_status("app-1", "stranger", "screening")
         assert exc.value.status_code == 404

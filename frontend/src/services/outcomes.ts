@@ -37,12 +37,30 @@ export type CandidateSkillMatch = {
   status?: "met" | "gap" | "unassessed" | string | null;
 };
 
+/** Job-specific comparison between requirement and candidate (skill_matches). */
+export type SkillMatch = CandidateSkillMatch;
+
+/** One row of the candidate's broader INAURA-assessed skill profile. */
+export type CandidateSkill = {
+  skill_id: string;
+  skill_name?: string | null;
+  skill_category?: string | null;
+  proficiency?: number | null;
+  confidence?: number | null;
+  evidence_count?: number | null;
+  evidence_weight?: number | null;
+  source_diversity?: number | null;
+};
+
 export type CandidateEvidenceItem = {
   id: string;
   type: string;
   title?: string | null;
   url?: string | null;
   description?: string | null;
+  technologies?: string[] | null;
+  issuing_org?: string | null;
+  source?: string | null;
 };
 
 export type Application = {
@@ -64,7 +82,8 @@ export type Application = {
 export type ApplicationDetail = Application & {
   events: ApplicationEvent[];
   candidate_profile?: CandidateProfile | null;
-  candidate_skills?: CandidateSkillMatch[];
+  candidate_skills?: CandidateSkill[];
+  skill_matches?: SkillMatch[];
   candidate_evidence?: CandidateEvidenceItem[];
 };
 
@@ -267,7 +286,7 @@ export function createPlacement(payload: {
   role_title: string;
   location?: string | null;
   joining_date?: string | null;
-  status?: string;
+  status?: "offer_accepted" | "selected" | "joined" | "declined" | "not_joined";
 }) {
   return apiFetch<Placement>("/outcomes/placements", {
     method: "POST",

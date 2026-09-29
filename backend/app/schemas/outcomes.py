@@ -61,18 +61,43 @@ class CandidateSkillMatch(BaseModel):
     status: Optional[str] = None
 
 
+class CandidateSkillProfile(BaseModel):
+    """One row of the candidate's broader INAURA-assessed skill profile.
+
+    Read directly from skill_assessments + skills metadata. Never fabricated:
+    every field mirrors the stored assessment row.
+    """
+
+    skill_id: str
+    skill_name: Optional[str] = None
+    skill_category: Optional[str] = None
+    proficiency: Optional[float] = None
+    confidence: Optional[float] = None
+    evidence_count: Optional[int] = None
+    evidence_weight: Optional[float] = None
+    source_diversity: Optional[float] = None
+
+
 class CandidateEvidenceItem(BaseModel):
     id: str
     type: str
     title: Optional[str] = None
     url: Optional[str] = None
     description: Optional[str] = None
+    technologies: Optional[List[str]] = None
+    issuing_org: Optional[str] = None
+    source: Optional[str] = None
 
 
 class ApplicationDetailOut(ApplicationOut):
     events: List[ApplicationEventOut] = []
     candidate_profile: Optional[dict] = None
-    candidate_skills: List[CandidateSkillMatch] = []
+    # Broader assessed profile (skill_assessments). Empty when the candidate
+    # has no assessments — never a claim that they have no skills otherwise.
+    candidate_skills: List[CandidateSkillProfile] = []
+    # Job-specific comparison (hiring_requirement_skills vs assessments).
+    # Empty when the requirement has no mapped skills.
+    skill_matches: List[CandidateSkillMatch] = []
     candidate_evidence: List[CandidateEvidenceItem] = []
 
 
