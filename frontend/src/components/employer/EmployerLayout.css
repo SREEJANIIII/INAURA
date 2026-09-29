@@ -58,6 +58,14 @@
   color: inherit;
 }
 
+/* Keep the brand mark at its natural aspect ratio (logo.png is 1748x899).
+   A fixed width+height pair squeezes it; height controls size, width follows. */
+.emp-bar__logo {
+  display: block;
+  height: 28px;
+  width: auto;
+}
+
 .emp-bar__portal-pill {
   font-size: 0.7rem;
   font-weight: 700;

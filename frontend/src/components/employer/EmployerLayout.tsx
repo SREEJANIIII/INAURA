@@ -98,7 +98,7 @@ export default function EmployerLayout() {
             <span />
           </button>
           <Link to="/employer/dashboard" className="emp-bar__brand-wrap" aria-label="INAURA Employer Home">
-            <InauraLogo alt="INAURA" width={115} height={28} />
+            <InauraLogo alt="INAURA" width={1748} height={899} className="emp-bar__logo" decoding="async" />
             <span className="emp-bar__portal-pill">Employer Portal</span>
           </Link>
         </div>
