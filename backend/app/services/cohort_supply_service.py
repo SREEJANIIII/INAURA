@@ -36,7 +36,6 @@ from fastapi import HTTPException
 from supabase import Client
 from datetime import datetime, timezone
 from statistics import median
-from uuid import uuid5, NAMESPACE_DNS
 
 from ..core.supabase import get_supabase_client
 from . import skill_engine as engine
@@ -647,8 +646,178 @@ def _provenance(signal_count: int, assessment_count: int) -> dict:
 # Deterministic demo seed (synthetic — never real students or cohorts)
 # ---------------------------------------------------------------------------
 
-def _demo_user(n: int) -> str:
-    return str(uuid5(NAMESPACE_DNS, f"demo-student-{n}@example.invalid"))
+DEMO_STUDENT_EMAIL_DOMAIN = "demo.invalid"
+
+
+def _demo_email(n: int) -> str:
+    """Deterministic reserved email for synthetic demo student n.
+
+    Uses the RFC 2606 reserved `.invalid` TLD so these addresses can never
+    correspond to real users.
+    """
+    return f"demo-student-{int(n)}@{DEMO_STUDENT_EMAIL_DOMAIN}"
+
+
+def _demo_user_metadata(n: int) -> dict:
+    return {"demo_seeded": True, "demo_student_n": int(n)}
+
+
+def _auth_user_id(obj) -> str | None:
+    """Extract the Auth user UUID from the shapes the SDK/mocks may return."""
+    if obj is None:
+        return None
+    if isinstance(obj, dict):
+        for key in ("id", "user_id"):
+            if obj.get(key):
+                return str(obj[key])
+        nested = obj.get("user")
+        if isinstance(nested, dict) and nested.get("id"):
+            return str(nested["id"])
+        nested_id = getattr(nested, "id", None) if nested is not None else None
+        if nested_id:
+            return str(nested_id)
+        return None
+    uid = getattr(obj, "id", None)
+    if uid:
+        return str(uid)
+    nested = getattr(obj, "user", None)
+    if nested is not None:
+        if isinstance(nested, dict) and nested.get("id"):
+            return str(nested["id"])
+        nested_id = getattr(nested, "id", None)
+        if nested_id:
+            return str(nested_id)
+    return None
+
+
+def _auth_user_email(obj) -> str:
+    """Extract the Auth user email from the shapes the SDK/mocks may return."""
+    if obj is None:
+        return ""
+    if isinstance(obj, dict):
+        if obj.get("email"):
+            return str(obj["email"])
+        nested = obj.get("user")
+        if isinstance(nested, dict) and nested.get("email"):
+            return str(nested["email"])
+        nested_email = getattr(nested, "email", None) if nested is not None else None
+        if nested_email:
+            return str(nested_email)
+        return ""
+    email = getattr(obj, "email", None)
+    if email:
+        return str(email)
+    nested = getattr(obj, "user", None)
+    if nested is not None:
+        if isinstance(nested, dict) and nested.get("email"):
+            return str(nested["email"])
+        nested_email = getattr(nested, "email", None)
+        if nested_email:
+            return str(nested_email)
+    return ""
+
+
+def _normalize_auth_user_list(result) -> list:
+    """Normalize admin.list_users() return shapes to a plain list."""
+    if result is None:
+        return []
+    if isinstance(result, dict) and isinstance(result.get("users"), list):
+        return result["users"]
+    users = getattr(result, "users", None)
+    if isinstance(users, list):
+        return users
+    if isinstance(result, (list, tuple)):
+        return list(result)
+    data = getattr(result, "data", None)
+    if isinstance(data, list):
+        return data
+    return []
+
+
+def _find_demo_auth_user(admin, email: str) -> str | None:
+    """Return the actual auth.users UUID for a demo email, or None.
+
+    Uses the supported admin list mechanism (supabase-py exposes
+    admin.list_users(page, per_page) with no direct lookup-by-email) and
+    matches on exact email. Never matches non-demo addresses.
+    """
+    target = str(email or "").strip().lower()
+    if not target:
+        return None
+    page = 1
+    per_page = 100
+    paginated = True
+    while True:
+        try:
+            if paginated:
+                result = admin.list_users(page=page, per_page=per_page)
+            else:
+                result = admin.list_users()
+        except TypeError:
+            if paginated:
+                # SDK/mock without pagination params: fall back to a single list call.
+                paginated = False
+                continue
+            raise
+        users = _normalize_auth_user_list(result)
+        for u in users:
+            if _auth_user_email(u).strip().lower() == target:
+                return _auth_user_id(u)
+        if not paginated:
+            return None
+        if len(users) < per_page:
+            return None
+        page += 1
+        if page > 100:  # safety bound; demo lookup should hit on page 1
+            return None
+
+
+def _ensure_demo_auth_user(client, n: int) -> tuple:
+    """Create/reuse the synthetic Supabase Auth user for demo student n.
+
+    Returns (auth_user_id, was_created). The returned UUID is the real
+    auth.users.id and MUST be used for cohort_members.user_id and
+    skill_signals.user_id — never a fabricated UUID.
+
+    Idempotent: existing demo users are reused; a create race/duplicate
+    falls back to a re-lookup. Only the reserved demo email for this n is
+    ever touched; real users are never modified.
+    """
+    email = _demo_email(n)
+    admin = getattr(getattr(client, "auth", None), "admin", None)
+    if admin is None:
+        raise HTTPException(status_code=500, detail="Supabase Auth admin not available for demo seed")
+    found = _find_demo_auth_user(admin, email)
+    if found:
+        return found, False
+    try:
+        created = admin.create_user({
+            "email": email,
+            "email_confirm": True,
+            "user_metadata": _demo_user_metadata(n),
+        })
+    except Exception as e:
+        # Race/duplicate: another seed run created it concurrently.
+        msg = str(e).lower()
+        if _is_unique_violation(e) or "already" in msg or "exist" in msg:
+            retry = _find_demo_auth_user(admin, email)
+            if retry:
+                return retry, False
+        raise HTTPException(
+            status_code=500,
+            detail=f"Failed to create demo auth user {email}: {str(e)[:200]}",
+        )
+    uid = _auth_user_id(created)
+    if not uid:
+        # Unexpected SDK shape: re-lookup by email rather than fabricating an ID.
+        retry = _find_demo_auth_user(admin, email)
+        if retry:
+            return retry, True
+        raise HTTPException(
+            status_code=500,
+            detail=f"Demo auth user creation returned no id for {email}",
+        )
+    return uid, True
 
 
 def build_demo_seed() -> dict:
@@ -692,8 +861,17 @@ def build_demo_seed() -> dict:
 
 
 def seed_demo_data() -> dict:
-    """Idempotent demo import. Requires the P0#2 demo institution/course;
-    synthetic member user_ids are uuid5 (cannot collide with real users)."""
+    """Idempotent demo import. Requires the P0#2 demo institution/course.
+
+    Six dedicated synthetic Supabase Auth users (demo-student-N@demo.invalid)
+    are created/reused first via the service-role Auth Admin API; their real
+    auth.users.id values are then used for cohort_members.user_id and
+    skill_signals.user_id so the FK to auth.users(id) is satisfied.
+
+    Profiles are optional and are NOT created here: profiles.user_id also
+    references auth.users(id) but nothing auto-creates or requires a profile
+    row for cohort/skill supply.
+    """
     client = _ensure_client()
     try:
         iresp = client.table("institutions").select("id").eq("code", DEMO_INSTITUTION_CODE).execute()
@@ -713,8 +891,8 @@ def seed_demo_data() -> dict:
         raise HTTPException(status_code=500, detail="P0#2 demo course/institution mismatch")
 
     seed = build_demo_seed()
-    created = {"cohorts": 0, "members": 0, "signals": 0}
-    skipped = {"cohorts": 0, "members": 0, "signals": 0}
+    created = {"auth_users": 0, "cohorts": 0, "members": 0, "signals": 0}
+    skipped = {"auth_users": 0, "cohorts": 0, "members": 0, "signals": 0}
 
     try:
         cfound = client.table("cohorts").select("*").eq("code", DEMO_COHORT_CODE).execute()
@@ -740,7 +918,17 @@ def seed_demo_data() -> dict:
         raise HTTPException(status_code=500, detail="Failed to load skill taxonomy")
     slug_to_id = {str(r.get("canonical_name")): str(r.get("id")) for r in (slookup.data or [])}
 
-    user_ids = [_demo_user(n) for n in seed["member_ns"]]
+    # Auth users FIRST: cohort_members.user_id and skill_signals.user_id both
+    # reference auth.users(id), so fabricated UUIDs would violate the FK.
+    n_to_uid: dict[int, str] = {}
+    for n in seed["member_ns"]:
+        uid, was_created = _ensure_demo_auth_user(client, int(n))
+        n_to_uid[int(n)] = uid
+        if was_created:
+            created["auth_users"] += 1
+        else:
+            skipped["auth_users"] += 1
+    user_ids = [n_to_uid[int(n)] for n in seed["member_ns"]]
     for uid in user_ids:
         try:
             add_member(str(cohort["id"]), uid)
@@ -761,7 +949,7 @@ def seed_demo_data() -> dict:
              str(r.get("source_type") or "").lower()) for r in (existing.data or [])}
     new_rows = []
     for sig in seed["signals"]:
-        uid = _demo_user(sig["demo_user_n"])
+        uid = n_to_uid[int(sig["demo_user_n"])]
         sid = slug_to_id.get(sig["skill_slug"])
         if sid is None:
             continue

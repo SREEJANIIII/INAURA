@@ -6,6 +6,7 @@ the existing skill_engine functions directly — no invented semantics.
 """
 
 import json
+import uuid
 import pytest
 from unittest.mock import patch
 from fastapi import HTTPException
@@ -108,9 +109,69 @@ class FakeQuery:
 class FakeDB:
     def __init__(self):
         self.tables: dict[str, list] = {}
+        self.auth = FakeAuth(FakeAuthAdmin())
 
     def table(self, name):
         return FakeQuery(self, name)
+
+
+class FakeAuthUser:
+    """Minimal stand-in for supabase_auth.User (attribute access only)."""
+
+    def __init__(self, id, email, user_metadata=None):
+        self.id = id
+        self.email = email
+        self.user_metadata = user_metadata or {}
+        self.app_metadata = {}
+
+
+class FakeUserResponse:
+    """Minimal stand-in for supabase_auth.UserResponse."""
+
+    def __init__(self, user):
+        self.user = user
+
+
+class FakeAuthAdmin:
+    """Fake Supabase Auth Admin API (service-role only in production).
+
+    Stores users by lower-cased email. IDs are random UUID4s — deliberately
+    NOT uuid5-derived — so tests prove cohort_members uses the actual
+    returned Auth UUID rather than any locally computed value.
+    """
+
+    def __init__(self, initial=None):
+        self.users_by_email: dict[str, FakeAuthUser] = {}
+        self.create_calls: list = []
+        for u in initial or []:
+            self.users_by_email[str(u.email).strip().lower()] = u
+
+    def list_users(self, page=None, per_page=None):
+        users = sorted(self.users_by_email.values(), key=lambda u: str(u.email))
+        if page is None or per_page is None:
+            return list(users)
+        start = (int(page) - 1) * int(per_page)
+        return users[start:start + int(per_page)]
+
+    def create_user(self, attributes):
+        attrs = dict(attributes or {})
+        email = str(attrs.get("email") or "").strip()
+        key = email.lower()
+        self.create_calls.append(dict(attrs))
+        if key in self.users_by_email:
+            raise Exception("User already exists")
+        user = FakeAuthUser(
+            id=str(uuid.uuid4()),
+            email=email,
+            user_metadata=dict(attrs.get("user_metadata") or {}),
+        )
+        self.users_by_email[key] = user
+        return FakeUserResponse(user)
+
+
+class FakeAuth:
+    def __init__(self, admin):
+        self.admin = admin
 
 
 @pytest.fixture
@@ -531,12 +592,26 @@ def test_migration_numbering_intact():
 # Demo seed
 # ---------------------------------------------------------------------------
 
+def _seed_p0_2_demo(db):
+    db.tables["institutions"].append({"id": "demo-inst", "code": "INAURA-DEMO-TC",
+                                      "name": "INAURA Demo Skill Training Centre"})
+    db.tables["courses"].append({"id": "demo-course", "institution_id": "demo-inst",
+                                 "code": "DEMO-FSWD", "name": "Full Stack Web Development"})
+
+
 def test_deterministic_demo_seed(db):
     assert svc.build_demo_seed() == svc.build_demo_seed()
     seed = svc.build_demo_seed()
     assert seed["cohort"]["code"] == "DEMO-FSWD-2026A"
-    assert len(seed["member_ns"]) == 6 and len(seed["signals"]) == 16
+    assert seed["member_ns"] == [1, 2, 3, 4, 5, 6]
+    assert len(seed["signals"]) == 16
     assert all(s["metadata"].get("demo_seeded") for s in seed["signals"])
+    # Evidence semantics preserved: same skills/sources/values, no assessments.
+    assert {s["skill_slug"] for s in seed["signals"]} == {"react", "python", "sql"}
+    assert {s["source_type"] for s in seed["signals"]} >= {
+        "github", "project", "assessment", "leetcode", "self_declared", "resume",
+        "kaggle", "certification",
+    }
 
 
 def test_demo_seed_requires_p0_2_demo(db):
@@ -547,16 +622,14 @@ def test_demo_seed_requires_p0_2_demo(db):
 
 
 def test_demo_seed_end_to_end(db):
-    db.tables["institutions"].append({"id": "demo-inst", "code": "INAURA-DEMO-TC",
-                                      "name": "INAURA Demo Skill Training Centre"})
-    db.tables["courses"].append({"id": "demo-course", "institution_id": "demo-inst",
-                                 "code": "DEMO-FSWD", "name": "Full Stack Web Development"})
+    _seed_p0_2_demo(db)
     first = svc.seed_demo_data()
-    assert first["created"] == {"cohorts": 1, "members": 6, "signals": 16}
+    assert first["created"] == {"auth_users": 6, "cohorts": 1, "members": 6, "signals": 16}
+    assert first["skipped"] == {"auth_users": 0, "cohorts": 0, "members": 0, "signals": 0}
     assert first["data_origin"] == "demo_seeded"
     second = svc.seed_demo_data()
-    assert second["created"] == {"cohorts": 0, "members": 0, "signals": 0}
-    assert second["skipped"]["members"] == 6
+    assert second["created"] == {"auth_users": 0, "cohorts": 0, "members": 0, "signals": 0}
+    assert second["skipped"] == {"auth_users": 6, "cohorts": 1, "members": 6, "signals": 16}
 
     supply = svc.get_cohort_skill_supply(first["cohort_id"])
     assert supply["suppressed"] is False and supply["member_count"] == 6
@@ -568,6 +641,160 @@ def test_demo_seed_end_to_end(db):
     assert set(react["source_distribution"]) >= {"github", "assessment", "self_declared"}
     python = next(s for s in supply["skills"] if s["skill"] == "python")
     assert python["evidenced_member_count"] == 4 and python["verified_member_count"] == 1
+
+
+def test_demo_auth_user_creation_uses_reserved_emails_and_marker(db):
+    _seed_p0_2_demo(db)
+    svc.seed_demo_data()
+    admin = db.auth.admin
+    assert len(admin.create_calls) == 6
+    seen = set()
+    for call in admin.create_calls:
+        email = str(call.get("email"))
+        assert email.startswith("demo-student-") and email.endswith("@demo.invalid")
+        assert ".invalid" in email and "example" not in email
+        assert call.get("email_confirm") is True
+        assert "password" not in call, "demo seed must not set/hardcode passwords"
+        meta = call.get("user_metadata") or {}
+        assert meta.get("demo_seeded") is True
+        assert meta.get("demo_student_n") in (1, 2, 3, 4, 5, 6)
+        seen.add(email)
+    assert seen == {f"demo-student-{n}@demo.invalid" for n in range(1, 7)}
+
+
+def test_previously_existing_demo_auth_user_is_reused(db):
+    _seed_p0_2_demo(db)
+    pre = FakeAuthUser(id="pre-existing-uuid-0001", email="demo-student-1@demo.invalid",
+                       user_metadata={"demo_seeded": True, "demo_student_n": 1})
+    db.auth.admin.users_by_email["demo-student-1@demo.invalid"] = pre
+    out = svc.seed_demo_data()
+    assert out["created"]["auth_users"] == 5
+    assert out["skipped"]["auth_users"] == 1
+    members = db.tables["cohort_members"]
+    assert "pre-existing-uuid-0001" in {m["user_id"] for m in members}
+    # No duplicate for the pre-existing email.
+    assert sum(1 for c in db.auth.admin.create_calls
+               if str(c.get("email")).lower() == "demo-student-1@demo.invalid") == 0
+
+
+def test_seed_does_not_create_duplicate_auth_users_on_rerun(db):
+    _seed_p0_2_demo(db)
+    first = svc.seed_demo_data()
+    n_users_after_first = len(db.auth.admin.users_by_email)
+    assert n_users_after_first == 6
+    calls_after_first = len(db.auth.admin.create_calls)
+    second = svc.seed_demo_data()
+    assert len(db.auth.admin.users_by_email) == n_users_after_first
+    assert len(db.auth.admin.create_calls) == calls_after_first
+    assert second["created"]["auth_users"] == 0
+    assert second["skipped"]["auth_users"] == 6
+    assert first["cohort_id"] == second["cohort_id"]
+
+
+def test_cohort_members_use_actual_auth_user_ids(db):
+    _seed_p0_2_demo(db)
+    svc.seed_demo_data()
+    auth_ids = {u.id for u in db.auth.admin.users_by_email.values()}
+    member_ids = {m["user_id"] for m in db.tables["cohort_members"]}
+    assert len(member_ids) == 6
+    assert member_ids <= auth_ids
+    # Signal rows use the same real Auth UUIDs.
+    signal_ids = {s["user_id"] for s in db.tables.get("skill_signals", [])}
+    assert signal_ids <= auth_ids
+    assert signal_ids == member_ids
+
+
+def test_existing_cohort_from_partial_seed_is_completed(db):
+    _seed_p0_2_demo(db)
+    # Simulate the failed previous run: cohort exists, members/signals missing.
+    db.tables.setdefault("cohorts", []).append({
+        "id": "partial-cohort-id",
+        "institution_id": "demo-inst",
+        "course_id": "demo-course",
+        "name": "Full Stack Web Development — Batch 2026-A",
+        "code": "DEMO-FSWD-2026A",
+        "status": "active",
+        "data_origin": "demo_seeded",
+    })
+    out = svc.seed_demo_data()
+    assert out["cohort_id"] == "partial-cohort-id"
+    assert out["created"]["cohorts"] == 0
+    assert out["skipped"]["cohorts"] == 1
+    assert out["created"]["members"] == 6
+    assert out["created"]["signals"] == 16
+    assert len([c for c in db.tables["cohorts"] if c.get("code") == "DEMO-FSWD-2026A"]) == 1
+
+
+def test_partial_auth_users_only_missing_are_created(db):
+    _seed_p0_2_demo(db)
+    for n in (1, 2, 3):
+        email = f"demo-student-{n}@demo.invalid"
+        db.auth.admin.users_by_email[email] = FakeAuthUser(
+            id=f"kept-uuid-{n}", email=email,
+            user_metadata={"demo_seeded": True, "demo_student_n": n})
+    out = svc.seed_demo_data()
+    assert out["created"]["auth_users"] == 3
+    assert out["skipped"]["auth_users"] == 3
+    member_ids = {m["user_id"] for m in db.tables["cohort_members"]}
+    assert {"kept-uuid-1", "kept-uuid-2", "kept-uuid-3"} <= member_ids
+
+
+def test_sixteen_signals_inserted_with_evidence_semantics(db):
+    from app.services.evidence_weights import SOURCE_RELIABILITY
+
+    _seed_p0_2_demo(db)
+    svc.seed_demo_data()
+    rows = db.tables.get("skill_signals", [])
+    assert len(rows) == 16
+    seed = svc.build_demo_seed()
+    for sig in seed["signals"]:
+        assert sig["source_reliability"] == SOURCE_RELIABILITY[sig["source_type"]]
+        assert sig["metadata"].get("demo_seeded") is True
+    for r in rows:
+        assert r["metadata"].get("demo_seeded") is True
+        assert r["explanation"].startswith("Synthetic demo evidence")
+        assert r["source_reliability"] == SOURCE_RELIABILITY[r["source_type"]]
+    # No fabricated assessment rows.
+    assert db.tables.get("skill_assessments", []) == []
+
+
+def test_real_users_never_touched(db):
+    _seed_p0_2_demo(db)
+    real = FakeAuthUser(id="real-user-uuid-1", email="real.person@example.com",
+                        user_metadata={})
+    db.auth.admin.users_by_email["real.person@example.com"] = real
+    n_before = len(db.auth.admin.users_by_email)
+    svc.seed_demo_data()
+    assert db.auth.admin.users_by_email["real.person@example.com"].id == "real-user-uuid-1"
+    assert len(db.auth.admin.users_by_email) == n_before + 6
+    member_ids = {m["user_id"] for m in db.tables["cohort_members"]}
+    signal_ids = {s["user_id"] for s in db.tables.get("skill_signals", [])}
+    assert "real-user-uuid-1" not in member_ids
+    assert "real-user-uuid-1" not in signal_ids
+
+
+def test_demo_auth_race_duplicate_reuses_existing(db):
+    _seed_p0_2_demo(db)
+
+    admin = db.auth.admin
+    real_create = admin.create_user
+    seen = {"count": 0}
+
+    def flaky_create(attributes):
+        email = str(attributes.get("email") or "").lower()
+        if email == "demo-student-2@demo.invalid" and seen["count"] == 0:
+            seen["count"] += 1
+            # Simulate a concurrent seed having created the user first.
+            existing = FakeAuthUser(id="race-winner-uuid", email=attributes["email"],
+                                    user_metadata={"demo_seeded": True, "demo_student_n": 2})
+            admin.users_by_email[email] = existing
+            raise Exception("User already exists")
+        return real_create(attributes)
+
+    admin.create_user = flaky_create
+    out = svc.seed_demo_data()
+    assert out["created"]["members"] == 6
+    assert "race-winner-uuid" in {m["user_id"] for m in db.tables["cohort_members"]}
 
 
 # ---------------------------------------------------------------------------
