@@ -15,12 +15,11 @@ import {
 const titleCase = (v?: string | null) => v ? v.replaceAll("_", " ").replace(/\b\w/g, (c) => c.toUpperCase()) : "Unknown";
 const share = (v?: number | null) => v === null || v === undefined ? "—" : `${Math.round(v * 100)}%`;
 
-// Course-alignment view for the Industry Intelligence page.
-// Flow: pick institution → pick course → review the course's full details
-// (record + curriculum coverage) → optional cohort → Evaluate. IDs are never
-// typed by hand; every option comes from the API. Evidence-first rows
-// (demand → curriculum → cohort supply → status); insufficient/suppressed
-// data is labelled, never hidden.
+// Course-alignment view.
+// Flow: pick institution → pick course (or paste a course ID directly) →
+// review the course's full details (record + curriculum coverage) → optional
+// cohort → Evaluate. Evidence-first rows (demand → curriculum → cohort
+// supply → status); insufficient/suppressed data is labelled, never hidden.
 export default function CourseAlignment({ role }: { role: string }) {
   const [institutions, setInstitutions] = useState<Institution[]>([]);
   const [instLoading, setInstLoading] = useState(true);
@@ -30,6 +29,7 @@ export default function CourseAlignment({ role }: { role: string }) {
   const [courses, setCourses] = useState<Course[]>([]);
   const [coursesLoading, setCoursesLoading] = useState(false);
   const [courseId, setCourseId] = useState("");
+  const [manualId, setManualId] = useState("");
 
   const [coverage, setCoverage] = useState<CourseCoverage | null>(null);
   const [detailsLoading, setDetailsLoading] = useState(false);
@@ -98,8 +98,18 @@ export default function CourseAlignment({ role }: { role: string }) {
     return () => { cancelled = true; };
   }, [courseId, role]);
 
-  const course = courses.find((c) => c.id === courseId) ?? null;
-  const institution = institutions.find((i) => i.id === instId) ?? null;
+  // Details prefer the picker record, falling back to the coverage payload
+  // so a pasted ID still shows full course details before evaluation.
+  const course = courses.find((c) => c.id === courseId) ?? coverage?.course ?? null;
+  const institution =
+    institutions.find((i) => i.id === (course?.institution_id ?? instId)) ?? null;
+
+  const loadManualId = (e: React.FormEvent) => {
+    e.preventDefault();
+    const id = manualId.trim();
+    if (!id) return;
+    setCourseId(id);
+  };
 
   const submit = (e: React.FormEvent) => {
     e.preventDefault();
@@ -137,7 +147,7 @@ export default function CourseAlignment({ role }: { role: string }) {
           ))}
         </select>
         <label className="an-faint" htmlFor="align-course">Course</label>
-        <select id="align-course" value={courseId} onChange={(e) => setCourseId(e.target.value)} disabled={!instId || coursesLoading} style={{ maxWidth: 280 }}>
+        <select id="align-course" value={courseId} onChange={(e) => { setCourseId(e.target.value); setManualId(""); }} disabled={!instId || coursesLoading} style={{ maxWidth: 280 }}>
           <option value="">{!instId ? "Pick an institution first" : coursesLoading ? "Loading courses…" : "Choose course…"}</option>
           {courses.map((c) => (
             <option key={c.id} value={c.id}>{c.name}{c.code ? ` (${c.code})` : ""}</option>
@@ -160,8 +170,18 @@ export default function CourseAlignment({ role }: { role: string }) {
       <p className="an-note">{institution?.name ?? "This institution"} has no courses registered yet.</p>
     )}
 
+    {!instLoading && !instError && (
+      <form onSubmit={loadManualId} style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap", marginBottom: "0.75rem" }}>
+        <label className="an-faint" htmlFor="align-course-id">Course ID</label>
+        <input id="align-course-id" value={manualId} onChange={(e) => setManualId(e.target.value)} placeholder="paste a course UUID directly" style={{ maxWidth: 320 }} />
+        <button type="submit" className="an-link an-link--btn" disabled={!manualId.trim()}>
+          Load
+        </button>
+      </form>
+    )}
+
     {detailsLoading && <div className="an-skel an-skel--block" aria-label="Loading course details" />}
-    {detailsError && course && <p className="an-empty">{detailsError}</p>}
+    {detailsError && !detailsLoading && <p className="an-empty">{detailsError}</p>}
     {course && !detailsLoading && (
       <div style={{ background: "var(--paper-2, #f8fafc)", padding: "0.85rem 1rem", borderRadius: "8px", marginBottom: "1rem", border: "1px solid var(--line)" }}>
         <div style={{ fontSize: "0.8rem", fontWeight: 700, textTransform: "uppercase", color: "var(--muted)", marginBottom: "0.4rem" }}>

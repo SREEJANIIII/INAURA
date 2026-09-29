@@ -1,5 +1,11 @@
 import { useEffect, useState, useSyncExternalStore } from "react";
 import CourseAlignment from "../components/analysis/CourseAlignment";
+import DistrictTraining from "../components/analysis/DistrictTraining";
+import TrainingPriorities from "../components/analysis/TrainingPriorities";
+import CurriculumProposals from "../components/analysis/CurriculumProposals";
+import TrainerDevelopmentSignals from "../components/analysis/TrainerDevelopmentSignals";
+import CapacityPlanningSignals from "../components/analysis/CapacityPlanningSignals";
+import OutcomeFeedback from "../components/analysis/OutcomeFeedback";
 import {
   analysisStateData,
   evidencePageData,
@@ -66,7 +72,17 @@ export default function Alignment() {
                   ))}
                 </select>
               </div>
-              {activeRole && <CourseAlignment role={activeRole} />}
+              {activeRole && (
+                <>
+                  <CourseAlignment role={activeRole} />
+                  <DistrictTraining role={activeRole} />
+                  <TrainingPriorities role={activeRole} />
+                  <CurriculumProposals role={activeRole} />
+                  <TrainerDevelopmentSignals role={activeRole} />
+                  <CapacityPlanningSignals role={activeRole} />
+                  <OutcomeFeedback role={activeRole} />
+                </>
+              )}
             </>
           )}
         </section>
