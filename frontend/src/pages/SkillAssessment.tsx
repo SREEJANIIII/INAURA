@@ -37,6 +37,7 @@ export default function SkillAssessment({ view }: { view: View }) {
 
   // A finished check changes the analysis, so everything built from it is re-read
   const refresh = useCallback(() => {
+    evidencePageData.fetch(true).catch(() => undefined);
     resultsPageData.fetch(true).catch(() => {
       // No analysis yet: the suggestions still need refreshing on their own
       assessmentsData.fetch(true).catch(() => undefined);
@@ -98,7 +99,7 @@ export default function SkillAssessment({ view }: { view: View }) {
                   <h2 id="h-cf">Codeforces performance</h2>
                   <p>Verified from your Codeforces profile — it counts as evidence on its own, so there’s nothing to take here.</p>
                 </header>
-                <CodeforcesPanel data={coding} />
+                <CodeforcesPanel data={coding} onSync={refresh} />
               </section>
             )}
           </>
@@ -112,7 +113,7 @@ export default function SkillAssessment({ view }: { view: View }) {
                   <h2 id="h-lc-coverage">Your LeetCode profile</h2>
                   <p>What your verified LeetCode profile shows about the patterns you’ve practised.</p>
                 </header>
-                <DsaCoverage data={coding} />
+                <DsaCoverage data={coding} onSync={refresh} />
               </section>
             )}
           </>

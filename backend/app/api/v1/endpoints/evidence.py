@@ -175,13 +175,29 @@ async def delete_evidence(
 
 @router.post("/{evidence_id}/verify")
 async def verify_evidence(
-    evidence_id: str, current_user: CurrentUser = Depends(get_current_user)
+    evidence_id: str,
+    force: bool = False,
+    force_refresh: Optional[bool] = None,
+    current_user: CurrentUser = Depends(get_current_user),
 ):
     """
-    Independently inspect and verify an evidence item (e.g., GitHub repository).
+    Independently inspect and verify an evidence item (e.g., GitHub repository, LeetCode).
     Enforces user isolation and returns verified technical facts and detected skills.
+    Set force=true or force_refresh=true to bypass the 24-hour freshness cache.
     """
-    return await evidence_service.verify_evidence_item(current_user.id, evidence_id)
+    should_force = force or (force_refresh is True)
+    result = await evidence_service.verify_evidence_item(
+        current_user.id, evidence_id, force_refresh=should_force
+    )
+    try:
+        from ...services import analysis_service as _as
+        from ...services.analysis_run_service import run_analysis
+        state = _as.get_state(current_user.id)
+        if state and state.get("target_role"):
+            await run_analysis(current_user.id, state["target_role"])
+    except Exception:
+        pass
+    return result
 
 
 

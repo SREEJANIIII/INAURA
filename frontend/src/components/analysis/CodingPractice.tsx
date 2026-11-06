@@ -1,12 +1,47 @@
 /* eslint-disable @typescript-eslint/no-explicit-any */
 // LeetCode DSA coverage and Codeforces panels, moved unchanged from the previous results page.
+import { useState } from "react";
 import type { codingPracticeData } from "./codingPracticeData";
+import { verifyEvidence } from "../../services/evidence";
+import { evidencePageData, refreshPageData } from "../../lib/pageData";
 
 type Data = ReturnType<typeof codingPracticeData>;
 
-export function DsaCoverage({ data }: { data: Data }) {
-  const { lcTopicMeta, lcUsername, lcTotal, lcEasy, lcMed, lcHard } = data;
+export function DsaCoverage({
+  data,
+  onSync,
+}: {
+  data: Data;
+  onSync?: () => Promise<void> | void;
+}) {
+  const { lcEvidenceId, lcTopicMeta, lcUsername, lcTotal, lcEasy, lcMed, lcHard } = data;
+  const [syncing, setSyncing] = useState(false);
+  const [syncStatus, setSyncStatus] = useState<{ type: "ok" | "err"; msg: string } | null>(null);
+
   if (!data.hasDsa) return null;
+
+  const handleSync = async () => {
+    if (!lcEvidenceId || syncing) return;
+    setSyncing(true);
+    setSyncStatus(null);
+    try {
+      await verifyEvidence(lcEvidenceId, true);
+      if (onSync) {
+        await onSync();
+      } else {
+        refreshPageData();
+        await evidencePageData.fetch(true);
+      }
+      setSyncStatus({ type: "ok", msg: "✓ Profile refreshed with latest LeetCode questions!" });
+      setTimeout(() => setSyncStatus(null), 4000);
+    } catch {
+      setSyncStatus({ type: "err", msg: "⚠ Could not reach LeetCode right now. Please try again shortly." });
+      setTimeout(() => setSyncStatus(null), 5000);
+    } finally {
+      setSyncing(false);
+    }
+  };
+
   return (
     <div className="results__leetcode-card">
       <div className="results__leetcode-header">
@@ -21,8 +56,32 @@ export function DsaCoverage({ data }: { data: Data }) {
           <span className="results__badge-diff results__badge-diff--medium">Medium: {lcMed}</span>
           <span className="results__badge-diff results__badge-diff--hard">Hard: {lcHard}</span>
           <span style={{ fontWeight: 700, fontSize: "0.82rem", marginLeft: 4 }}>Total: {lcTotal}</span>
+          {lcEvidenceId && (
+            <button
+              type="button"
+              className="results__leetcode-sync-btn"
+              onClick={handleSync}
+              disabled={syncing}
+              title="Sync latest questions from LeetCode"
+            >
+              {syncing ? "Syncing…" : "↻ Sync questions"}
+            </button>
+          )}
         </div>
       </div>
+
+      {syncStatus && (
+        <div
+          style={{
+            marginTop: 8,
+            fontSize: "0.82rem",
+            color: syncStatus.type === "ok" ? "var(--ok-ink, #047857)" : "var(--warn-ink, #b91c1c)",
+            fontWeight: 500,
+          }}
+        >
+          {syncStatus.msg}
+        </div>
+      )}
 
       <div className="results__leetcode-meta-row">
         <span>
@@ -69,9 +128,41 @@ export function DsaCoverage({ data }: { data: Data }) {
   );
 }
 
-export function CodeforcesPanel({ data }: { data: Data }) {
-  const { cfInspection, cfProfile, cfFacts, cfWarnings, cfVerifiedSignals } = data;
+export function CodeforcesPanel({
+  data,
+  onSync,
+}: {
+  data: Data;
+  onSync?: () => Promise<void> | void;
+}) {
+  const { cfEvidenceId, cfInspection, cfProfile, cfFacts, cfWarnings, cfVerifiedSignals } = data;
+  const [syncing, setSyncing] = useState(false);
+  const [syncStatus, setSyncStatus] = useState<{ type: "ok" | "err"; msg: string } | null>(null);
+
   if (!cfInspection) return null;
+
+  const handleSync = async () => {
+    if (!cfEvidenceId || syncing) return;
+    setSyncing(true);
+    setSyncStatus(null);
+    try {
+      await verifyEvidence(cfEvidenceId, true);
+      if (onSync) {
+        await onSync();
+      } else {
+        refreshPageData();
+        await evidencePageData.fetch(true);
+      }
+      setSyncStatus({ type: "ok", msg: "✓ Profile refreshed with latest Codeforces stats!" });
+      setTimeout(() => setSyncStatus(null), 4000);
+    } catch {
+      setSyncStatus({ type: "err", msg: "⚠ Could not reach Codeforces right now. Please try again shortly." });
+      setTimeout(() => setSyncStatus(null), 5000);
+    } finally {
+      setSyncing(false);
+    }
+  };
+
   return (
     <div className="results__leetcode-card" style={{ borderLeft: "4px solid #1f8acb" }}>
       <div className="results__leetcode-header">
@@ -86,8 +177,32 @@ export function CodeforcesPanel({ data }: { data: Data }) {
             Rating: {cfInspection?.rating ?? 0} {cfInspection?.rank ? `· ${cfInspection.rank}` : ""}
           </span>
           <span style={{ fontWeight: 600, fontSize: "0.82rem" }}>Max: {cfInspection?.max_rating ?? 0}</span>
+          {cfEvidenceId && (
+            <button
+              type="button"
+              className="results__leetcode-sync-btn"
+              onClick={handleSync}
+              disabled={syncing}
+              title="Sync latest stats from Codeforces"
+            >
+              {syncing ? "Syncing…" : "↻ Sync profile"}
+            </button>
+          )}
         </div>
       </div>
+
+      {syncStatus && (
+        <div
+          style={{
+            marginTop: 8,
+            fontSize: "0.82rem",
+            color: syncStatus.type === "ok" ? "var(--ok-ink, #047857)" : "var(--warn-ink, #b91c1c)",
+            fontWeight: 500,
+          }}
+        >
+          {syncStatus.msg}
+        </div>
+      )}
 
       <div className="results__leetcode-meta-row">
         <span>Contests: <strong>{cfInspection?.contest_count ?? 0}</strong> rated</span>

@@ -221,7 +221,7 @@ export default function Analysis() {
     setVerifyingId(id);
     cardError(type, null);
     try {
-      await verifyEvidence(id);
+      await verifyEvidence(id, true);
       await loadAll();
     } catch (e) {
       cardError(type, friendlyError(e, `Your ${labelOf(type)} profile couldn’t be checked just now. Try again in a moment.`));
@@ -725,7 +725,7 @@ export default function Analysis() {
                       <>
                         <span className="analysis__saved">✓ {existing.source_url}</span>
                         <div style={{ display: "flex", gap: "6px" }}>
-                          {vStatus !== "verified" && (
+                          {vStatus !== "verified" ? (
                             <Button
                               variant="secondary"
                               size="sm"
@@ -733,6 +733,16 @@ export default function Analysis() {
                               disabled={isVerifying || isSaving}
                             >
                               {isVerifying ? "Verifying…" : vStatus === "failed" ? "Retry" : "Verify"}
+                            </Button>
+                          ) : (
+                            <Button
+                              variant="secondary"
+                              size="sm"
+                              onClick={() => handleVerifyEvidence(existing.id, s.type)}
+                              disabled={isVerifying || isSaving}
+                              title={`Sync latest data for ${s.label}`}
+                            >
+                              {isVerifying ? "Syncing…" : "Sync"}
                             </Button>
                           )}
                           <ConfirmButton

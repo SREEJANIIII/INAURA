@@ -108,8 +108,9 @@ export function uploadEvidenceFile(form: FormData) {
   });
 }
 
-export function verifyEvidence(id: string) {
-  return apiFetch<EvidenceVerificationResponse>(`/evidence/${id}/verify`, {
+export function verifyEvidence(id: string, force = false) {
+  const query = force ? "?force=true" : "";
+  return apiFetch<EvidenceVerificationResponse>(`/evidence/${id}/verify${query}`, {
     method: "POST",
   });
 }

@@ -390,6 +390,32 @@
   border: 1px solid #fecaca;
 }
 
+.results__leetcode-sync-btn {
+  margin-left: 8px;
+  background: var(--paper, #fff);
+  color: var(--ink, #0f172a);
+  border: 1px solid var(--line-strong, #cbd5e1);
+  padding: 3px 10px;
+  border-radius: 6px;
+  font-size: 0.76rem;
+  font-weight: 600;
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  transition: all 0.15s ease;
+}
+
+.results__leetcode-sync-btn:hover:not(:disabled) {
+  background: var(--paper-2, #f1f5f9);
+  border-color: var(--ink-3, #94a3b8);
+}
+
+.results__leetcode-sync-btn:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+
 .results__leetcode-meta-row {
   margin-top: 10px;
   display: flex;

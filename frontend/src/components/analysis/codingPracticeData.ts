@@ -10,6 +10,7 @@ export function codingPracticeData(evidence: Evidence[]) {
         (e.metadata as Record<string, unknown> | null)?.verification_status === "verified")
   );
 
+  const lcEvidenceId = leetcodeEv?.id;
   const lcMeta = leetcodeEv?.metadata as Record<string, any> | null;
   const lcInspection = lcMeta?.inspection;
   const lcTopicMeta =
@@ -29,6 +30,7 @@ export function codingPracticeData(evidence: Evidence[]) {
       (e.verification_status === "verified" ||
         (e.metadata as Record<string, unknown> | null)?.verification_status === "verified")
   );
+  const cfEvidenceId = codeforcesEv?.id;
   const cfMeta = codeforcesEv?.metadata as Record<string, any> | null;
   const cfInspection = cfMeta?.inspection as Record<string, any> | null;
   const cfProfile = cfMeta?.profile as Record<string, any> | null;
@@ -37,5 +39,20 @@ export function codingPracticeData(evidence: Evidence[]) {
   const cfVerifiedSignals = (cfMeta?.verified_signals as any[] | undefined) || [];
 
   const hasDsa = !!(lcTopicMeta && lcTopicMeta.status === "available" && lcTopicMeta.pillar_breakdown);
-  return { lcTopicMeta, lcUsername, lcTotal, lcEasy, lcMed, lcHard, hasDsa, cfInspection, cfProfile, cfFacts, cfWarnings, cfVerifiedSignals };
+  return {
+    lcEvidenceId,
+    lcTopicMeta,
+    lcUsername,
+    lcTotal,
+    lcEasy,
+    lcMed,
+    lcHard,
+    hasDsa,
+    cfEvidenceId,
+    cfInspection,
+    cfProfile,
+    cfFacts,
+    cfWarnings,
+    cfVerifiedSignals,
+  };
 }
